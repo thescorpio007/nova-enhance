@@ -38,10 +38,10 @@ class Store(c: Context) {
         get() = sp.getString("route2", "both")!!
         set(v) = sp.edit().putString("route2", v).apply()
 
-    /** Speaking language for the microphone: "en", "ar" or "fr". */
+    /** Speaking language for the microphone: "phone" (phone default), "en", "ar", "fr" or "de". */
     var voiceLang: String
-        get() = sp.getString("voice", "en")!!
-        set(v) = sp.edit().putString("voice", v).apply()
+        get() = sp.getString("voice2", "phone")!!
+        set(v) = sp.edit().putString("voice2", v).apply()
 
     var bubbleOn: Boolean
         get() = sp.getBoolean("bubble", false)

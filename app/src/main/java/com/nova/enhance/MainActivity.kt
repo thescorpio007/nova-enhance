@@ -16,7 +16,7 @@ class MainActivity : BaseActivity() {
 
         val head = Ui.row(c)
         val titles = Ui.col(c)
-        titles.addView(Ui.title(c, "Nova Enhance"))
+        titles.addView(Ui.title(c, "Nova Enhance").apply { textSize = 21f; maxLines = 1; isSingleLine = true })
         titles.addView(Ui.text(c, "Project: ${Db.PROJECT}", 13f, Ui.MUTED))
         head.addView(titles, Ui.lp(0, weight = 1f))
         head.addView(Ui.button(c, "History") { startActivity(Intent(c, HistoryActivity::class.java)) },

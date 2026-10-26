@@ -69,7 +69,10 @@ class CaptureActivity : BaseActivity() {
 
         when (i?.action) {
             Intent.ACTION_SEND -> i.getStringExtra(Intent.EXTRA_TEXT)?.let { panel.setText(it) }
-            Intent.ACTION_PROCESS_TEXT -> i.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.let { panel.setText(it.toString()) }
+            // From the text-selection menu: enhance straight away with the last mode; Replace puts it back.
+            Intent.ACTION_PROCESS_TEXT -> i.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.let {
+                panel.setText(it.toString()); panel.post { panel.runNow() }
+            }
             ACTION_CLIPBOARD -> wantClipboard = true
         }
     }

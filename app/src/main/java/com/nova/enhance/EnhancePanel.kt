@@ -103,12 +103,14 @@ class EnhancePanel(
         // ---------------------------------------------------------------- original
         val head = Ui.row(c)
         head.addView(Ui.section(c, "Original"), Ui.lp(0, weight = 1f))
-        head.addView(langSwitch, Ui.lp(LayoutParams.WRAP_CONTENT, top = Ui.dp(c, 8), end = Ui.dp(c, 6)))
-        head.addView(Ui.text(c, "🎤", 18f, Color.WHITE).apply {
+        head.setPadding(0, Ui.dp(c, 6), 0, 0)
+        head.addView(langSwitch, Ui.lp(LayoutParams.WRAP_CONTENT, top = Ui.dp(c, 10), end = Ui.dp(c, 6)))
+        head.addView(Ui.text(c, "🎤", 15f, Color.WHITE).apply {
             gravity = Gravity.CENTER
+            includeFontPadding = false
             background = Ui.round(Ui.ACCENT, Ui.dp(c, 18).toFloat())
             setOnClickListener { listen() }
-        }, LayoutParams(Ui.dp(c, 36), Ui.dp(c, 36)).apply { topMargin = Ui.dp(c, 8); marginEnd = Ui.dp(c, 4) })
+        }, LayoutParams(Ui.dp(c, 36), Ui.dp(c, 36)).apply { topMargin = Ui.dp(c, 10); marginEnd = Ui.dp(c, 4) })
         head.addView(Ui.text(c, "Paste", 14f, Ui.ACCENT, true).apply {
             setPadding(Ui.dp(c, 10), Ui.dp(c, 18), Ui.dp(c, 4), Ui.dp(c, 8))
             setOnClickListener { pasteClipboard() }
@@ -215,22 +217,45 @@ class EnhancePanel(
         }
     }
 
+    private val langs = listOf("phone", "en", "ar", "fr", "de")
+
+    private fun langName(l: String): String = when (l) {
+        "phone" -> "Phone default  (" + java.util.Locale.getDefault().displayLanguage + ")"
+        "en" -> "English"
+        "ar" -> "العربية  (Arabic)"
+        "fr" -> "Français  (French)"
+        "de" -> "Deutsch  (German)"
+        else -> l
+    }
+
+    private fun langTag(l: String): String = when (l) {
+        "en" -> "en-US"; "ar" -> "ar-AE"; "fr" -> "fr-FR"; "de" -> "de-DE"
+        else -> java.util.Locale.getDefault().toLanguageTag()
+    }
+
+    /** Speaking language: one compact drop-down "🌐 Phone ▾". */
     private fun drawLangs() {
         langSwitch.removeAllViews()
-        for (l in listOf("en", "ar", "fr")) {
-            val on = store.voiceLang == l
-            langSwitch.addView(Ui.text(act, l.uppercase(), 12f, if (on) Color.WHITE else Ui.MUTED, true).apply {
-                gravity = Gravity.CENTER
-                setPadding(Ui.dp(act, 8), Ui.dp(act, 6), Ui.dp(act, 8), Ui.dp(act, 6))
-                if (on) background = Ui.round(Ui.CARD2, Ui.dp(act, 12).toFloat(), 1, Ui.ACCENT)
-                setOnClickListener { store.voiceLang = l; drawLangs() }
-            })
+        val cur = store.voiceLang
+        val short = if (cur == "phone") "Phone" else cur.uppercase()
+        val pill = Ui.text(act, "🌐 $short ▾", 13f, Ui.TEXT, true).apply {
+            gravity = Gravity.CENTER
+            setPadding(Ui.dp(act, 10), Ui.dp(act, 6), Ui.dp(act, 10), Ui.dp(act, 6))
+            background = Ui.round(Ui.CARD2, Ui.dp(act, 16).toFloat(), Ui.dp(act, 1), Ui.ACCENT)
         }
+        pill.setOnClickListener {
+            val names = langs.map { langName(it) }.toTypedArray()
+            AlertDialog.Builder(act).setTitle("Speaking language")
+                .setSingleChoiceItems(names, langs.indexOf(store.voiceLang).coerceAtLeast(0)) { d, w ->
+                    store.voiceLang = langs[w]; drawLangs(); d.dismiss()
+                }.show()
+        }
+        langSwitch.addView(pill)
     }
 
     /** Speak: Android's speech recognition turns it into text, then it is enhanced straight away. */
     private fun listen() {
-        val tag = when (store.voiceLang) { "ar" -> "ar-AE"; "fr" -> "fr-FR"; else -> "en-US" }
+        val tag = langTag(store.voiceLang)
         val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, tag)
@@ -312,6 +337,9 @@ class EnhancePanel(
     }
 
     // ------------------------------------------------------------------ run
+
+    /** Enhance now with the last mode (used by the text-selection menu). */
+    fun runNow() { if (input.text.isNotBlank()) go(auto = true) }
 
     private fun go(auto: Boolean = false) {
         val text = input.text.toString().trim()
