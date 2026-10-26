@@ -1,0 +1,122 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-apk
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      apk: ${{ steps.out.outputs.apk }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14.3'
+
+      - name: Signing key
+        env:
+          NOVA_ENHANCE_KEY: ${{ secrets.NOVA_ENHANCE_KEY }}
+        run: |
+          if [ -z "$NOVA_ENHANCE_KEY" ]; then
+            echo "::error title=Signing key missing::Add the NOVA_ENHANCE_KEY secret in Settings > Secrets and variables > Actions"
+            exit 1
+          fi
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in keystore/nova-enhance.jks.enc \
+            -out keystore/nova-enhance.jks -pass env:NOVA_ENHANCE_KEY || {
+            echo "::error title=Signing key::NOVA_ENHANCE_KEY is set but could not open the key (check it was copied exactly)"; exit 1; }
+          printf 'password=%s\n' "$NOVA_ENHANCE_KEY" > keystore/signing.properties
+          echo "::notice title=Signing key::ready"
+
+      - name: Build
+        env:
+          NOVA_BUILD: ${{ github.run_number }}
+        run: gradle :app:assembleRelease --stacktrace --no-daemon
+
+      - id: out
+        name: Find APK
+        run: |
+          f=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          echo "apk=$(basename "$f")" >> "$GITHUB_OUTPUT"
+          echo "APK: $f"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: app/build/outputs/apk/release/*.apk
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOVA_BUILD: ${{ github.run_number }}
+        run: |
+          n=$(printf '%02d' "$NOVA_BUILD")
+          gh release create "build-$n" app/build/outputs/apk/release/*.apk \
+            --title "Nova Enhance 1.0 · build $n" \
+            --notes "Nova Enhance 1.0 · build $n — tap the .apk below to download and install. Designed by A.H" \
+            --latest
+
+  smoke-test:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: apk
+          path: apk
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Short test on an emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          script: |
+            adb install -r apk/*.apk
+            adb logcat -c
+            adb shell am start -W -n com.nova.enhance/.MainActivity
+            sleep 6
+            adb shell am start -W -a android.intent.action.SEND -t text/plain --es android.intent.extra.TEXT "hello this are a test" -n com.nova.enhance/.CaptureActivity
+            sleep 5
+            adb shell am start -W -a android.intent.action.PROCESS_TEXT -t text/plain --es android.intent.extra.PROCESS_TEXT "selected text" -n com.nova.enhance/.CaptureActivity
+            sleep 5
+            adb shell input keyevent 4
+            sleep 2
+            adb shell screencap -p /sdcard/shot.png
+            adb pull /sdcard/shot.png shot.png
+            adb logcat -d > logcat.txt
+            if grep -q "FATAL EXCEPTION" logcat.txt; then grep -A 30 "FATAL EXCEPTION" logcat.txt; echo "::error title=Crash::the app crashed"; exit 1; fi
+            adb shell pidof com.nova.enhance && echo "SHORT TEST OK"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: |
+            logcat.txt
+            shot.png
