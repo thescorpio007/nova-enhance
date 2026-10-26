@@ -24,7 +24,10 @@ data class Provider(
 
 data class Msg(val role: String, val content: String)   // role: "user" or "assistant"
 
-class AiException(message: String) : Exception(message)
+class AiException(message: String, val code: Int = 0) : Exception(message)
+
+/** An answer, and which model gave it (switched = a backup model answered because the usual one was busy). */
+data class Answer(val text: String, val model: String, val switched: Boolean)
 
 object Providers {
     val all = listOf(
@@ -99,6 +102,55 @@ object Providers {
             }
         }
 
+    // ---------------------------------------------------------------- busy handling
+
+    private val busyCodes = setOf(429, 500, 502, 503, 504, 529)
+    private val waits = longArrayOf(2, 5, 10)
+
+    /**
+     * Like [chat], but when the AI is busy it retries 3 times (after 2, 5 and 10 s),
+     * then tries other models of the same AI. [status] reports progress ("retrying…").
+     */
+    fun chatSmart(p: Provider, key: String, model: String, system: String, history: List<Msg>,
+                  status: (String) -> Unit): Answer {
+        fun once(m: String) = chat(p, key, m, system, history).ifBlank { throw AiException("Empty answer") }
+        try {
+            for (i in 0..3) {
+                try {
+                    return Answer(once(model), model, false)
+                } catch (e: AiException) {
+                    if (e.code !in busyCodes || i == 3) throw e
+                    status("${p.label} is busy — retrying (${i + 1}/3)…")
+                    Thread.sleep(waits[i] * 1000)
+                }
+            }
+            throw AiException("No answer")
+        } catch (e: AiException) {
+            if (e.code !in busyCodes) throw e
+            val alts = runCatching { alternatives(p, listModels(p, key), model) }.getOrDefault(emptyList())
+            for (m in alts) {
+                status("Still busy — trying ${p.label} model $m…")
+                try {
+                    return Answer(once(m), m, true)
+                } catch (_: AiException) { }
+            }
+            throw e
+        }
+    }
+
+    /** Other everyday models of the same AI, best first. */
+    fun alternatives(p: Provider, ids: List<String>, exclude: String): List<String> {
+        val skip = Regex(p.skip, RegexOption.IGNORE_CASE)
+        val dated = Regex("-\\d{4}-\\d{2}-\\d{2}$")
+        val usable = ids.filter { it != exclude && !skip.containsMatchIn(it) && !dated.containsMatchIn(it) }
+        val out = LinkedHashSet<String>()
+        for (pat in p.prefer) {
+            val re = Regex(pat)
+            usable.filter { re.containsMatchIn(it) }.sortedDescending().forEach { out += it }
+        }
+        return out.take(3)
+    }
+
     // ---------------------------------------------------------------- models
 
     fun listModels(p: Provider, key: String): List<String> {
@@ -164,7 +216,7 @@ object Providers {
             val code = c.responseCode
             val stream = if (code in 200..299) c.inputStream else c.errorStream
             val txt = stream?.let { s -> BufferedReader(InputStreamReader(s, Charsets.UTF_8)).use { it.readText() } } ?: ""
-            if (code !in 200..299) throw AiException(errorText(code, txt))
+            if (code !in 200..299) throw AiException(errorText(code, txt), code)
             return JSONObject(txt)
         } finally {
             c.disconnect()

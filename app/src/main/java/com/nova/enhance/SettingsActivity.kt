@@ -17,7 +17,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 
-class SettingsActivity : Activity() {
+class SettingsActivity : BaseActivity() {
     private lateinit var store: Store
     private lateinit var root: LinearLayout
     private val statusViews = mutableMapOf<String, TextView>()

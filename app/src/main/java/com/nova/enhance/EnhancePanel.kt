@@ -189,10 +189,12 @@ class EnhancePanel(
 
         val key = store.key(p); val model = store.model(p)
         Thread {
-            val res: Result<String> = runCatching {
-                Providers.chat(p, key, model, Modes.SYSTEM, listOf(Msg("user", first)))
-                    .ifBlank { throw AiException("Empty answer") }
+            val ans: Result<Answer> = runCatching {
+                Providers.chatSmart(p, key, model, Modes.SYSTEM, listOf(Msg("user", first))) { msg ->
+                    act.runOnUiThread { body.text = msg }
+                }
             }
+            val res: Result<String> = ans.map { it.text }
             var convId = -1L
             res.onSuccess {
                 convId = db.newConv(p.id, mode.id, original, "api")
@@ -201,6 +203,9 @@ class EnhancePanel(
             act.runOnUiThread {
                 if (act.isFinishing) return@runOnUiThread
                 spin.visibility = View.GONE
+                ans.getOrNull()?.takeIf { it.switched }?.let { a ->
+                    card.addView(Ui.text(c, "Answered by backup model ${a.model} (usual model was busy)", 12f, Ui.MUTED), 1)
+                }
                 res.onSuccess { out ->
                     body.setTextColor(Ui.TEXT); body.text = out
                     actions.visibility = View.VISIBLE

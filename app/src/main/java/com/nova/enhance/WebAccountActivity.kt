@@ -23,7 +23,7 @@ import org.json.JSONObject
  *  setup mode: sign in, create/open the "Enhancement" project, tap "Use this page".
  *  send mode:  opens the Enhancement page and types + sends the text for you.
  */
-class WebAccountActivity : Activity() {
+class WebAccountActivity : BaseActivity() {
     companion object {
         fun setup(c: Context, p: Provider) =
             c.startActivity(Intent(c, WebAccountActivity::class.java).putExtra("p", p.id).putExtra("setup", true))

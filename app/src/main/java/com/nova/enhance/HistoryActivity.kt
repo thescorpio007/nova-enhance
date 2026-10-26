@@ -12,7 +12,7 @@ import java.util.Date
 import java.util.Locale
 
 /** The "Enhancement" project: every conversation, per AI, searchable, exportable. */
-class HistoryActivity : Activity() {
+class HistoryActivity : BaseActivity() {
     private val db by lazy { Db.get(this) }
     private var filter: String? = null
     private lateinit var list: LinearLayout

@@ -13,7 +13,7 @@ import android.widget.ScrollView
  *  - text selection ▸ Nova Enhance    (ACTION_PROCESS_TEXT, can replace the text in place)
  *  - the floating bubble / the quick-settings tile (reads the copied text)
  */
-class CaptureActivity : Activity() {
+class CaptureActivity : BaseActivity() {
     companion object { const val ACTION_CLIPBOARD = "com.nova.enhance.CLIPBOARD" }
 
     private lateinit var panel: EnhancePanel

@@ -5,7 +5,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.widget.ScrollView
 
-class MainActivity : Activity() {
+class MainActivity : BaseActivity() {
     private lateinit var panel: EnhancePanel
     private lateinit var setupCard: android.widget.LinearLayout
 

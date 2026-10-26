@@ -11,7 +11,7 @@ import android.widget.ProgressBar
 import android.widget.ScrollView
 
 /** One saved conversation; you can keep asking the same AI for changes. */
-class ChatActivity : Activity() {
+class ChatActivity : BaseActivity() {
     companion object {
         fun open(c: Context, id: Long) {
             if (id < 0) return
@@ -69,7 +69,11 @@ class ChatActivity : Activity() {
             send.isEnabled = false
             val history = db.messages(conv.id)
             Thread {
-                val r = runCatching { Providers.chat(p, store.key(p), store.model(p), Modes.SYSTEM, history) }
+                val r = runCatching {
+                    Providers.chatSmart(p, store.key(p), store.model(p), Modes.SYSTEM, history) { msg ->
+                        runOnUiThread { Ui.toast(c, msg) }
+                    }.text
+                }
                 r.onSuccess { db.addMsg(conv.id, "assistant", it) }
                 runOnUiThread {
                     list.removeView(spin); send.isEnabled = true
