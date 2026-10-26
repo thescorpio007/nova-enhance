@@ -104,6 +104,7 @@ object Providers {
 
     // ---------------------------------------------------------------- busy handling
 
+    const val NO_CONNECTION = -1
     private val busyCodes = setOf(429, 500, 502, 503, 504, 529)
     private val waits = longArrayOf(2, 5, 10)
 
@@ -113,14 +114,20 @@ object Providers {
      */
     fun chatSmart(p: Provider, key: String, model: String, system: String, history: List<Msg>,
                   status: (String) -> Unit): Answer {
-        fun once(m: String) = chat(p, key, m, system, history).ifBlank { throw AiException("Empty answer") }
+        fun once(m: String): String = try {
+            chat(p, key, m, system, history).ifBlank { throw AiException("Empty answer") }
+        } catch (e: java.io.IOException) {
+            // No internet, VPN dropped, address blocked or timed out.
+            throw AiException("No connection to ${p.label} — check your internet or VPN.", NO_CONNECTION)
+        }
         try {
             for (i in 0..3) {
                 try {
                     return Answer(once(model), model, false)
                 } catch (e: AiException) {
-                    if (e.code !in busyCodes || i == 3) throw e
-                    status("${p.label} is busy — retrying (${i + 1}/3)…")
+                    if ((e.code !in busyCodes && e.code != NO_CONNECTION) || i == 3) throw e
+                    status(if (e.code == NO_CONNECTION) "No connection — retrying (${i + 1}/3)…"
+                           else "${p.label} is busy — retrying (${i + 1}/3)…")
                     Thread.sleep(waits[i] * 1000)
                 }
             }

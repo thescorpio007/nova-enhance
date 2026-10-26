@@ -35,8 +35,8 @@ class Store(c: Context) {
 
     /** "api" = through API keys, "account" = into the signed-in account, "both". */
     var route: String
-        get() = sp.getString("route", "api")!!
-        set(v) = sp.edit().putString("route", v).apply()
+        get() = sp.getString("route2", "both")!!
+        set(v) = sp.edit().putString("route2", v).apply()
 
     var bubbleOn: Boolean
         get() = sp.getBoolean("bubble", false)

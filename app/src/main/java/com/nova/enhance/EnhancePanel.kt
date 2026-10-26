@@ -5,22 +5,74 @@ import android.app.AlertDialog
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import android.text.Editable
 import android.text.TextWatcher
+import android.view.Gravity
 import android.view.View
 import android.widget.LinearLayout
-import android.widget.ProgressBar
-import android.widget.TextView
 
 /**
- * The enhance screen (text box, modes, AI choice, results). Used by the main screen
- * and by the quick sheet that opens from Share, text selection, the bubble and the tile.
+ * The enhance screen, top to bottom:
+ *   ORIGINAL (editable)  ·  words/characters
+ *   ENHANCED · <mode>                [✦ Enhance]
+ *   Enhanced window: one tab per answer, the text, [Copy] Share Replace Continue
+ *   Enhancement / AI / Send-through choices
+ * Used by the main screen and by the quick sheet (Share, text selection, bubble, tile).
  * [onReplace] is set when the text came from another app's selection menu and can be replaced there.
  */
 class EnhancePanel(
     private val act: Activity,
     private val onReplace: ((String) -> Unit)? = null
 ) : LinearLayout(act) {
+
+    companion object {
+        /** Longer texts are enhanced in parts so the AI's answer is never cut off. */
+        const val PART_WORDS = 3000
+        const val WARN_WORDS = 4000
+
+        fun confirm(c: Context, msg: String, ok: String, f: () -> Unit) {
+            AlertDialog.Builder(c).setMessage(msg).setPositiveButton(ok) { _, _ -> f() }
+                .setNegativeButton("Cancel", null).show()
+        }
+
+        fun words(s: String): Int = s.trim().let { if (it.isEmpty()) 0 else it.split(Regex("\\s+")).size }
+
+        /** Split by paragraphs into parts of at most [max] words (very long paragraphs are cut by words). */
+        fun split(text: String, max: Int): List<String> {
+            val parts = mutableListOf<String>()
+            val cur = StringBuilder()
+            var n = 0
+            for (para in text.split("\n")) {
+                val w = words(para)
+                if (w > max) {
+                    if (cur.isNotBlank()) parts += cur.toString().trim()
+                    cur.clear(); n = 0
+                    para.trim().split(Regex("\\s+")).chunked(max).forEach { parts += it.joinToString(" ") }
+                    continue
+                }
+                if (n + w > max) {
+                    if (cur.isNotBlank()) parts += cur.toString().trim()
+                    cur.clear(); n = 0
+                }
+                cur.append(para).append('\n'); n += w
+            }
+            if (cur.isNotBlank()) parts += cur.toString().trim()
+            return parts.ifEmpty { listOf(text) }
+        }
+    }
+
+    /** One answer in the enhanced window. */
+    private inner class Tab(val p: Provider, val account: Boolean) {
+        var status = if (account) "" else "Working…"
+        var text: String? = null
+        var error = false
+        var convId = -1L
+        var note = ""
+        var sent = false
+        val label: String
+            get() = if (account) (if (sent) "✓ Sent to my ${p.label}" else "My ${p.label}") else "${p.label} · API"
+    }
 
     private val store = Store(act)
     private val db = Db.get(act)
@@ -29,50 +81,74 @@ class EnhancePanel(
     private val modeRow = Ui.chipRow(act)
     private val aiRow = Ui.chipRow(act)
     private val routeRow = Ui.chipRow(act)
-    private val results = Ui.col(act)
     private val countText = Ui.text(act, "", 12f, Ui.MUTED)
+    private val warnText = Ui.text(act, "", 12f, 0xFFFFC857.toInt())
+    private val enhancedLabel = Ui.section(act, "")
+    private val tabsRow = Ui.chipRow(act)
+    private val body = Ui.text(act, "", 16f, Ui.TEXT).apply { setTextIsSelectable(true) }
+    private val noteText = Ui.text(act, "", 12f, Ui.MUTED)
+    private val actions = Ui.row(act)
+    private val savedText = Ui.text(act, "", 12f, Ui.MUTED)
+
+    private val tabs = mutableListOf<Tab>()
+    private var selected = 0
 
     init {
         orientation = VERTICAL
         val c = act
 
+        // ---------------------------------------------------------------- original
         val head = Ui.row(c)
-        head.addView(Ui.section(c, "Your text"), Ui.lp(0, weight = 1f))
+        head.addView(Ui.section(c, "Original"), Ui.lp(0, weight = 1f))
         head.addView(Ui.text(c, "Paste", 14f, Ui.ACCENT, true).apply {
             setPadding(Ui.dp(c, 10), Ui.dp(c, 18), Ui.dp(c, 4), Ui.dp(c, 8))
             setOnClickListener { pasteClipboard() }
         })
         head.addView(Ui.text(c, "Clear", 14f, Ui.MUTED, true).apply {
             setPadding(Ui.dp(c, 12), Ui.dp(c, 18), 0, Ui.dp(c, 8))
-            setOnClickListener { input.setText(""); results.removeAllViews() }
+            setOnClickListener { input.setText(""); tabs.clear(); drawResult() }
         })
         addView(head)
         addView(input, Ui.lp())
         addView(countText, Ui.lp(top = Ui.dp(c, 4)))
+        addView(warnText, Ui.lp(top = Ui.dp(c, 2)))
         input.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, d: Int) {}
             override fun onTextChanged(s: CharSequence?, a: Int, b: Int, d: Int) {}
-            override fun afterTextChanged(s: Editable?) {
-                val n = s?.length ?: 0
-                countText.text = if (n == 0) "" else "$n characters"
-            }
+            override fun afterTextChanged(s: Editable?) { updateCount() }
         })
 
+        // ---------------------------------------------------------------- enhance button + enhanced window
+        val mid = Ui.row(c)
+        mid.addView(enhancedLabel, Ui.lp(0, weight = 1f))
+        mid.addView(Ui.text(c, "✦  Enhance", 16f, Color.WHITE, true).apply {
+            gravity = Gravity.CENTER
+            setPadding(Ui.dp(c, 22), Ui.dp(c, 11), Ui.dp(c, 22), Ui.dp(c, 11))
+            background = Ui.round(Ui.ACCENT, Ui.dp(c, 24).toFloat())
+            setOnClickListener { go() }
+        }, Ui.lp(LayoutParams.WRAP_CONTENT, top = Ui.dp(c, 10)))
+        addView(mid)
+
+        val box = Ui.col(c, 14)
+        box.background = Ui.round(Ui.CARD, Ui.dp(c, 16).toFloat(), Ui.dp(c, 1) + 1, Ui.ACCENT)
+        box.addView(tabsRow.first, Ui.lp())
+        box.addView(noteText, Ui.lp(top = Ui.dp(c, 6)))
+        box.addView(body, Ui.lp(top = Ui.dp(c, 8)))
+        box.addView(actions, Ui.lp(top = Ui.dp(c, 12)))
+        addView(box, Ui.lp(top = Ui.dp(c, 8)))
+        addView(savedText, Ui.lp(top = Ui.dp(c, 6)))
+
+        // ---------------------------------------------------------------- choices
         addView(Ui.section(c, "Enhancement"))
         addView(modeRow.first)
         customBox.setText(store.custom)
         addView(customBox, Ui.lp(top = Ui.dp(c, 10)))
-
         addView(Ui.section(c, "AI"))
         addView(aiRow.first)
-
         addView(Ui.section(c, "Send through"))
         addView(routeRow.first)
 
-        addView(Ui.button(c, "✦  Enhance", true) { go() }, Ui.lp(top = Ui.dp(c, 18)))
-        addView(results, Ui.lp(top = Ui.dp(c, 8)))
-
-        drawModes(); drawAis(); drawRoutes()
+        drawModes(); drawAis(); drawRoutes(); drawResult(); updateCount()
     }
 
     fun setText(s: String) { input.setText(s); input.setSelection(input.text.length) }
@@ -81,6 +157,20 @@ class EnhancePanel(
         val cm = act.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val t = cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(act)?.toString()
         return if (!t.isNullOrBlank()) { setText(t); true } else { Ui.toast(act, "Clipboard is empty"); false }
+    }
+
+    fun refresh() { drawAis() }
+
+    private fun updateCount() {
+        val s = input.text.toString()
+        val w = words(s)
+        countText.text = if (s.isEmpty()) "" else "$w words · ${s.length} characters"
+        if (w > WARN_WORDS) {
+            val n = split(s, PART_WORDS).size
+            warnText.visibility = View.VISIBLE
+            warnText.text = "Long text: the API will enhance it in $n parts and join them back together. " +
+                "\"My account\" sends it in one piece."
+        } else warnText.visibility = View.GONE
     }
 
     // ------------------------------------------------------------------ choices
@@ -92,6 +182,7 @@ class EnhancePanel(
                 Ui.lp(LayoutParams.WRAP_CONTENT, end = Ui.dp(act, 8)))
         }
         customBox.visibility = if (store.mode == Modes.CUSTOM) View.VISIBLE else View.GONE
+        enhancedLabel.text = "ENHANCED · " + Modes.byId(store.mode).label.uppercase()
     }
 
     private fun drawAis() {
@@ -114,6 +205,59 @@ class EnhancePanel(
         }
     }
 
+    // ------------------------------------------------------------------ enhanced window
+
+    private fun drawResult() {
+        val c = act
+        tabsRow.second.removeAllViews(); actions.removeAllViews()
+        if (tabs.isEmpty()) {
+            tabsRow.first.visibility = View.GONE
+            noteText.visibility = View.GONE
+            body.setTextColor(Ui.MUTED); body.text = "Your enhanced text will appear here."
+            savedText.text = ""
+            return
+        }
+        if (selected !in tabs.indices) selected = 0
+        tabsRow.first.visibility = if (tabs.size > 1) View.VISIBLE else View.GONE
+        tabs.forEachIndexed { i, t ->
+            tabsRow.second.addView(Ui.chip(c, t.label, i == selected) { selected = i; drawResult() },
+                Ui.lp(LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 8)))
+        }
+        val t = tabs[selected]
+        val single = tabs.size == 1
+        val noteLine = if (single) listOf(t.label, t.note).filter { it.isNotBlank() }.joinToString("  ·  ") else t.note
+        noteText.visibility = if (noteLine.isNotBlank()) View.VISIBLE else View.GONE
+        noteText.text = noteLine
+        noteText.setTextColor(if (single) Ui.ACCENT else Ui.MUTED)
+
+        val name = t.p.label
+        val out = t.text
+        when {
+            t.account -> {
+                body.setTextColor(Ui.MUTED)
+                body.text = if (t.sent) "Sent to your $name account — its answer is in your ${Db.PROJECT} project there."
+                else "Not sent yet."
+                actions.addView(Ui.button(c, if (t.sent) "Open my $name" else "Send to my $name", !t.sent) {
+                    sendAccount(t)
+                }, Ui.lp(0, weight = 1f))
+            }
+            out != null -> {
+                body.setTextColor(Ui.TEXT); body.text = out
+                actions.addView(Ui.button(c, "⧉  Copy", true) { Ui.copy(c, out) }, Ui.lp(0, weight = 1f, end = Ui.dp(c, 8)))
+                actions.addView(Ui.button(c, "Share") { share(out) }, Ui.lp(LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 8)))
+                val replace = onReplace
+                if (replace != null) actions.addView(Ui.button(c, "Replace") { replace(out) },
+                    Ui.lp(LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 8)))
+                actions.addView(Ui.button(c, "Continue") { ChatActivity.open(c, t.convId) }, Ui.lp(LayoutParams.WRAP_CONTENT))
+            }
+            else -> {
+                body.setTextColor(if (t.error) Ui.BAD else Ui.MUTED); body.text = t.status
+            }
+        }
+        val saved = tabs.filter { it.convId >= 0 }.map { it.p.label }.distinct()
+        savedText.text = if (saved.isEmpty()) "" else "Saved in ${Db.PROJECT} · " + saved.joinToString(", ")
+    }
+
     // ------------------------------------------------------------------ run
 
     private fun go() {
@@ -121,107 +265,101 @@ class EnhancePanel(
         if (text.isEmpty()) { Ui.toast(act, "Add some text first"); return }
         store.custom = customBox.text.toString()
         val mode = Modes.byId(store.mode)
-        val first = Modes.firstMessage(mode, store.custom, text)
         val targets = if (store.target == "all") Providers.all else listOfNotNull(Providers.byId(store.target))
         val route = store.route
-        results.removeAllViews()
+        tabs.clear(); selected = 0
         hideKeyboard()
 
-        if (route == "api" || route == "both") {
-            val usable = targets.filter { store.hasKey(it) }
-            val missing = targets.filter { !store.hasKey(it) }
-            if (usable.isEmpty()) {
-                missingKeys(missing.ifEmpty { targets })
-                if (route == "api") return
-            } else if (missing.isNotEmpty() && store.target != "all") {
-                missingKeys(missing)
-            }
-            for (p in usable) runApi(p, mode, text, first)
+        val wantApi = route == "api" || route == "both"
+        val wantAccount = route == "account" || route == "both"
+        val apiTargets = if (wantApi) targets.filter { store.hasKey(it) } else emptyList()
+        if (wantApi && apiTargets.isEmpty() && !wantAccount) {
+            drawResult(); missingKeys(targets); return
         }
-        if (route == "account" || route == "both") {
-            if (targets.size == 1) {
-                val p = targets[0]
-                saveAccountConv(p, mode, text, first)
-                WebAccountActivity.send(act, p, first)
-            } else {
-                // One account page at a time: give a button for each AI.
-                val card = Ui.card(act)
-                card.addView(Ui.text(act, "Send to my accounts", 16f, Ui.TEXT, true))
-                card.addView(Ui.text(act, "Each opens your signed-in AI in its Enhancement project and sends the text.", 13f, Ui.MUTED))
-                for (p in targets) {
-                    card.addView(Ui.button(act, "Send to my ${p.label}") {
-                        saveAccountConv(p, mode, text, first)
-                        WebAccountActivity.send(act, p, first)
-                    }, Ui.lp(top = Ui.dp(act, 8)))
-                }
-                results.addView(card, Ui.lp(top = Ui.dp(act, 12)))
-            }
-        }
+        for (p in apiTargets) tabs += Tab(p, false)
+        val accountTabs = if (wantAccount) targets.map { Tab(it, true) } else emptyList()
+        tabs += accountTabs
+        if (wantApi && apiTargets.isEmpty()) Ui.toast(act, "No API key yet — sending to your account only")
+        drawResult()
+
+        for (t in tabs.filter { !it.account }) runApi(t, mode, text)
+        // One account page can open at a time: open it straight away for a single AI.
+        if (accountTabs.size == 1) sendAccount(accountTabs[0])
     }
 
-    private fun saveAccountConv(p: Provider, mode: Mode, text: String, first: String) {
-        val id = db.newConv(p.id, mode.id, text, "account")
-        db.addMsg(id, "user", first)
+    private fun sendAccount(t: Tab) {
+        val original = input.text.toString().trim()
+        val msg = Modes.firstMessage(Modes.byId(store.mode), store.custom, original)
+        if (!t.sent) {
+            val id = db.newConv(t.p.id, store.mode, original, "account")
+            db.addMsg(id, "user", msg)
+            t.convId = id; t.sent = true
+        }
+        drawResult()
+        WebAccountActivity.send(act, t.p, msg)
     }
 
     private fun missingKeys(ps: List<Provider>) {
-        val card = Ui.card(act)
-        card.addView(Ui.text(act, "No API key yet for: " + ps.joinToString { it.label }, 14f, Ui.BAD))
-        card.addView(Ui.button(act, "Open Settings") {
-            act.startActivity(Intent(act, SettingsActivity::class.java))
-        }, Ui.lp(top = Ui.dp(act, 8)))
-        results.addView(card, Ui.lp(top = Ui.dp(act, 12)))
+        AlertDialog.Builder(act)
+            .setMessage("No API key yet for: " + ps.joinToString { it.label } +
+                ".\nAdd one in Settings, or choose \"My account\" or \"Both\".")
+            .setPositiveButton("Open Settings") { _, _ -> act.startActivity(Intent(act, SettingsActivity::class.java)) }
+            .setNegativeButton("OK", null).show()
     }
 
-    private fun runApi(p: Provider, mode: Mode, original: String, first: String) {
-        val c = act
-        val card = Ui.card(c)
-        val top = Ui.row(c)
-        top.addView(Ui.text(c, "${p.label}  ·  ${mode.label}", 14f, Ui.ACCENT, true), Ui.lp(0, weight = 1f))
-        val spin = ProgressBar(c).apply { isIndeterminate = true }
-        top.addView(spin, LayoutParams(Ui.dp(c, 22), Ui.dp(c, 22)))
-        card.addView(top)
-        val body = Ui.text(c, "Working…", 16f, Ui.MUTED).apply { setTextIsSelectable(true) }
-        card.addView(body, Ui.lp(top = Ui.dp(c, 8)))
-        val actions = Ui.row(c).apply { visibility = View.GONE }
-        card.addView(actions, Ui.lp(top = Ui.dp(c, 10)))
-        results.addView(card, Ui.lp(top = Ui.dp(c, 12)))
-
-        val key = store.key(p); val model = store.model(p)
+    private fun runApi(t: Tab, mode: Mode, original: String) {
+        val p = t.p
+        val key = store.key(p); val model = store.model(p); val custom = store.custom
+        val parts = if (words(original) > WARN_WORDS) split(original, PART_WORDS) else listOf(original)
+        val autoAccount = store.route == "api"   // with "Both" the account copy is already sent
         Thread {
-            val ans: Result<Answer> = runCatching {
-                Providers.chatSmart(p, key, model, Modes.SYSTEM, listOf(Msg("user", first))) { msg ->
-                    act.runOnUiThread { body.text = msg }
+            val outs = mutableListOf<String>()
+            var backup: String? = null
+            var error: String? = null
+            for ((i, part) in parts.withIndex()) {
+                val prefix = if (parts.size > 1) "Part ${i + 1}/${parts.size}: " else ""
+                if (parts.size > 1) update { t.status = "${prefix}working…" }
+                try {
+                    val a = Providers.chatSmart(p, key, model, Modes.SYSTEM,
+                        listOf(Msg("user", Modes.firstMessage(mode, custom, part)))) { msg ->
+                        update { t.status = prefix + msg }
+                    }
+                    outs += a.text
+                    if (a.switched) backup = a.model
+                } catch (e: Exception) {
+                    error = prefix + (e.message ?: e.toString())
+                    break
                 }
             }
-            val res: Result<String> = ans.map { it.text }
-            var convId = -1L
-            res.onSuccess {
-                convId = db.newConv(p.id, mode.id, original, "api")
-                db.addMsg(convId, "user", first); db.addMsg(convId, "assistant", it)
-            }
-            act.runOnUiThread {
-                if (act.isFinishing) return@runOnUiThread
-                spin.visibility = View.GONE
-                ans.getOrNull()?.takeIf { it.switched }?.let { a ->
-                    card.addView(Ui.text(c, "Answered by backup model ${a.model} (usual model was busy)", 12f, Ui.MUTED), 1)
-                }
-                res.onSuccess { out ->
-                    body.setTextColor(Ui.TEXT); body.text = out
-                    actions.visibility = View.VISIBLE
-                    fun a(label: String, f: () -> Unit) = actions.addView(
-                        Ui.text(c, label, 14f, Ui.ACCENT, true).apply {
-                            setPadding(0, Ui.dp(c, 6), Ui.dp(c, 18), Ui.dp(c, 6)); setOnClickListener { f() }
-                        })
-                    a("Copy") { Ui.copy(c, out) }
-                    a("Share") { share(out) }
-                    if (onReplace != null) a("Replace") { onReplace.invoke(out) }
-                    a("Continue") { ChatActivity.open(c, convId) }
-                }.onFailure { e ->
-                    body.setTextColor(Ui.BAD); body.text = e.message ?: e.toString()
+            val err = error
+            if (err == null) {
+                val joined = outs.joinToString("\n\n")
+                val id = db.newConv(p.id, mode.id, original, "api")
+                db.addMsg(id, "user", Modes.firstMessage(mode, custom, original))
+                db.addMsg(id, "assistant", joined)
+                val notes = mutableListOf<String>()
+                if (parts.size > 1) notes += "enhanced in ${parts.size} parts"
+                backup?.let { notes += "answered by backup model $it (usual one was busy)" }
+                update { t.text = joined; t.convId = id; t.note = notes.joinToString(" · ") }
+            } else {
+                update { t.error = true; t.status = err }
+                // API failed completely: send it to the signed-in account instead (uses the Pro plan).
+                if (autoAccount) act.runOnUiThread {
+                    if (act.isFinishing) return@runOnUiThread
+                    val acc = Tab(p, true)
+                    acc.note = "API failed, so it was sent to your account instead"
+                    tabs += acc; selected = tabs.size - 1
+                    sendAccount(acc)
                 }
             }
         }.start()
+    }
+
+    private fun update(f: () -> Unit) {
+        act.runOnUiThread {
+            f()
+            if (!act.isFinishing) drawResult()
+        }
     }
 
     private fun share(s: String) {
@@ -233,14 +371,5 @@ class EnhancePanel(
     private fun hideKeyboard() {
         val imm = act.getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
         imm.hideSoftInputFromWindow(input.windowToken, 0)
-    }
-
-    fun refresh() { drawAis() }
-
-    companion object {
-        fun confirm(c: Context, msg: String, ok: String, f: () -> Unit) {
-            AlertDialog.Builder(c).setMessage(msg).setPositiveButton(ok) { _, _ -> f() }
-                .setNegativeButton("Cancel", null).show()
-        }
     }
 }
