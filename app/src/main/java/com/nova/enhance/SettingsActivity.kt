@@ -118,6 +118,9 @@ class SettingsActivity : BaseActivity() {
         }, Ui.lp(0, weight = 1f, end = Ui.dp(c, 8)))
         row.addView(Ui.button(c, "Model") { chooseModel(p, status) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT))
         card.addView(row, Ui.lp(top = Ui.dp(c, 8)))
+        card.addView(Ui.button(c, "⭐  Compare ${p.label} models") {
+            if (store.hasKey(p)) CompareActivity.open(c, p) else Ui.toast(c, "Save a key first")
+        }, Ui.lp(top = Ui.dp(c, 8)))
         return card
     }
 

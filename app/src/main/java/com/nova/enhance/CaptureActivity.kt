@@ -82,4 +82,10 @@ class CaptureActivity : BaseActivity() {
             panel.pasteClipboard()
         }
     }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == EnhancePanel.VOICE_REQ && resultCode == RESULT_OK) panel.onVoice(data)
+    }
 }

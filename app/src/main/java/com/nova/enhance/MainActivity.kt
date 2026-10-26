@@ -61,4 +61,10 @@ class MainActivity : BaseActivity() {
     private fun appVersion(): String = try {
         packageManager.getPackageInfo(packageName, 0).versionName ?: ""
     } catch (_: Exception) { "" }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == EnhancePanel.VOICE_REQ && resultCode == RESULT_OK) panel.onVoice(data)
+    }
 }

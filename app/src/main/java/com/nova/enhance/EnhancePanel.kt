@@ -5,6 +5,7 @@ import android.app.AlertDialog
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.speech.RecognizerIntent
 import android.graphics.Color
 import android.text.Editable
 import android.text.TextWatcher
@@ -30,6 +31,7 @@ class EnhancePanel(
         /** Longer texts are enhanced in parts so the AI's answer is never cut off. */
         const val PART_WORDS = 3000
         const val WARN_WORDS = 4000
+        const val VOICE_REQ = 77
 
         fun confirm(c: Context, msg: String, ok: String, f: () -> Unit) {
             AlertDialog.Builder(c).setMessage(msg).setPositiveButton(ok) { _, _ -> f() }
@@ -90,6 +92,7 @@ class EnhancePanel(
     private val actions = Ui.row(act)
     private val savedText = Ui.text(act, "", 12f, Ui.MUTED)
 
+    private val langSwitch = Ui.row(act)
     private val tabs = mutableListOf<Tab>()
     private var selected = 0
 
@@ -100,6 +103,12 @@ class EnhancePanel(
         // ---------------------------------------------------------------- original
         val head = Ui.row(c)
         head.addView(Ui.section(c, "Original"), Ui.lp(0, weight = 1f))
+        head.addView(langSwitch, Ui.lp(LayoutParams.WRAP_CONTENT, top = Ui.dp(c, 8), end = Ui.dp(c, 6)))
+        head.addView(Ui.text(c, "🎤", 18f, Color.WHITE).apply {
+            gravity = Gravity.CENTER
+            background = Ui.round(Ui.ACCENT, Ui.dp(c, 18).toFloat())
+            setOnClickListener { listen() }
+        }, LayoutParams(Ui.dp(c, 36), Ui.dp(c, 36)).apply { topMargin = Ui.dp(c, 8); marginEnd = Ui.dp(c, 4) })
         head.addView(Ui.text(c, "Paste", 14f, Ui.ACCENT, true).apply {
             setPadding(Ui.dp(c, 10), Ui.dp(c, 18), Ui.dp(c, 4), Ui.dp(c, 8))
             setOnClickListener { pasteClipboard() }
@@ -119,14 +128,16 @@ class EnhancePanel(
         })
 
         // ---------------------------------------------------------------- enhance button + enhanced window
-        val mid = Ui.row(c)
+        val mid = Ui.row(c).apply { setPadding(0, Ui.dp(c, 14), 0, Ui.dp(c, 2)) }
+        enhancedLabel.setPadding(0, 0, 0, 0)
         mid.addView(enhancedLabel, Ui.lp(0, weight = 1f))
         mid.addView(Ui.text(c, "✦  Enhance", 16f, Color.WHITE, true).apply {
             gravity = Gravity.CENTER
-            setPadding(Ui.dp(c, 22), Ui.dp(c, 11), Ui.dp(c, 22), Ui.dp(c, 11))
-            background = Ui.round(Ui.ACCENT, Ui.dp(c, 24).toFloat())
+            includeFontPadding = false
+            setPadding(Ui.dp(c, 22), 0, Ui.dp(c, 22), 0)
+            background = Ui.round(Ui.ACCENT, Ui.dp(c, 23).toFloat())
             setOnClickListener { go() }
-        }, Ui.lp(LayoutParams.WRAP_CONTENT, top = Ui.dp(c, 10)))
+        }, LayoutParams(LayoutParams.WRAP_CONTENT, Ui.dp(c, 46)))
         addView(mid)
 
         val box = Ui.col(c, 14)
@@ -148,7 +159,7 @@ class EnhancePanel(
         addView(Ui.section(c, "Send through"))
         addView(routeRow.first)
 
-        drawModes(); drawAis(); drawRoutes(); drawResult(); updateCount()
+        drawModes(); drawAis(); drawRoutes(); drawLangs(); drawResult(); updateCount()
     }
 
     fun setText(s: String) { input.setText(s); input.setSelection(input.text.length) }
@@ -178,7 +189,11 @@ class EnhancePanel(
     private fun drawModes() {
         val row = modeRow.second; row.removeAllViews()
         for (m in Modes.all) {
-            row.addView(Ui.chip(act, m.label, store.mode == m.id) { store.mode = m.id; drawModes() },
+            row.addView(Ui.chip(act, m.label, store.mode == m.id) {
+                store.mode = m.id; drawModes()
+                // Tapping a mode enhances straight away (Custom waits for the instruction).
+                if (m.id != Modes.CUSTOM && input.text.isNotBlank()) go(auto = true)
+            },
                 Ui.lp(LayoutParams.WRAP_CONTENT, end = Ui.dp(act, 8)))
         }
         customBox.visibility = if (store.mode == Modes.CUSTOM) View.VISIBLE else View.GONE
@@ -191,9 +206,47 @@ class EnhancePanel(
         for ((id, label) in opts) {
             val p = Providers.byId(id)
             val tag = if (p != null && !store.hasKey(p) && store.webProject(p).isBlank()) " ·" else ""
-            row.addView(Ui.chip(act, label + tag, store.target == id) { store.target = id; drawAis() },
+            row.addView(Ui.chip(act, label + tag, store.target == id) {
+                val changed = store.target != id
+                store.target = id; drawAis()
+                if (changed && tabs.isNotEmpty() && input.text.isNotBlank()) go(auto = true)
+            },
                 Ui.lp(LayoutParams.WRAP_CONTENT, end = Ui.dp(act, 8)))
         }
+    }
+
+    private fun drawLangs() {
+        langSwitch.removeAllViews()
+        for (l in listOf("en", "ar", "fr")) {
+            val on = store.voiceLang == l
+            langSwitch.addView(Ui.text(act, l.uppercase(), 12f, if (on) Color.WHITE else Ui.MUTED, true).apply {
+                gravity = Gravity.CENTER
+                setPadding(Ui.dp(act, 8), Ui.dp(act, 6), Ui.dp(act, 8), Ui.dp(act, 6))
+                if (on) background = Ui.round(Ui.CARD2, Ui.dp(act, 12).toFloat(), 1, Ui.ACCENT)
+                setOnClickListener { store.voiceLang = l; drawLangs() }
+            })
+        }
+    }
+
+    /** Speak: Android's speech recognition turns it into text, then it is enhanced straight away. */
+    private fun listen() {
+        val tag = when (store.voiceLang) { "ar" -> "ar-AE"; "fr" -> "fr-FR"; else -> "en-US" }
+        val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, tag)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, tag)
+            putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak now")
+        }
+        try { act.startActivityForResult(i, VOICE_REQ) }
+        catch (_: Exception) { Ui.toast(act, "Voice typing isn't available — install or enable the Google app") }
+    }
+
+    /** Called by the screen when speech recognition returns. */
+    fun onVoice(data: Intent?) {
+        val said = data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
+        if (said.isNullOrBlank()) return
+        setText(said)
+        go()
     }
 
     private fun drawRoutes() {
@@ -260,7 +313,7 @@ class EnhancePanel(
 
     // ------------------------------------------------------------------ run
 
-    private fun go() {
+    private fun go(auto: Boolean = false) {
         val text = input.text.toString().trim()
         if (text.isEmpty()) { Ui.toast(act, "Add some text first"); return }
         store.custom = customBox.text.toString()
@@ -284,7 +337,8 @@ class EnhancePanel(
 
         for (t in tabs.filter { !it.account }) runApi(t, mode, text)
         // One account page can open at a time: open it straight away for a single AI.
-        if (accountTabs.size == 1) sendAccount(accountTabs[0])
+        // Quick re-runs from tapping a mode or an AI don't jump to the account page; its tab has a Send button.
+        if (accountTabs.size == 1 && !(auto && apiTargets.isNotEmpty())) sendAccount(accountTabs[0])
     }
 
     private fun sendAccount(t: Tab) {
