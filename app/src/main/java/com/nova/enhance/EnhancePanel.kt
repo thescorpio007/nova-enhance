@@ -73,6 +73,14 @@ class EnhancePanel(
         var convId = -1L
         var note = ""
         var sent = false
+        /** Every version of the result (v1 = first answer, then each refinement or own edit). */
+        val versions = mutableListOf<String>()
+        var vIndex = 0
+        var firstMsg = ""
+        var ask = false
+        var showChanges = false
+        var busy = false
+        val current: String? get() = versions.getOrNull(vIndex) ?: text
         val label: String
             get() = if (account) (if (sent) "✓ Sent to my ${p.label}" else "My ${p.label}") else "${p.label} · API"
     }
@@ -94,6 +102,16 @@ class EnhancePanel(
     private val savedText = Ui.text(act, "", 12f, Ui.MUTED)
 
     private val langSwitch = Ui.row(act)
+    /** Editable result, the "show changes" view, version bar and refine bar. */
+    private val resultBox = Ui.input(act, "", true, 6).apply {
+        background = null; setPadding(0, 0, 0, 0); textSize = 16f; maxLines = 14
+    }
+    private val diffView = Ui.text(act, "", 16f, Ui.TEXT).apply { maxLines = 14 }
+    private val verRow = Ui.row(act)
+    private val refineChips = Ui.chipRow(act)
+    private val refineRow = Ui.row(act)
+    private val refineInput = Ui.input(act, "Tell the AI what to change…", false).apply { textSize = 14f }
+    private var settingResult = false
     private var barRefresh: () -> Unit = {}
     private val tabs = mutableListOf<Tab>()
     private var selected = 0
@@ -190,8 +208,30 @@ class EnhancePanel(
         box.background = Ui.round(Ui.CARD, Ui.dp(c, 16).toFloat(), Ui.dp(c, 1) + 1, Ui.ACCENT)
         box.addView(tabsRow.first, Ui.lp())
         box.addView(noteText, Ui.lp(top = Ui.dp(c, 6)))
+        box.addView(verRow, Ui.lp(top = Ui.dp(c, 4)))
         box.addView(body, Ui.lp(top = Ui.dp(c, 8)))
+        box.addView(resultBox, Ui.lp(top = Ui.dp(c, 6)))
+        box.addView(diffView, Ui.lp(top = Ui.dp(c, 6)))
         box.addView(actions, Ui.lp(top = Ui.dp(c, 10)))
+        box.addView(refineChips.first, Ui.lp(top = Ui.dp(c, 10)))
+        refineRow.addView(refineInput, Ui.lp(0, weight = 1f, end = Ui.dp(c, 6)))
+        refineRow.addView(Ui.text(c, "↻", 18f, Color.WHITE, true).apply {
+            gravity = Gravity.CENTER; includeFontPadding = false
+            background = Ui.round(Ui.ACCENT, Ui.dp(c, 18).toFloat())
+            setOnClickListener { refine(refineInput.text.toString().trim()) }
+        }, LayoutParams(Ui.dp(c, 36), Ui.dp(c, 36)))
+        box.addView(refineRow, Ui.lp(top = Ui.dp(c, 8)))
+        Ui.scrollBox(input); Ui.scrollBox(resultBox); Ui.scrollBox(diffView)
+        resultBox.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, d: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, d: Int) {}
+            override fun afterTextChanged(e: Editable?) {
+                if (settingResult) return
+                val t = tabs.getOrNull(selected) ?: return
+                if (t.versions.isEmpty()) return
+                t.versions[t.vIndex] = e.toString()   // own edits are kept in the version on screen
+            }
+        })
         addView(box, Ui.lp(top = Ui.dp(c, 6)))
         addView(savedText, Ui.lp(top = Ui.dp(c, 4)))
 
@@ -262,7 +302,8 @@ class EnhancePanel(
         val lines = if (bigOriginal) (if (tabs.isEmpty()) 15 else 10) else 5
         input.minLines = lines; input.maxLines = lines
         input.isVerticalScrollBarEnabled = true
-        body.minLines = if (tabs.isEmpty()) 1 else 6
+        body.minLines = if (tabs.isEmpty()) 1 else 3
+        resultBox.minLines = 6; resultBox.maxLines = 14
     }
 
     fun refresh() { drawAis(); barRefresh() }
@@ -434,7 +475,9 @@ class EnhancePanel(
     private fun drawResult() {
         sizeBoxes()
         val c = act
-        tabsRow.second.removeAllViews(); actions.removeAllViews()
+        tabsRow.second.removeAllViews(); actions.removeAllViews(); verRow.removeAllViews()
+        resultBox.visibility = View.GONE; diffView.visibility = View.GONE; body.visibility = View.VISIBLE
+        refineChips.first.visibility = View.GONE; refineRow.visibility = View.GONE; verRow.visibility = View.GONE
         if (tabs.isEmpty()) {
             tabsRow.first.visibility = View.GONE
             noteText.visibility = View.GONE
@@ -456,7 +499,7 @@ class EnhancePanel(
         noteText.setTextColor(if (single) Ui.ACCENT else Ui.MUTED)
 
         val name = t.p.label
-        val out = t.text
+        val out = t.current
         when {
             t.account -> {
                 body.setTextColor(Ui.MUTED)
@@ -466,23 +509,102 @@ class EnhancePanel(
                 }, Ui.lp(0, weight = 1f))
             }
             out != null -> {
-                body.setTextColor(Ui.TEXT); body.text = out
-                actions.addView(Ui.button(c, "⧉  Copy", true) { Ui.copy(c, out) }, Ui.lp(0, weight = 1f, end = Ui.dp(c, 8)))
-                actions.addView(Ui.button(c, "Share") { share(out) }, Ui.lp(LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 8)))
+                drawVersionBar(t)
+                if (t.busy) { body.setTextColor(Ui.MUTED); body.text = t.status } else body.visibility = View.GONE
+                if (t.showChanges && !t.ask) {
+                    diffView.visibility = View.VISIBLE
+                    diffView.text = Diff.spans(input.text.toString().trim(), out)
+                } else {
+                    resultBox.visibility = View.VISIBLE
+                    if (resultBox.text.toString() != out) {
+                        settingResult = true; resultBox.setText(out); settingResult = false
+                    }
+                }
+                fun cur() = t.current ?: ""
+                actions.addView(Ui.button(c, "⧉  Copy", true) { Ui.copy(c, cur()) }, Ui.lp(0, weight = 1f, end = Ui.dp(c, 8)))
+                actions.addView(Ui.button(c, "Share") { share(cur()) }, Ui.lp(LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 8)))
                 val replace = onReplace
-                if (replace != null) actions.addView(Ui.button(c, "Replace") { replace(out) },
+                if (replace != null) actions.addView(Ui.button(c, "Replace") { replace(cur()) },
                     Ui.lp(LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 8)))
                 actions.addView(Ui.button(c, "Continue") { ChatActivity.open(c, t.convId) }, Ui.lp(LayoutParams.WRAP_CONTENT))
+                drawRefine(t)
             }
             else -> {
                 body.setTextColor(if (t.error) Ui.BAD else Ui.MUTED); body.text = t.status
             }
         }
         val saved = tabs.filter { it.convId >= 0 }.map { it.p.label }.distinct()
-        savedText.text = if (saved.isEmpty()) "" else "Saved in ${Db.PROJECT} · " + saved.joinToString(", ")
+        savedText.text = if (saved.isEmpty()) "" else "Saved in ${if (askMode) Db.ASK else Db.PROJECT} · " + saved.joinToString(", ")
     }
 
     // ------------------------------------------------------------------ run
+
+    /** "‹ v2/3 ›   ◐ Changes   ⬆ Use as original" */
+    private fun drawVersionBar(t: Tab) {
+        val c = act
+        verRow.visibility = View.VISIBLE
+        fun link(label: String, on: Boolean = false, enabled: Boolean = true, f: () -> Unit) =
+            verRow.addView(Ui.text(c, label, 13f, if (!enabled) 0x55FFFFFF else if (on) Ui.GOOD else Ui.ACCENT, true).apply {
+                setPadding(0, Ui.dp(c, 4), Ui.dp(c, 14), Ui.dp(c, 4))
+                if (enabled) setOnClickListener { f() }
+            })
+        val n = t.versions.size
+        link("‹", enabled = t.vIndex > 0) { t.vIndex--; drawResult() }
+        verRow.addView(Ui.text(c, "v${t.vIndex + 1}/${n.coerceAtLeast(1)}", 13f, Ui.TEXT, true)
+            .apply { setPadding(0, Ui.dp(c, 4), Ui.dp(c, 14), Ui.dp(c, 4)) })
+        link("›", enabled = t.vIndex < n - 1) { t.vIndex++; drawResult() }
+        verRow.addView(android.view.View(c), Ui.lp(0, weight = 1f))
+        if (!t.ask) link(if (t.showChanges) "◐ Changes ON" else "◐ Changes", on = t.showChanges) {
+            t.showChanges = !t.showChanges; drawResult()
+        }
+        if (!t.ask) link("⬆ Use as original") {
+            val text = t.current ?: return@link
+            input.setText(text); input.setSelection(input.text.length)
+            tabs.clear(); drawResult()
+            Ui.toast(c, "Moved up — pick a mode to enhance it again")
+        }
+    }
+
+    /** Quick refine chips + "Tell the AI what to change…". */
+    private fun drawRefine(t: Tab) {
+        val c = act
+        refineChips.first.visibility = View.VISIBLE; refineRow.visibility = View.VISIBLE
+        val row = refineChips.second; row.removeAllViews()
+        val opts = if (t.ask) listOf("More detail", "Shorter", "Simpler", "Give examples", "Next steps")
+            else listOf("Shorter", "More formal", "Warmer", "Simpler", "Keep my wording")
+        for (o in opts) row.addView(Ui.chip(c, o, false) { refine(o) },
+            Ui.lp(LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+        refineInput.hint = if (t.ask) "Ask a follow-up…" else "Tell the AI what to change…"
+    }
+
+    /** Re-enhance the version on screen (including own edits); the result becomes a new version. */
+    private fun refine(request: String) {
+        if (request.isBlank()) { Ui.toast(act, "Type what to change, or tap a chip"); return }
+        val t = tabs.getOrNull(selected) ?: return
+        val cur = t.current ?: return
+        if (t.busy) return
+        if (!store.hasKey(t.p)) { Ui.toast(act, "Add a ${t.p.label} API key in Settings"); return }
+        val p = t.p
+        val sys = if (t.ask) Modes.askSystem(store) else Modes.system(store)
+        val req = if (t.ask) request else "Change request: $request\nApply it to the text above and reply with the full revised text only."
+        val history = listOf(Msg("user", t.firstMsg), Msg("assistant", cur), Msg("user", req))
+        refineInput.setText(""); hideKeyboard()
+        t.busy = true; t.status = "Refining: $request…"; drawResult()
+        Thread {
+            val r = runCatching {
+                Providers.chatSmart(p, store.key(p), store.model(p), sys, history) { msg -> update { t.status = msg } }.text
+            }
+            r.onSuccess {
+                if (t.convId >= 0) { db.addMsg(t.convId, "user", request); db.addMsg(t.convId, "assistant", it) }
+            }
+            r.onFailure { ErrorLog.add(act, "Refine", p.label, store.model(p), (it as? AiException)?.code ?: 0, it.message ?: "", cur) }
+            update {
+                t.busy = false
+                r.onSuccess { out -> t.versions += out; t.vIndex = t.versions.size - 1; t.showChanges = false }
+                r.onFailure { e -> Ui.toast(act, e.message ?: "Refine failed") }
+            }
+        }.start()
+    }
 
     /** Enhance now with the last mode (used by the text-selection menu). */
     fun runNow() { if (input.text.isNotBlank()) go(auto = true) }
@@ -598,7 +720,11 @@ class EnhancePanel(
                     notes += if (it.startsWith("★")) "answered by ${it.drop(1)} (stronger model)"
                     else "answered by backup model $it (usual one was busy)"
                 }
-                update { t.text = joined; t.convId = id; t.note = notes.joinToString(" · ") }
+                update {
+                    t.text = joined; t.convId = id; t.note = notes.joinToString(" · ")
+                    t.versions.clear(); t.versions += joined; t.vIndex = 0
+                    t.firstMsg = msgFor(original); t.ask = ask
+                }
             } else {
                 ErrorLog.add(act, if (ask) "Ask AI" else "Enhance", p.label, store.model(p), lastCode, err, original)
                 update { t.error = true; t.status = err }

@@ -127,6 +127,26 @@ object Ui {
             }
         }
 
+    /** Always-visible vertical scroll bar inside a text box, and scrolling the box (not the page) when touched. */
+    @android.annotation.SuppressLint("ClickableViewAccessibility")
+    fun scrollBox(v: android.widget.TextView) {
+        v.isVerticalScrollBarEnabled = true
+        v.scrollBarStyle = View.SCROLLBARS_INSIDE_INSET
+        v.isScrollbarFadingEnabled = false
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            v.verticalScrollbarThumbDrawable = round(ACCENT, dp(v.context, 3).toFloat())
+            v.verticalScrollbarTrackDrawable = round(0x22FFFFFF, dp(v.context, 3).toFloat())
+        }
+        if (v !is EditText) v.movementMethod = android.text.method.ScrollingMovementMethod()
+        v.setOnTouchListener { view, e ->
+            if (view.canScrollVertically(1) || view.canScrollVertically(-1)) {
+                view.parent?.requestDisallowInterceptTouchEvent(e.action != android.view.MotionEvent.ACTION_UP &&
+                    e.action != android.view.MotionEvent.ACTION_CANCEL)
+            }
+            false
+        }
+    }
+
     fun gap(c: Context, h: Int): View = View(c).apply {
         layoutParams = LinearLayout.LayoutParams(1, dp(c, h))
     }
