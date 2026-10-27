@@ -39,7 +39,7 @@ class NovaKeyboard : InputMethodService() {
         val c = this
         val root = Ui.col(c).apply {
             setBackgroundColor(Ui.BG)
-            setPadding(Ui.dp(c, 12), Ui.dp(c, 10), Ui.dp(c, 12), Ui.dp(c, 12))
+            setPadding(Ui.dp(c, 10), Ui.dp(c, 8), Ui.dp(c, 10), Ui.dp(c, 6))
         }
         // Header: title + status, profile, AI
         val head = Ui.row(c)
@@ -61,10 +61,10 @@ class NovaKeyboard : InputMethodService() {
         labels.forEachIndexed { i, (id, label) ->
             val b = key(label, primary = false) { enhance(id) }
             modeBtns += id to b
-            (if (i < 3) r1 else r2).addView(b, LinearLayout.LayoutParams(0, Ui.dp(c, 50), 1f).apply { marginEnd = Ui.dp(c, 8) })
+            (if (i < 3) r1 else r2).addView(b, LinearLayout.LayoutParams(0, Ui.dp(c, 44), 1f).apply { marginEnd = Ui.dp(c, 8) })
         }
         voiceBtn = key("🎤 Voice") { toggleVoice() }
-        r2.addView(voiceBtn, LinearLayout.LayoutParams(0, Ui.dp(c, 50), 1f))
+        r2.addView(voiceBtn, LinearLayout.LayoutParams(0, Ui.dp(c, 44), 1f))
         (r1.getChildAt(2).layoutParams as LinearLayout.LayoutParams).marginEnd = 0
         root.addView(r1, Ui.lp(top = Ui.dp(c, 10)))
         root.addView(r2, Ui.lp(top = Ui.dp(c, 8)))
@@ -73,14 +73,21 @@ class NovaKeyboard : InputMethodService() {
         root.addView(status, Ui.lp(top = Ui.dp(c, 8)))
 
         val bot = Ui.row(c)
-        bot.addView(key("↶ Undo") { undo() }, LinearLayout.LayoutParams(0, Ui.dp(c, 44), 1f).apply { marginEnd = Ui.dp(c, 8) })
+        bot.addView(key("↶ Undo") { undo() }, LinearLayout.LayoutParams(0, Ui.dp(c, 38), 1f).apply { marginEnd = Ui.dp(c, 8) })
         bot.addView(key("⇥ Select all") {
             currentInputConnection?.performContextMenuAction(android.R.id.selectAll)
-        }, LinearLayout.LayoutParams(0, Ui.dp(c, 44), 1f).apply { marginEnd = Ui.dp(c, 8) })
-        bot.addView(key("⌨ Back to keyboard") { back() }, LinearLayout.LayoutParams(0, Ui.dp(c, 44), 1.2f))
+        }, LinearLayout.LayoutParams(0, Ui.dp(c, 38), 1f).apply { marginEnd = Ui.dp(c, 8) })
+        bot.addView(key("⌨ Back to keyboard") { back() }, LinearLayout.LayoutParams(0, Ui.dp(c, 38), 1.2f))
         root.addView(bot, Ui.lp(top = Ui.dp(c, 8)))
 
         drawAi(); drawModes()
+        // Keep the panel above the navigation buttons.
+        root.setOnApplyWindowInsetsListener { v, ins ->
+            val bottom = if (Build.VERSION.SDK_INT >= 30) ins.getInsets(android.view.WindowInsets.Type.navigationBars()).bottom
+                else @Suppress("DEPRECATION") ins.systemWindowInsetBottom
+            v.setPadding(v.paddingLeft, v.paddingTop, v.paddingRight, Ui.dp(c, 6) + bottom)
+            ins
+        }
         return root
     }
 
