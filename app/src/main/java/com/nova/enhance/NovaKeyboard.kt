@@ -13,6 +13,8 @@ import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputMethodManager
 import android.widget.LinearLayout
 import android.widget.TextView
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
  * Nova keyboard panel: switch to it with the 🌐 key in any app. One tap enhances the selected text,
@@ -31,6 +33,12 @@ class NovaKeyboard : InputMethodService() {
     private var busy = false
     private var voice: PhraseVoice? = null
     private var voiceTyped = 0
+    private lateinit var origBox: LinearLayout
+    private lateinit var origHead: TextView
+    private lateinit var origText: TextView
+    private lateinit var olderBtn: TextView
+    private lateinit var origBtn: TextView
+    private var origIdx = 0
 
     private val modes = listOf("grammar", "shorten", "professional", "informal", "translate")
 
@@ -51,7 +59,11 @@ class NovaKeyboard : InputMethodService() {
         val prof = Profile.fields(store).firstOrNull() ?: "Set up"
         head.addView(pill("👤 $prof") {}, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, Ui.dp(c, 28), end = Ui.dp(c, 6)))
         aiPill = pill("") { nextAi() }
-        head.addView(aiPill, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, Ui.dp(c, 28)))
+        head.addView(aiPill, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, Ui.dp(c, 28), end = Ui.dp(c, 6)))
+        head.addView(pill("⚙") { openSettings() }.apply {
+            setTextColor(Color.WHITE); textSize = 15f
+            background = Ui.round(Ui.ACCENT, Ui.dp(c, 14).toFloat())
+        }, LinearLayout.LayoutParams(Ui.dp(c, 36), Ui.dp(c, 28)))
         root.addView(head)
 
         // 6 big buttons
@@ -72,12 +84,39 @@ class NovaKeyboard : InputMethodService() {
         status = Ui.text(c, "Tap a mode — replaced in place", 12.5f, Ui.MUTED).apply { maxLines = 1; isSingleLine = true; ellipsize = android.text.TextUtils.TruncateAt.END }
         root.addView(status, Ui.lp(top = Ui.dp(c, 8)))
 
+        // 📄 Original box: the text as it was before the last enhancements
+        origBox = Ui.col(c).apply {
+            background = Ui.round(0xFF181C24.toInt(), Ui.dp(c, 12).toFloat(), Ui.dp(c, 1), 0x66FFC857)
+            setPadding(Ui.dp(c, 10), Ui.dp(c, 8), Ui.dp(c, 10), Ui.dp(c, 8))
+            visibility = View.GONE
+        }
+        origHead = Ui.text(c, "", 12f, 0xFFFFD27A.toInt(), true).apply { maxLines = 1 }
+        origBox.addView(origHead)
+        origText = Ui.text(c, "", 13f, 0xFFC9CED8.toInt()).apply {
+            maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        origBox.addView(origText, Ui.lp(top = Ui.dp(c, 4)))
+        val ob = Ui.row(c)
+        ob.addView(chip("↩ Put back") { putBack() }, chipLp())
+        ob.addView(chip("⧉ Copy") { copyOrig() }, chipLp())
+        olderBtn = chip("🕘 Older") { older() }
+        ob.addView(olderBtn, chipLp())
+        ob.addView(View(c), LinearLayout.LayoutParams(0, 1, 1f))
+        ob.addView(chip("✕") { origBox.visibility = View.GONE }.apply { background = null; setTextColor(Ui.MUTED) },
+            LinearLayout.LayoutParams(Ui.dp(c, 34), Ui.dp(c, 30)))
+        origBox.addView(ob, Ui.lp(top = Ui.dp(c, 8)))
+        root.addView(origBox, Ui.lp(top = Ui.dp(c, 8)))
+
         val bot = Ui.row(c)
         bot.addView(key("↶ Undo") { undo() }, LinearLayout.LayoutParams(0, Ui.dp(c, 38), 1f).apply { marginEnd = Ui.dp(c, 8) })
+        origBtn = key("📄 Original") { toggleOrig() }.apply {
+            setTextColor(0xFFFFD27A.toInt()); background = Ui.round(0xFF3A3320.toInt(), Ui.dp(c, 12).toFloat())
+        }
+        bot.addView(origBtn, LinearLayout.LayoutParams(0, Ui.dp(c, 38), 1.15f).apply { marginEnd = Ui.dp(c, 8) })
         bot.addView(key("⇥ Select all") {
             currentInputConnection?.performContextMenuAction(android.R.id.selectAll)
         }, LinearLayout.LayoutParams(0, Ui.dp(c, 38), 1f).apply { marginEnd = Ui.dp(c, 8) })
-        bot.addView(key("⌨ Back to keyboard") { back() }, LinearLayout.LayoutParams(0, Ui.dp(c, 38), 1.2f))
+        bot.addView(key("⌨ Back") { back() }, LinearLayout.LayoutParams(0, Ui.dp(c, 38), 1f))
         root.addView(bot, Ui.lp(top = Ui.dp(c, 8)))
 
         drawAi(); drawModes()
@@ -189,6 +228,7 @@ class NovaKeyboard : InputMethodService() {
                 busy = false
                 r.onSuccess { out ->
                     undoText = text; undoWhole = whole
+                    saveOriginal(text, out, whole, mode.label)
                     put(out, whole)
                     val db = Db.get(this)
                     val id = db.newConv(p.id, modeId, text, "api")
@@ -196,7 +236,8 @@ class NovaKeyboard : InputMethodService() {
                     val fixed = Diff.countChanged(text, out)
                     sub.text = String.format("Done in %.1f s", (System.currentTimeMillis() - t0) / 1000.0)
                     say("✓ ${mode.label} applied" + (if (modeId == "grammar") " · $fixed word${if (fixed == 1) "" else "s"} fixed" else "") +
-                        " · tap ↶ Undo to restore", Ui.GOOD)
+                        " · original saved", Ui.GOOD)
+                    if (origBox.visibility == View.VISIBLE) { origIdx = 0; drawOrig() }
                 }.onFailure { e ->
                     sub.text = "Acts on the selected text, or the whole message"
                     ErrorLog.add(this, "Keyboard", p.label, store.model(p), (e as? AiException)?.code ?: 0, e.message ?: "", text)
@@ -257,6 +298,89 @@ class NovaKeyboard : InputMethodService() {
             val ok = (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).switchToLastInputMethod(window.window?.attributes?.token)
             if (!ok) (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showInputMethodPicker()
         }
+    }
+
+    // ------------------------------------------------------------------ ⚙ settings
+
+    private fun openSettings() {
+        try {
+            startActivity(android.content.Intent(this, SettingsActivity::class.java)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP))
+        } catch (e: Exception) { say("Couldn't open Settings — open the Nova Enhance app", Ui.BAD) }
+    }
+
+    // ------------------------------------------------------------------ 📄 original text (last 20)
+
+    private fun chip(s: String, f: () -> Unit) = Ui.text(this, s, 12.5f, Ui.TEXT, true).apply {
+        gravity = Gravity.CENTER; includeFontPadding = false
+        setPadding(Ui.dp(context, 10), 0, Ui.dp(context, 10), 0)
+        background = Ui.round(0xFF2A3040.toInt(), Ui.dp(context, 15).toFloat())
+        setOnClickListener { f() }
+    }
+
+    private fun chipLp() = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, Ui.dp(this, 30)).apply { marginEnd = Ui.dp(this@NovaKeyboard, 6) }
+
+    private fun prefs() = getSharedPreferences("nova_enhance", MODE_PRIVATE)
+
+    private fun originals(): JSONArray = try { JSONArray(prefs().getString("kb_originals", "[]")) } catch (_: Exception) { JSONArray() }
+
+    private fun saveOriginal(text: String, out: String, whole: Boolean, mode: String) {
+        val old = originals()
+        val now = JSONArray().put(JSONObject().put("t", text).put("o", out).put("w", whole)
+            .put("m", mode).put("at", System.currentTimeMillis()))
+        for (i in 0 until minOf(old.length(), 19)) now.put(old.get(i))
+        prefs().edit().putString("kb_originals", now.toString()).apply()
+    }
+
+    private fun toggleOrig() {
+        if (origBox.visibility == View.VISIBLE) { origBox.visibility = View.GONE; return }
+        if (originals().length() == 0) { say("No original saved yet — tap a mode first"); return }
+        origIdx = 0; drawOrig(); origBox.visibility = View.VISIBLE
+    }
+
+    private fun drawOrig() {
+        val all = originals()
+        if (all.length() == 0) { origBox.visibility = View.GONE; return }
+        origIdx = origIdx.coerceIn(0, all.length() - 1)
+        val e = all.getJSONObject(origIdx)
+        val time = java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(e.optLong("at")))
+        origHead.text = "📄 ORIGINAL · before ${e.optString("m")}" +
+            (if (origIdx > 0) " · ${origIdx + 1} of ${all.length()}" else "") + "  ·  $time"
+        origText.text = e.optString("t")
+        val left = all.length() - 1 - origIdx
+        olderBtn.text = if (left > 0) "🕘 Older ($left)" else "🕘 Newest"
+    }
+
+    private fun older() {
+        val n = originals().length()
+        origIdx = if (origIdx + 1 < n) origIdx + 1 else 0
+        drawOrig()
+    }
+
+    private fun putBack() {
+        val all = originals(); if (all.length() == 0) return
+        val e = all.getJSONObject(origIdx.coerceIn(0, all.length() - 1))
+        val t = e.optString("t"); val o = e.optString("o")
+        val ic = currentInputConnection ?: return
+        val sel = ic.getSelectedText(0)?.toString()
+        when {
+            !sel.isNullOrEmpty() -> ic.commitText(t, 1)
+            e.optBoolean("w") -> put(t, true)
+            o.isNotEmpty() && (ic.getTextBeforeCursor(o.length, 0)?.toString() ?: "") == o -> {
+                ic.beginBatchEdit(); ic.deleteSurroundingText(o.length, 0); ic.commitText(t, 1); ic.endBatchEdit()
+            }
+            else -> ic.commitText(t, 1)
+        }
+        undoText = null
+        say("↩ Original put back", Ui.GOOD)
+    }
+
+    private fun copyOrig() {
+        val all = originals(); if (all.length() == 0) return
+        val t = all.getJSONObject(origIdx.coerceIn(0, all.length() - 1)).optString("t")
+        (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager)
+            .setPrimaryClip(android.content.ClipData.newPlainText("Original", t))
+        say("⧉ Original copied", Ui.GOOD)
     }
 
     /** Height of the navigation bar (◀ ● ■), or 0 with gesture navigation. */
