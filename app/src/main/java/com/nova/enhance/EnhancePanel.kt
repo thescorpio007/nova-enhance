@@ -250,7 +250,7 @@ class EnhancePanel(
             setOnClickListener { refine(refineInput.text.toString().trim()) }
         }, LayoutParams(Ui.dp(c, 36), Ui.dp(c, 36)))
         // Refine panel: shown below, under the Enhancement chips (added further down).
-        refinePanel.background = Ui.round(0xFF141821.toInt(), Ui.dp(c, 14).toFloat(), Ui.dp(c, 1), 0x887C6CFF)
+        refinePanel.background = Ui.round(0xFF141821.toInt(), Ui.dp(c, 14).toFloat(), Ui.dp(c, 1), 0x887C6CFF.toInt())
         refinePanel.setPadding(Ui.dp(c, 10), Ui.dp(c, 10), Ui.dp(c, 10), Ui.dp(c, 10))
         refinePanel.addView(refineLabel)
         refinePanel.addView(refineChips.first, Ui.lp(top = Ui.dp(c, 8)))
