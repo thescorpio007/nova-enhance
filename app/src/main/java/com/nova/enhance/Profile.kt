@@ -61,47 +61,42 @@ object Profile {
         root.addView(Ui.text(c, "Your field and role. Every enhancement will use the correct technical terms of your field.",
             13f, Ui.MUTED))
 
-        root.addView(Ui.section(c, "My field"))
-        val rows = Ui.col(c)
+        root.addView(Ui.section(c, "My field  · pick one or more"))
+        val rows = FlowLayout(c, Ui.dp(c, 8), Ui.dp(c, 8))
         fun drawChips() {
             rows.removeAllViews()
             val all = FIELDS + chosen.filter { it !in FIELDS }
-            all.chunked(3).forEach { group ->
-                val r = Ui.row(c)
-                group.forEach { f ->
-                    r.addView(Ui.chip(c, f, f in chosen) {
-                        if (f in chosen) chosen.remove(f) else chosen.add(f)
-                        drawChips()
-                    }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
-                }
-                rows.addView(r, Ui.lp(top = Ui.dp(c, 6)))
+            for (f in all) {
+                val on = f in chosen
+                rows.addView(Ui.chip(c, (if (on) "✓ " else "") + f, on) {
+                    if (f in chosen) chosen.remove(f) else chosen.add(f)
+                    drawChips()
+                })
             }
-            val other = Ui.row(c)
-            other.addView(Ui.chip(c, "+ Other", false) {
+            rows.addView(Ui.chip(c, "+ Other", false) {
                 val box = Ui.input(c, "Your field", false)
                 AlertDialog.Builder(c).setTitle("Other field").setView(box)
                     .setPositiveButton("Add") { _, _ ->
                         box.text.toString().trim().takeIf { it.isNotBlank() }?.let { chosen.add(it.replace("|", " ")); drawChips() }
                     }.setNegativeButton("Cancel", null).show()
-            })
-            rows.addView(other, Ui.lp(top = Ui.dp(c, 6)))
+            }.apply { background = Ui.round(Ui.CARD2, Ui.dp(c, 20).toFloat(), Ui.dp(c, 1), 0x66FFFFFF) })
         }
         drawChips()
-        root.addView(rows)
+        root.addView(rows, Ui.lp(top = Ui.dp(c, 2)))
 
         val aboutHead = Ui.row(c)
         aboutHead.addView(Ui.section(c, "About me"), Ui.lp(0, weight = 1f))
         val about = Ui.input(c, "e.g. Senior site architect: Design Development and coordination with structural and MEP…", true, 4)
             .apply { setText(s.profileAbout); textSize = 15f }
-        aboutHead.addView(Ui.text(c, "🎤", 12f, android.graphics.Color.WHITE).apply {
-            gravity = Gravity.CENTER
-            background = Ui.round(Ui.ACCENT, Ui.dp(c, 14).toFloat())
+        aboutHead.addView(Ui.text(c, "🎤", 13f, android.graphics.Color.WHITE).apply {
+            gravity = Gravity.CENTER; includeFontPadding = false
+            background = Ui.round(Ui.ACCENT, Ui.dp(c, 15).toFloat())
             setOnClickListener { listen(act, about) }
-        }, LinearLayout.LayoutParams(Ui.dp(c, 28), Ui.dp(c, 28)).apply { topMargin = Ui.dp(c, 6) })
-        root.addView(aboutHead)
-        root.addView(about)
+        }, LinearLayout.LayoutParams(Ui.dp(c, 30), Ui.dp(c, 30)).apply { topMargin = Ui.dp(c, 8) })
+        root.addView(aboutHead, Ui.lp(top = Ui.dp(c, 4)))
+        root.addView(about, Ui.lp(top = Ui.dp(c, 6)))
 
-        root.addView(Ui.section(c, "My terms (keep as written)"))
+        root.addView(Ui.section(c, "My terms  · kept exactly as written"))
         val terms = Ui.input(c, "e.g. IFC, RFI, NY, PQP, PVRS, SLV", true, 2).apply { setText(s.profileTerms); textSize = 15f }
         root.addView(terms)
 
