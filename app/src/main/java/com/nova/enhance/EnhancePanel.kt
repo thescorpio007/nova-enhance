@@ -93,12 +93,18 @@ class EnhancePanel(
     private val savedText = Ui.text(act, "", 12f, Ui.MUTED)
 
     private val langSwitch = Ui.row(act)
+    private var barRefresh: () -> Unit = {}
     private val tabs = mutableListOf<Tab>()
     private var selected = 0
 
     init {
         orientation = VERTICAL
         val c = act
+
+        // ---------------------------------------------------------------- about me bar
+        val (bar, refreshBar) = Profile.bar(act) { }
+        barRefresh = refreshBar
+        addView(bar, Ui.lp(top = Ui.dp(c, 8)))
 
         // ---------------------------------------------------------------- original
         val head = Ui.row(c)
@@ -201,7 +207,7 @@ class EnhancePanel(
         body.minLines = if (tabs.isEmpty()) 1 else 6
     }
 
-    fun refresh() { drawAis() }
+    fun refresh() { drawAis(); barRefresh() }
 
     private fun updateCount() {
         val s = input.text.toString()
@@ -399,7 +405,7 @@ class EnhancePanel(
 
     private fun sendAccount(t: Tab) {
         val original = input.text.toString().trim()
-        val msg = Modes.firstMessage(Modes.byId(store.mode), store.custom, original)
+        val msg = Modes.accountMessage(store, Modes.byId(store.mode), original)
         if (!t.sent) {
             val id = db.newConv(t.p.id, store.mode, original, "account")
             db.addMsg(id, "user", msg)
@@ -431,7 +437,7 @@ class EnhancePanel(
                 val prefix = if (parts.size > 1) "Part ${i + 1}/${parts.size}: " else ""
                 if (parts.size > 1) update { t.status = "${prefix}working…" }
                 try {
-                    val a = Providers.chatSmart(p, key, model, Modes.SYSTEM,
+                    val a = Providers.chatSmart(p, key, model, Modes.system(store),
                         listOf(Msg("user", Modes.firstMessage(mode, custom, part)))) { msg ->
                         update { t.status = prefix + msg }
                     }

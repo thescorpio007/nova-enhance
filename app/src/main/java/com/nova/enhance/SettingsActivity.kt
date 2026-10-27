@@ -83,7 +83,7 @@ class SettingsActivity : BaseActivity() {
         row("🔑", "AI & API keys", "$keyed of ${Providers.all.size} connected · models · compare", S_AI)
         row("👤", "Accounts", "Send to the official AI apps · $apps installed", S_ACCOUNTS)
         row("✂", "Capture", "Share menu, text selection, bubble, tile", S_CAPTURE)
-        row("✦", "Enhancement", "Default route, speaking language, custom instruction", S_ENHANCE)
+        row("✦", "Enhancement", "About me, default route, speaking language, custom instruction", S_ENHANCE)
         row("💾", "Backup & restore", "All settings, history and password-protected keys", S_BACKUP)
         row("⚠", "Error log", if (errs == 0) "No errors recorded" else "$errs record(s) · share with support", S_ERRORS)
         row("ⓘ", "About", "Version ${version()}", S_ABOUT)
@@ -286,6 +286,16 @@ class SettingsActivity : BaseActivity() {
         val c = this
         header("Enhancement", "Defaults used on the main screen and the quick sheet.")
 
+        root.addView(Ui.section(c, "About me"))
+        val me = Ui.card(c)
+        me.addView(Ui.text(c, Profile.summary(store), 14f, if (Profile.isSet(store)) Ui.TEXT else Ui.MUTED))
+        if (store.profileTerms.isNotBlank()) me.addView(Ui.text(c, "Keep as written: ${store.profileTerms}", 12f, Ui.MUTED)
+            .apply { setPadding(0, Ui.dp(c, 6), 0, 0) })
+        me.addView(Ui.button(c, if (Profile.isSet(store)) "Edit About me" else "Set up About me", !Profile.isSet(store)) {
+            Profile.edit(c) { draw() }
+        }, Ui.lp(top = Ui.dp(c, 10)))
+        root.addView(me)
+
         root.addView(Ui.section(c, "Send through"))
         val (rs, rr) = Ui.chipRow(c)
         for ((id, label) in listOf("api" to "API key", "account" to "My account", "both" to "Both")) {
@@ -372,6 +382,7 @@ class SettingsActivity : BaseActivity() {
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == Profile.VOICE_REQ) { if (resultCode == RESULT_OK) Profile.onVoice(data); return }
         val uri = data?.data ?: return
         if (resultCode != RESULT_OK) return
         when (requestCode) {

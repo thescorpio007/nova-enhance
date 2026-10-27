@@ -40,6 +40,8 @@ class MainActivity : BaseActivity() {
 
         setContentView(ScrollView(c).apply { isFillViewport = true; addView(root) })
         intent?.getStringExtra("text")?.let { panel.setText(it) }
+        // First start: ask about the user once.
+        if (!Store(c).profileAsked) root.post { Profile.edit(this) { panel.refresh() } }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -63,5 +65,6 @@ class MainActivity : BaseActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == EnhancePanel.VOICE_REQ && resultCode == RESULT_OK) panel.onVoice(data)
+        if (requestCode == Profile.VOICE_REQ && resultCode == RESULT_OK) Profile.onVoice(data)
     }
 }

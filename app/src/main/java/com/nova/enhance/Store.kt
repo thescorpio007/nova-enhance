@@ -40,6 +40,20 @@ class Store(c: Context) {
         get() = sp.getString("voice2", "phone")!!
         set(v) = sp.edit().putString("voice2", v).apply()
 
+    /** "About me" profile: fields (joined by |), own description, terms to keep as written. */
+    var profileFields: String
+        get() = sp.getString("p_fields", "")!!
+        set(v) = sp.edit().putString("p_fields", v).apply()
+    var profileAbout: String
+        get() = sp.getString("p_about", "")!!
+        set(v) = sp.edit().putString("p_about", v).apply()
+    var profileTerms: String
+        get() = sp.getString("p_terms", "")!!
+        set(v) = sp.edit().putString("p_terms", v).apply()
+    var profileAsked: Boolean
+        get() = sp.getBoolean("p_asked", false)
+        set(v) = sp.edit().putBoolean("p_asked", v).apply()
+
     var bubbleOn: Boolean
         get() = sp.getBoolean("bubble", false)
         set(v) = sp.edit().putBoolean("bubble", v).apply()

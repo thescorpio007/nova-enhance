@@ -70,7 +70,7 @@ class ChatActivity : BaseActivity() {
             val history = db.messages(conv.id)
             Thread {
                 val r = runCatching {
-                    Providers.chatSmart(p, store.key(p), store.model(p), Modes.SYSTEM, history) { msg ->
+                    Providers.chatSmart(p, store.key(p), store.model(p), Modes.system(store), history) { msg ->
                         runOnUiThread { Ui.toast(c, msg) }
                     }.text
                 }

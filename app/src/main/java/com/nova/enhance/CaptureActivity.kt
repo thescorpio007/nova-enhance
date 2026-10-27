@@ -90,5 +90,6 @@ class CaptureActivity : BaseActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == EnhancePanel.VOICE_REQ && resultCode == RESULT_OK) panel.onVoice(data)
+        if (requestCode == Profile.VOICE_REQ && resultCode == RESULT_OK) Profile.onVoice(data)
     }
 }
