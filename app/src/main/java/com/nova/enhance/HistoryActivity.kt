@@ -19,6 +19,9 @@ class HistoryActivity : BaseActivity() {
     private lateinit var chips: LinearLayout
     private lateinit var search: android.widget.EditText
     private val fmt = SimpleDateFormat("d MMM yyyy · HH:mm", Locale.US)
+    private var project = Db.PROJECT
+    private lateinit var projChips: LinearLayout
+    private lateinit var titleView: android.widget.TextView
 
     companion object { const val EXPORT = 41 }
 
@@ -28,11 +31,15 @@ class HistoryActivity : BaseActivity() {
         val root = Ui.col(c, 18)
         val head = Ui.row(c)
         val t = Ui.col(c)
-        t.addView(Ui.title(c, Db.PROJECT))
+        titleView = Ui.title(c, project)
+        t.addView(titleView)
         t.addView(Ui.text(c, "All saved conversations", 13f, Ui.MUTED))
         head.addView(t, Ui.lp(0, weight = 1f))
         head.addView(Ui.button(c, "Export") { export() }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT))
         root.addView(head)
+
+        val pr = Ui.chipRow(c); projChips = pr.second
+        root.addView(pr.first, Ui.lp(top = Ui.dp(c, 10)))
 
         search = Ui.input(c, "Search conversations", false)
         root.addView(search, Ui.lp(top = Ui.dp(c, 12)))
@@ -54,10 +61,17 @@ class HistoryActivity : BaseActivity() {
     override fun onResume() { super.onResume(); drawChips(); load() }
 
     private fun drawChips() {
+        projChips.removeAllViews()
+        for (pj in listOf(Db.PROJECT, Db.ASK)) {
+            val n = db.list(null, "", pj).size
+            projChips.addView(Ui.chip(this, (if (pj == Db.ASK) "💬 " else "✦ ") + "$pj  $n", project == pj) {
+                project = pj; titleView.text = pj; drawChips(); load()
+            }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(this, 8)))
+        }
         chips.removeAllViews()
         val opts = listOf<Pair<String?, String>>(null to "All") + Providers.all.map { it.id to it.label }
         for ((id, label) in opts) {
-            val n = db.list(id, "").size
+            val n = db.list(id, "", project).size
             chips.addView(Ui.chip(this, "$label  $n", filter == id) { filter = id; drawChips(); load() },
                 Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(this, 8)))
         }
@@ -66,7 +80,7 @@ class HistoryActivity : BaseActivity() {
     private fun load() {
         val c = this
         list.removeAllViews()
-        val items = db.list(filter, search.text.toString().trim())
+        val items = db.list(filter, search.text.toString().trim(), project)
         if (items.isEmpty()) {
             list.addView(Ui.text(c, "Nothing here yet. Enhanced texts appear here automatically.", 14f, Ui.MUTED)
                 .apply { setPadding(0, Ui.dp(c, 20), 0, 0) })
@@ -74,10 +88,10 @@ class HistoryActivity : BaseActivity() {
         for (cv in items) {
             val p = Providers.byId(cv.provider)
             val card = Ui.card(c)
-            card.addView(Ui.text(c, "${p?.label ?: cv.provider} / ${Db.PROJECT}", 12f, Ui.ACCENT, true))
+            card.addView(Ui.text(c, "${p?.label ?: cv.provider} / ${cv.project}", 12f, Ui.ACCENT, true))
             card.addView(Ui.text(c, cv.title, 15f, Ui.TEXT).apply { maxLines = 2 })
             val via = if (cv.route == "account") " · sent to my account" else ""
-            card.addView(Ui.text(c, "${Modes.byId(cv.mode).label} · ${fmt.format(Date(cv.updated))}$via", 12f, Ui.MUTED))
+            card.addView(Ui.text(c, "${if (cv.project == Db.ASK) Modes.askById(cv.mode).label else Modes.byId(cv.mode).label} · ${fmt.format(Date(cv.updated))}$via", 12f, Ui.MUTED))
             card.setOnClickListener { ChatActivity.open(c, cv.id) }
             card.setOnLongClickListener {
                 EnhancePanel.confirm(c, "Delete this conversation?", "Delete") { db.delete(cv.id); drawChips(); load() }

@@ -39,6 +39,38 @@ object Modes {
         return (if (note.isNotBlank()) "$note\n\n" else "") + firstMessage(mode, s.custom, text)
     }
 
+    // ---------------------------------------------------------------- Ask AI
+
+    val askStyles = listOf(
+        Mode("advise", "Advise",
+            "Give practical, expert advice: the key points to consider, the risks, and clear next steps."),
+        Mode("deeper", "Think deeper",
+            "Think the question through carefully step by step before answering. Consider alternatives, trade-offs and " +
+            "edge cases, then give a well-reasoned recommendation."),
+        Mode("explain", "Explain",
+            "Explain clearly and simply, with a short example if it helps."),
+        Mode("brainstorm", "Brainstorm",
+            "Brainstorm a varied list of ideas or options, each with one line on why it could work."),
+        Mode("quick", "Quick answer",
+            "Answer in two or three sentences only.")
+    )
+
+    fun askById(id: String?): Mode = askStyles.firstOrNull { it.id == id } ?: askStyles[0]
+
+    const val ASK_SYSTEM =
+        "You are Nova, a knowledgeable and honest assistant. Answer the user's question directly and accurately. " +
+        "Reply in the language of the question. Use short paragraphs and numbered lists where they help; avoid long preambles. " +
+        "If something is uncertain or depends on local rules or contract terms, say so."
+
+    fun askSystem(s: Store): String = ASK_SYSTEM + Profile.note(s)
+
+    fun askMessage(style: Mode, question: String): String = "Answer style: ${style.instruction}\n\nQuestion:\n$question"
+
+    fun askAccountMessage(s: Store, style: Mode, question: String): String {
+        val note = Profile.note(s).trim()
+        return (if (note.isNotBlank()) "$note\n\n" else "") + askMessage(style, question)
+    }
+
     fun firstMessage(mode: Mode, custom: String, text: String): String {
         val instr = if (mode.id == CUSTOM) custom.ifBlank { "Improve this text." } else mode.instruction
         return "Instruction: $instr\n\nText:\n$text"

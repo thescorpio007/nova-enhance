@@ -54,6 +54,15 @@ class Store(c: Context) {
         get() = sp.getBoolean("p_asked", false)
         set(v) = sp.edit().putBoolean("p_asked", v).apply()
 
+    /** Answer style in Ask AI mode. */
+    var askStyle: String
+        get() = sp.getString("ask_style", "advise")!!
+        set(v) = sp.edit().putString("ask_style", v).apply()
+
+    /** Stronger model for "Think deeper" ("" = not found yet, "-" = none available). */
+    fun strongModel(p: Provider): String = sp.getString("strong_${p.id}", "")!!
+    fun setStrongModel(p: Provider, v: String) = sp.edit().putString("strong_${p.id}", v).apply()
+
     var bubbleOn: Boolean
         get() = sp.getBoolean("bubble", false)
         set(v) = sp.edit().putBoolean("bubble", v).apply()

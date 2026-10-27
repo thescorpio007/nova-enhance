@@ -35,7 +35,7 @@ class ChatActivity : BaseActivity() {
         val root = Ui.col(c, 16)
         val head = Ui.row(c)
         val t = Ui.col(c)
-        t.addView(Ui.text(c, "${p.label} / ${Db.PROJECT}", 13f, Ui.ACCENT, true))
+        t.addView(Ui.text(c, "${p.label} / ${conv.project}", 13f, Ui.ACCENT, true))
         t.addView(Ui.text(c, conv.title, 17f, Ui.TEXT, true).apply { maxLines = 2 })
         head.addView(t, Ui.lp(0, weight = 1f))
         head.addView(Ui.button(c, "My ${p.label}") {
@@ -70,7 +70,8 @@ class ChatActivity : BaseActivity() {
             val history = db.messages(conv.id)
             Thread {
                 val r = runCatching {
-                    Providers.chatSmart(p, store.key(p), store.model(p), Modes.system(store), history) { msg ->
+                    Providers.chatSmart(p, store.key(p), store.model(p),
+                        if (conv.project == Db.ASK) Modes.askSystem(store) else Modes.system(store), history) { msg ->
                         runOnUiThread { Ui.toast(c, msg) }
                     }.text
                 }
@@ -92,8 +93,11 @@ class ChatActivity : BaseActivity() {
     private fun bubble(m: Msg) {
         val c = this
         val mine = m.role == "user"
-        val shown = if (mine && m.content.startsWith("Instruction: "))
-            m.content.substringAfter("Text:\n", m.content) else m.content
+        val shown = when {
+            mine && m.content.contains("Instruction: ") && m.content.contains("Text:\n") -> m.content.substringAfter("Text:\n")
+            mine && m.content.contains("Answer style: ") && m.content.contains("Question:\n") -> m.content.substringAfter("Question:\n")
+            else -> m.content
+        }
         val card = Ui.col(c, 12)
         card.background = Ui.round(if (mine) Ui.CARD2 else Ui.CARD, Ui.dp(c, 14).toFloat())
         val label = when (m.role) { "user" -> "Me"; "error" -> "Error"; else -> p.label }

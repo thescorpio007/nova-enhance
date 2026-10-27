@@ -32,6 +32,7 @@ class EnhancePanel(
         const val PART_WORDS = 3000
         const val WARN_WORDS = 4000
         const val VOICE_REQ = 77
+        const val MIC_REQ = 79
 
         fun confirm(c: Context, msg: String, ok: String, f: () -> Unit) {
             AlertDialog.Builder(c).setMessage(msg).setPositiveButton(ok) { _, _ -> f() }
@@ -97,9 +98,24 @@ class EnhancePanel(
     private val tabs = mutableListOf<Tab>()
     private var selected = 0
 
+    /** false = Enhance text, true = Ask AI. The app always opens in Enhance text. */
+    var askMode = false; private set
+    private val segRow = Ui.row(act)
+    private lateinit var origLabel: android.widget.TextView
+    private lateinit var goBtn: android.widget.TextView
+    private lateinit var choicesLabel: android.widget.TextView
+    private val listenBar = Ui.row(act)
+    private val listenText = Ui.text(act, "", 13f, Ui.TEXT)
+    private var voice: VoiceInput? = null
+
     init {
         orientation = VERTICAL
         val c = act
+
+        // ---------------------------------------------------------------- Enhance text | Ask AI
+        segRow.background = Ui.round(Ui.CARD, Ui.dp(c, 12).toFloat())
+        segRow.setPadding(Ui.dp(c, 3), Ui.dp(c, 3), Ui.dp(c, 3), Ui.dp(c, 3))
+        addView(segRow, Ui.lp(top = Ui.dp(c, 8)))
 
         // ---------------------------------------------------------------- about me bar
         val (bar, refreshBar) = Profile.bar(act) { }
@@ -110,7 +126,7 @@ class EnhancePanel(
         val head = Ui.row(c)
         head.addView(Ui.section(c, "Original"), Ui.lp(0, weight = 1f))
         head.setPadding(0, Ui.dp(c, 8), 0, 0)
-        val origLabel = head.getChildAt(0) as android.widget.TextView
+        origLabel = head.getChildAt(0) as android.widget.TextView
         origLabel.setPadding(0, 0, 0, 0)
         head.addView(langSwitch, Ui.lp(LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
         head.addView(Ui.text(c, "🎤", 12f, Color.WHITE).apply {
@@ -128,6 +144,22 @@ class EnhancePanel(
             setOnClickListener { input.setText(""); tabs.clear(); drawResult() }
         })
         addView(head)
+
+        // ---------------------------------------------------------------- listening bar
+        listenBar.background = Ui.round(0xFF3A1D2A.toInt(), Ui.dp(c, 12).toFloat(), 1, 0x66FF6B6B)
+        listenBar.setPadding(Ui.dp(c, 10), Ui.dp(c, 6), Ui.dp(c, 8), Ui.dp(c, 6))
+        listenBar.addView(android.view.View(c).apply { background = Ui.round(Ui.BAD, Ui.dp(c, 5).toFloat()) },
+            LayoutParams(Ui.dp(c, 10), Ui.dp(c, 10)).apply { marginEnd = Ui.dp(c, 10) })
+        listenBar.addView(listenText, Ui.lp(0, weight = 1f))
+        listenBar.addView(Ui.text(c, "■ Stop", 13f, Color.WHITE, true).apply {
+            gravity = Gravity.CENTER; includeFontPadding = false
+            setPadding(Ui.dp(c, 12), 0, Ui.dp(c, 12), 0)
+            background = Ui.round(Ui.BAD, Ui.dp(c, 14).toFloat())
+            setOnClickListener { voice?.stop() }
+        }, LayoutParams(LayoutParams.WRAP_CONTENT, Ui.dp(c, 28)))
+        listenBar.visibility = View.GONE
+        addView(listenBar, Ui.lp(top = Ui.dp(c, 6)))
+
         input.textSize = 15f
         input.setOnFocusChangeListener { _, has -> if (has && tabs.isNotEmpty()) sizeBoxes(editing = true) }
         input.setOnClickListener { if (tabs.isNotEmpty()) sizeBoxes(editing = true) }
@@ -144,7 +176,8 @@ class EnhancePanel(
         val mid = Ui.row(c).apply { setPadding(0, Ui.dp(c, 8), 0, 0) }
         enhancedLabel.setPadding(0, 0, 0, 0)
         mid.addView(enhancedLabel, Ui.lp(0, weight = 1f))
-        mid.addView(Ui.text(c, "✦ Enhance", 14f, Color.WHITE, true).apply {
+        goBtn = Ui.text(c, "✦ Enhance", 14f, Color.WHITE, true)
+        mid.addView(goBtn.apply {
             gravity = Gravity.CENTER
             includeFontPadding = false
             setPadding(Ui.dp(c, 16), 0, Ui.dp(c, 16), 0)
@@ -163,7 +196,8 @@ class EnhancePanel(
         addView(savedText, Ui.lp(top = Ui.dp(c, 4)))
 
         // ---------------------------------------------------------------- choices
-        addView(Ui.section(c, "Enhancement"))
+        choicesLabel = Ui.section(c, "Enhancement")
+        addView(choicesLabel)
         addView(modeRow.first)
         customBox.setText(store.custom)
         addView(customBox, Ui.lp(top = Ui.dp(c, 8)))
@@ -172,14 +206,38 @@ class EnhancePanel(
         addView(Ui.section(c, "Send through"))
         addView(routeRow.first)
 
-        drawModes(); drawAis(); drawRoutes(); drawLangs(); drawResult(); updateCount()
+        drawSeg(); drawModes(); drawAis(); drawRoutes(); drawLangs(); drawResult(); updateCount()
+    }
+
+    private fun drawSeg() {
+        val c = act
+        segRow.removeAllViews()
+        for ((ask, label) in listOf(false to "✦ Enhance text", true to "💬 Ask AI")) {
+            val on = askMode == ask
+            segRow.addView(Ui.text(c, label, 14f, if (on) Color.WHITE else Ui.MUTED, true).apply {
+                gravity = Gravity.CENTER; includeFontPadding = false
+                if (on) background = Ui.round(Ui.ACCENT, Ui.dp(c, 10).toFloat())
+                setOnClickListener { setAskMode(ask) }
+            }, LayoutParams(0, Ui.dp(c, 32), 1f).apply { marginEnd = if (!ask) Ui.dp(c, 3) else 0 })
+        }
+    }
+
+    fun setAskMode(ask: Boolean) {
+        if (askMode == ask) return
+        askMode = ask
+        tabs.clear()
+        origLabel.text = if (ask) "YOUR QUESTION" else "ORIGINAL"
+        input.hint = if (ask) "Type or speak your question…" else "Paste, type or share text here…"
+        goBtn.text = if (ask) "💬 Ask" else "✦ Enhance"
+        choicesLabel.text = if (ask) "ANSWER STYLE" else "ENHANCEMENT"
+        drawSeg(); drawModes(); drawResult(); updateCount()
     }
 
     /** [auto] = text arrived by Paste, Share, text menu, bubble, tile or voice: enhance it straight away. */
     fun setText(s: String, auto: Boolean = false) {
         input.setText(s); input.setSelection(input.text.length)
         tabs.clear(); drawResult()
-        if (auto) post { autoEnhance() }
+        if (auto && !askMode) post { autoEnhance() }
     }
 
     /** Auto-enhance always uses Fix grammar; other modes run when their chip is tapped. */
@@ -213,7 +271,7 @@ class EnhancePanel(
         val s = input.text.toString()
         val w = words(s)
         countText.text = if (s.isEmpty()) "" else "$w words · ${s.length} characters"
-        if (w > WARN_WORDS) {
+        if (w > WARN_WORDS && !askMode) {
             val n = split(s, PART_WORDS).size
             warnText.visibility = View.VISIBLE
             warnText.text = "Long text: the API will enhance it in $n parts and join them back together. " +
@@ -225,6 +283,17 @@ class EnhancePanel(
 
     private fun drawModes() {
         val row = modeRow.second; row.removeAllViews()
+        if (askMode) {
+            for (m in Modes.askStyles) {
+                row.addView(Ui.chip(act, m.label, store.askStyle == m.id) {
+                    store.askStyle = m.id; drawModes()
+                    if (input.text.isNotBlank() && tabs.isNotEmpty()) go(auto = true)
+                }, Ui.lp(LayoutParams.WRAP_CONTENT, end = Ui.dp(act, 8)))
+            }
+            customBox.visibility = View.GONE
+            enhancedLabel.text = "AI ANSWER · " + Modes.askById(store.askStyle).label.uppercase()
+            return
+        }
         for (m in Modes.all) {
             row.addView(Ui.chip(act, m.label, store.mode == m.id) {
                 store.mode = m.id; drawModes()
@@ -288,8 +357,50 @@ class EnhancePanel(
         langSwitch.addView(pill)
     }
 
-    /** Speak: Android's speech recognition turns it into text, then it is enhanced straight away. */
+    /** Speak: the app's own listening, words appear live, Stop finishes (then enhance / ask straight away). */
     private fun listen() {
+        voice?.let { if (it.active) { it.stop(); return } }
+        if (!VoiceInput.available(act)) { listenWithGoogle(); return }
+        if (act.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            pendingListen = true
+            act.requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), MIC_REQ)
+            return
+        }
+        val before = input.text.toString().trim()
+        val lang = langName(store.voiceLang).substringBefore("  (").substringBefore(" (")
+        voice = VoiceInput(act, langTag(store.voiceLang),
+            onText = { t -> input.setText(listOf(before, t).filter { it.isNotBlank() }.joinToString(" ")); input.setSelection(input.text.length) },
+            onState = { st ->
+                if (st == null) listenBar.visibility = View.GONE
+                else {
+                    listenBar.visibility = View.VISIBLE
+                    listenText.text = android.text.Html.fromHtml("<b>$st</b> <font color='#9AA3B5'>$lang · pauses are fine</font>", 0)
+                }
+            },
+            onDone = { heard ->
+                if (heard.isBlank()) return@VoiceInput
+                val full = listOf(before, heard).filter { it.isNotBlank() }.joinToString(" ")
+                input.setText(full); input.setSelection(input.text.length)
+                tabs.clear(); drawResult()
+                if (askMode) go(auto = true) else autoEnhance()
+            })
+        tabs.clear(); drawResult()
+        voice?.start()
+    }
+
+    private var pendingListen = false
+
+    /** Called by the screen after the microphone permission answer. */
+    fun onMicPermission(granted: Boolean) {
+        if (!pendingListen) return
+        pendingListen = false
+        if (granted) listen() else Ui.toast(act, "Microphone permission is needed for voice input")
+    }
+
+    fun stopVoice() { voice?.cancel() }
+
+    /** Fallback when the phone has no speech service for apps: Google's own pop-up. */
+    private fun listenWithGoogle() {
         val tag = langTag(store.voiceLang)
         val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
@@ -305,7 +416,8 @@ class EnhancePanel(
     fun onVoice(data: Intent?) {
         val said = data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
         if (said.isNullOrBlank()) return
-        setText(said, auto = true)
+        setText(said, auto = !askMode)
+        if (askMode) go(auto = true)
     }
 
     private fun drawRoutes() {
@@ -326,7 +438,7 @@ class EnhancePanel(
         if (tabs.isEmpty()) {
             tabsRow.first.visibility = View.GONE
             noteText.visibility = View.GONE
-            body.setTextColor(Ui.MUTED); body.text = "Your enhanced text will appear here."
+            body.setTextColor(Ui.MUTED); body.text = if (askMode) "The AI's answer will appear here." else "Your enhanced text will appear here."
             savedText.text = ""
             return
         }
@@ -379,7 +491,7 @@ class EnhancePanel(
         val text = input.text.toString().trim()
         if (text.isEmpty()) { Ui.toast(act, "Add some text first"); return }
         store.custom = customBox.text.toString()
-        val mode = Modes.byId(store.mode)
+        val mode = if (askMode) Modes.askById(store.askStyle) else Modes.byId(store.mode)
         val targets = if (store.target == "all") Providers.all else listOfNotNull(Providers.byId(store.target))
         val route = store.route
         tabs.clear(); selected = 0
@@ -405,9 +517,11 @@ class EnhancePanel(
 
     private fun sendAccount(t: Tab) {
         val original = input.text.toString().trim()
-        val msg = Modes.accountMessage(store, Modes.byId(store.mode), original)
+        val msg = if (askMode) Modes.askAccountMessage(store, Modes.askById(store.askStyle), original)
+            else Modes.accountMessage(store, Modes.byId(store.mode), original)
         if (!t.sent) {
-            val id = db.newConv(t.p.id, store.mode, original, "account")
+            val id = if (askMode) db.newConv(t.p.id, store.askStyle, original, "account", Db.ASK)
+                else db.newConv(t.p.id, store.mode, original, "account")
             db.addMsg(id, "user", msg)
             t.convId = id; t.sent = true
         }
@@ -426,7 +540,11 @@ class EnhancePanel(
     private fun runApi(t: Tab, mode: Mode, original: String) {
         val p = t.p
         val key = store.key(p); val model = store.model(p); val custom = store.custom
-        val parts = if (words(original) > WARN_WORDS) split(original, PART_WORDS) else listOf(original)
+        val ask = askMode
+        val parts = if (!ask && words(original) > WARN_WORDS) split(original, PART_WORDS) else listOf(original)
+        val sys = if (ask) Modes.askSystem(store) else Modes.system(store)
+        fun msgFor(textPart: String) = if (ask) Modes.askMessage(mode, textPart) else Modes.firstMessage(mode, custom, textPart)
+        val deeper = ask && mode.id == "deeper"
         val autoAccount = store.route == "api"   // with "Both" the account copy is already sent
         Thread {
             val outs = mutableListOf<String>()
@@ -437,12 +555,31 @@ class EnhancePanel(
                 val prefix = if (parts.size > 1) "Part ${i + 1}/${parts.size}: " else ""
                 if (parts.size > 1) update { t.status = "${prefix}working…" }
                 try {
-                    val a = Providers.chatSmart(p, key, model, Modes.system(store),
-                        listOf(Msg("user", Modes.firstMessage(mode, custom, part)))) { msg ->
-                        update { t.status = prefix + msg }
+                    // "Think deeper": try the stronger model first; if the plan doesn't allow it, use the default.
+                    var strongAnswer: String? = null
+                    if (deeper) {
+                        val strong = strongModelFor(p, key)
+                        if (strong != null && strong != model) {
+                            update { t.status = "Thinking deeper with $strong…" }
+                            strongAnswer = try {
+                                Providers.chat(p, key, strong, sys, listOf(Msg("user", msgFor(part)))).takeIf { it.isNotBlank() }
+                            } catch (e: AiException) {
+                                // Not in the plan (or gone): stop trying it; use the default model.
+                                if (e.code in setOf(402, 403, 404) || (e.code == 429 &&
+                                        Regex("quota|billing|plan", RegexOption.IGNORE_CASE).containsMatchIn(e.message ?: ""))) store.setStrongModel(p, "-")
+                                null
+                            } catch (_: Exception) { null }
+                            if (strongAnswer != null) backup = "★$strong"
+                        }
                     }
-                    outs += a.text
-                    if (a.switched) backup = a.model
+                    if (strongAnswer != null) outs += strongAnswer
+                    else {
+                        val a = Providers.chatSmart(p, key, model, sys, listOf(Msg("user", msgFor(part)))) { msg ->
+                            update { t.status = prefix + msg }
+                        }
+                        outs += a.text
+                        if (a.switched) backup = a.model
+                    }
                 } catch (e: Exception) {
                     error = prefix + (e.message ?: e.toString())
                     lastCode = (e as? AiException)?.code ?: 0
@@ -452,15 +589,18 @@ class EnhancePanel(
             val err = error
             if (err == null) {
                 val joined = outs.joinToString("\n\n")
-                val id = db.newConv(p.id, mode.id, original, "api")
-                db.addMsg(id, "user", Modes.firstMessage(mode, custom, original))
+                val id = db.newConv(p.id, mode.id, original, "api", if (ask) Db.ASK else Db.PROJECT)
+                db.addMsg(id, "user", msgFor(original))
                 db.addMsg(id, "assistant", joined)
                 val notes = mutableListOf<String>()
                 if (parts.size > 1) notes += "enhanced in ${parts.size} parts"
-                backup?.let { notes += "answered by backup model $it (usual one was busy)" }
+                backup?.let {
+                    notes += if (it.startsWith("★")) "answered by ${it.drop(1)} (stronger model)"
+                    else "answered by backup model $it (usual one was busy)"
+                }
                 update { t.text = joined; t.convId = id; t.note = notes.joinToString(" · ") }
             } else {
-                ErrorLog.add(act, "Enhance", p.label, store.model(p), lastCode, err, original)
+                ErrorLog.add(act, if (ask) "Ask AI" else "Enhance", p.label, store.model(p), lastCode, err, original)
                 update { t.error = true; t.status = err }
                 // API failed completely: send it to the signed-in account instead (uses the Pro plan).
                 if (autoAccount) act.runOnUiThread {
@@ -472,6 +612,16 @@ class EnhancePanel(
                 }
             }
         }.start()
+    }
+
+    /** Finds (once) and remembers the stronger model for "Think deeper". */
+    private fun strongModelFor(p: Provider, key: String): String? {
+        val saved = store.strongModel(p)
+        if (saved == "-") return null
+        if (saved.isNotBlank()) return saved
+        val m = runCatching { Providers.pickStrong(p, Providers.listModels(p, key)) }.getOrNull()
+        store.setStrongModel(p, m ?: "-")
+        return m
     }
 
     private fun update(f: () -> Unit) {

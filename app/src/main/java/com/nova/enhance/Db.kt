@@ -18,6 +18,7 @@ class Db private constructor(c: Context) : SQLiteOpenHelper(c, "nova_enhance.db"
 
     companion object {
         const val PROJECT = "Enhancement"
+        const val ASK = "Ask AI"
         @Volatile private var inst: Db? = null
         fun get(c: Context): Db = inst ?: synchronized(this) {
             inst ?: Db(c.applicationContext).also { inst = it }
@@ -37,10 +38,10 @@ class Db private constructor(c: Context) : SQLiteOpenHelper(c, "nova_enhance.db"
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {}
 
-    fun newConv(provider: String, mode: String, title: String, route: String): Long {
+    fun newConv(provider: String, mode: String, title: String, route: String, project: String = PROJECT): Long {
         val now = System.currentTimeMillis()
         return writableDatabase.insert("conversations", null, ContentValues().apply {
-            put("project", PROJECT); put("provider", provider); put("mode", mode)
+            put("project", project); put("provider", provider); put("mode", mode)
             put("title", title.replace('\n', ' ').take(80)); put("route", route)
             put("created", now); put("updated", now)
         })
@@ -63,8 +64,9 @@ class Db private constructor(c: Context) : SQLiteOpenHelper(c, "nova_enhance.db"
 
     fun conv(id: Long): Conv? = convs("WHERE id=?", arrayOf(id.toString())).firstOrNull()
 
-    fun list(provider: String?, search: String): List<Conv> {
-        val where = mutableListOf("project=?"); val args = mutableListOf(PROJECT)
+    fun list(provider: String?, search: String, project: String? = PROJECT): List<Conv> {
+        val where = mutableListOf("1=1"); val args = mutableListOf<String>()
+        if (project != null) { where += "project=?"; args += project }
         if (provider != null) { where += "provider=?"; args += provider }
         if (search.isNotBlank()) {
             where += "(title LIKE ? OR id IN (SELECT conv FROM messages WHERE content LIKE ?))"
@@ -92,12 +94,12 @@ class Db private constructor(c: Context) : SQLiteOpenHelper(c, "nova_enhance.db"
     /** Every conversation with its messages, for the backup file. */
     fun exportJson(): org.json.JSONArray {
         val arr = org.json.JSONArray()
-        for (c in list(null, "").reversed()) {
+        for (c in list(null, "", null).reversed()) {
             val msgs = org.json.JSONArray()
             readableDatabase.rawQuery("SELECT role, content, ts FROM messages WHERE conv=? ORDER BY id", arrayOf(c.id.toString()))
                 .use { q -> while (q.moveToNext()) msgs.put(org.json.JSONObject()
                     .put("role", q.getString(0)).put("content", q.getString(1)).put("ts", q.getLong(2))) }
-            arr.put(org.json.JSONObject().put("provider", c.provider).put("mode", c.mode).put("title", c.title)
+            arr.put(org.json.JSONObject().put("project", c.project).put("provider", c.provider).put("mode", c.mode).put("title", c.title)
                 .put("route", c.route).put("created", c.created).put("updated", c.updated).put("messages", msgs))
         }
         return arr
@@ -115,7 +117,7 @@ class Db private constructor(c: Context) : SQLiteOpenHelper(c, "nova_enhance.db"
                     arrayOf(o.optString("provider"), o.optLong("created").toString(), o.optString("title"))).use { it.moveToFirst() }
                 if (exists) continue
                 val id = db.insert("conversations", null, ContentValues().apply {
-                    put("project", PROJECT); put("provider", o.optString("provider")); put("mode", o.optString("mode"))
+                    put("project", o.optString("project", PROJECT)); put("provider", o.optString("provider")); put("mode", o.optString("mode"))
                     put("title", o.optString("title")); put("route", o.optString("route", "api"))
                     put("created", o.optLong("created")); put("updated", o.optLong("updated"))
                 })
@@ -137,13 +139,14 @@ class Db private constructor(c: Context) : SQLiteOpenHelper(c, "nova_enhance.db"
     /** Whole project as Markdown, for export/backup. */
     fun exportMarkdown(): String {
         val fmt = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US)
-        val sb = StringBuilder("# Nova Enhance — project \"$PROJECT\"\n\nExported ${fmt.format(java.util.Date())}\n")
-        for (p in Providers.all) {
-            val cs = list(p.id, "")
+        val sb = StringBuilder("# Nova Enhance — conversations\n\nExported ${fmt.format(java.util.Date())}\n")
+        for (proj in listOf(PROJECT, ASK)) for (p in Providers.all) {
+            val cs = list(p.id, "", proj)
             if (cs.isEmpty()) continue
-            sb.append("\n\n## ${p.label} / $PROJECT\n")
+            sb.append("\n\n## ${p.label} / $proj\n")
             for (c in cs.reversed()) {
-                sb.append("\n### ${c.title}\n_${fmt.format(java.util.Date(c.created))} · ${Modes.byId(c.mode).label}" +
+                val modeLabel = if (proj == ASK) Modes.askById(c.mode).label else Modes.byId(c.mode).label
+                sb.append("\n### ${c.title}\n_${fmt.format(java.util.Date(c.created))} · $modeLabel" +
                     (if (c.route == "account") " · sent to my ${p.label} account" else "") + "_\n\n")
                 for (m in messages(c.id)) {
                     sb.append(if (m.role == "user") "**Me:**\n\n" else "**${p.label}:**\n\n")

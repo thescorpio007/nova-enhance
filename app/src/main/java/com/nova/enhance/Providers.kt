@@ -186,6 +186,25 @@ object Providers {
         return ids.sorted()
     }
 
+    private val strongPrefer = mapOf(
+        "gemini" to listOf("^gemini-[0-9.]+-pro$"),
+        "chatgpt" to listOf("^gpt-5(\\.\\d+)?$", "^o\\d+$", "^gpt-4\\.1$", "^gpt-4o$"),
+        "claude" to listOf("^claude-opus-", "^claude-sonnet-"),
+        "deepseek" to listOf("^deepseek-reasoner$"),
+        "grok" to listOf("^grok-[0-9.]+$")
+    )
+
+    /** A stronger reasoning model for "Think deeper", or null. */
+    fun pickStrong(p: Provider, ids: List<String>): String? {
+        val skip = Regex(p.skip.replace("|thinking|reasoner", ""), RegexOption.IGNORE_CASE)
+        val usable = ids.filter { !skip.containsMatchIn(it) && !Regex("preview|exp|-\\d{4}-\\d{2}-\\d{2}$").containsMatchIn(it) }
+        for (pat in strongPrefer[p.id] ?: emptyList()) {
+            val hit = usable.filter { Regex(pat).containsMatchIn(it) }.sortedDescending().firstOrNull()
+            if (hit != null) return hit
+        }
+        return null
+    }
+
     /** Choose the best everyday model from what the account offers. */
     fun pickModel(p: Provider, ids: List<String>): String {
         val skip = Regex(p.skip, RegexOption.IGNORE_CASE)

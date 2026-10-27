@@ -92,4 +92,12 @@ class CaptureActivity : BaseActivity() {
         if (requestCode == EnhancePanel.VOICE_REQ && resultCode == RESULT_OK) panel.onVoice(data)
         if (requestCode == Profile.VOICE_REQ && resultCode == RESULT_OK) Profile.onVoice(data)
     }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == EnhancePanel.MIC_REQ)
+            panel.onMicPermission(grantResults.isNotEmpty() && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED)
+    }
+
+    override fun onPause() { super.onPause(); panel.stopVoice() }
 }
