@@ -125,6 +125,7 @@ class EnhancePanel(
     private val listenBar = Ui.row(act)
     private val listenText = Ui.text(act, "", 13f, Ui.TEXT)
     private var voice: VoiceInput? = null
+    private var aiVoice: AiVoice? = null
 
     init {
         orientation = VERTICAL
@@ -173,7 +174,7 @@ class EnhancePanel(
             gravity = Gravity.CENTER; includeFontPadding = false
             setPadding(Ui.dp(c, 12), 0, Ui.dp(c, 12), 0)
             background = Ui.round(Ui.BAD, Ui.dp(c, 14).toFloat())
-            setOnClickListener { voice?.stop() }
+            setOnClickListener { aiVoice?.stop(); voice?.stop() }
         }, LayoutParams(LayoutParams.WRAP_CONTENT, Ui.dp(c, 28)))
         listenBar.visibility = View.GONE
         addView(listenBar, Ui.lp(top = Ui.dp(c, 6)))
@@ -401,30 +402,61 @@ class EnhancePanel(
     /** Speak: the app's own listening, words appear live, Stop finishes (then enhance / ask straight away). */
     private fun listen() {
         voice?.let { if (it.active) { it.stop(); return } }
-        if (!VoiceInput.available(act)) { listenWithGoogle(); return }
+        aiVoice?.let { if (it.active) { it.stop(); return } }
         if (act.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             pendingListen = true
             act.requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), MIC_REQ)
             return
         }
+        // Main engine: AI (Gemini) recognition. Fallback: Android's recognition.
+        if (store.hasKey(AiVoice.gemini())) listenAi() else listenAndroid()
+    }
+
+    private fun showListen(st: String?, sub: String) {
+        if (st == null) { listenBar.visibility = View.GONE; return }
+        listenBar.visibility = View.VISIBLE
+        listenText.text = android.text.Html.fromHtml("<b>$st</b> <font color='#9AA3B5'>$sub</font>", 0)
+    }
+
+    private fun voiceResult(before: String, heard: String) {
+        if (heard.isBlank()) return
+        val full = listOf(before, heard).filter { it.isNotBlank() }.joinToString(if (before.endsWith("\n")) "" else " ")
+        input.setText(full); input.setSelection(input.text.length)
+        tabs.clear(); drawResult()
+        if (askMode) go(auto = true) else autoEnhance()
+    }
+
+    /** Records until Stop, then Gemini writes it out (any language, your technical terms). */
+    private fun listenAi() {
+        val before = input.text.toString().trim()
+        var av: AiVoice? = null
+        av = AiVoice(act,
+            onState = { st -> showListen(st, if (st?.startsWith("🔴") == true) "AI (Gemini) · any language · pauses are fine" else "") },
+            onDone = { t -> voiceResult(before, t) },
+            onFail = { msg, file ->
+                val b = AlertDialog.Builder(act).setTitle("Voice recognition").setMessage(msg)
+                if (file != null) b.setPositiveButton("Retry") { _, _ ->
+                    showListen("✍ Writing it out with Gemini…", "")
+                    Thread { av?.recognize(file) }.start()
+                }
+                b.setNeutralButton("Use Android voice") { _, _ -> file?.delete(); listenAndroid() }
+                b.setNegativeButton("Cancel") { _, _ -> file?.delete() }
+                b.show()
+            })
+        aiVoice = av
+        tabs.clear(); drawResult()
+        if (!av.start()) { Ui.toast(act, "The microphone couldn't be opened — using Android voice"); listenAndroid() }
+    }
+
+    private fun listenAndroid() {
+        if (!VoiceInput.available(act)) { listenWithGoogle(); return }
         val before = input.text.toString().trim()
         val lang = langName(store.voiceLang).substringBefore("  (").substringBefore(" (")
         voice = VoiceInput(act, langTag(store.voiceLang),
             onText = { t -> input.setText(listOf(before, t).filter { it.isNotBlank() }.joinToString(" ")); input.setSelection(input.text.length) },
-            onState = { st ->
-                if (st == null) listenBar.visibility = View.GONE
-                else {
-                    listenBar.visibility = View.VISIBLE
-                    listenText.text = android.text.Html.fromHtml("<b>$st</b> <font color='#9AA3B5'>$lang · pauses are fine</font>", 0)
-                }
-            },
-            onDone = { heard ->
-                if (heard.isBlank()) return@VoiceInput
-                val full = listOf(before, heard).filter { it.isNotBlank() }.joinToString(" ")
-                input.setText(full); input.setSelection(input.text.length)
-                tabs.clear(); drawResult()
-                if (askMode) go(auto = true) else autoEnhance()
-            })
+            onState = { st -> showListen(st, "Android · $lang · pauses are fine") },
+            onDone = { heard -> voiceResult(before, heard) },
+            onFatal = { listenWithGoogle() })
         tabs.clear(); drawResult()
         voice?.start()
     }
@@ -438,7 +470,7 @@ class EnhancePanel(
         if (granted) listen() else Ui.toast(act, "Microphone permission is needed for voice input")
     }
 
-    fun stopVoice() { voice?.cancel() }
+    fun stopVoice() { voice?.cancel(); aiVoice?.cancel() }
 
     /** Fallback when the phone has no speech service for apps: Google's own pop-up. */
     private fun listenWithGoogle() {

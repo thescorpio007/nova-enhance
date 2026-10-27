@@ -22,7 +22,8 @@ class VoiceInput(
     private val langTag: String,
     private val onText: (String) -> Unit,
     private val onState: (String?) -> Unit,
-    private val onDone: (String) -> Unit
+    private val onDone: (String) -> Unit,
+    private val onFatal: (() -> Unit)? = null
 ) {
     private val main = Handler(Looper.getMainLooper())
     private var rec: SpeechRecognizer? = null
@@ -106,7 +107,11 @@ class VoiceInput(
                     SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> fail("Microphone permission is off for Nova Enhance")
                     SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> fail("No connection for voice typing — check internet")
                     SpeechRecognizer.ERROR_AUDIO -> fail("The microphone couldn't be opened — another app may be using it")
-                    else -> fail("Voice typing error $error")
+                    else -> {   // e.g. 11 = speech service disconnected: use Google's own pop-up instead
+                        ErrorLog.add(c, "Voice", message = "Android speech error $error — switched to Google pop-up")
+                        active = false; release(); onState(null)
+                        if (onFatal != null) onFatal.invoke() else fail("Voice typing error $error")
+                    }
                 }
             }
         })

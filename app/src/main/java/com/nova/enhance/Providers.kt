@@ -158,6 +158,21 @@ object Providers {
         return out.take(3)
     }
 
+    /** Direct Gemini call with a ready request body (used for voice recognition). */
+    fun rawGemini(key: String, model: String, body: JSONObject): String {
+        val g = byId("gemini")!!
+        val r = post("${g.baseUrl}/models/$model:generateContent", body, mapOf("x-goog-api-key" to key))
+        val cands = r.optJSONArray("candidates") ?: return ""
+        if (cands.length() == 0) return ""
+        val parts = cands.getJSONObject(0).optJSONObject("content")?.optJSONArray("parts") ?: return ""
+        return buildString {
+            for (i in 0 until parts.length()) {
+                val o = parts.getJSONObject(i)
+                if (!o.optBoolean("thought")) append(o.optString("text"))
+            }
+        }
+    }
+
     // ---------------------------------------------------------------- models
 
     fun listModels(p: Provider, key: String): List<String> {
