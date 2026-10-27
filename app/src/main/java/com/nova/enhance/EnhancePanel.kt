@@ -132,6 +132,9 @@ class EnhancePanel(
     private var undoText: String? = null
     private var voice: VoiceInput? = null
     private var aiVoice: AiVoice? = null
+    private var phrase: PhraseVoice? = null
+    /** Each voice session has a number, so a late result from an old session is ignored. */
+    private var voiceSession = 0
 
     init {
         orientation = VERTICAL
@@ -180,14 +183,18 @@ class EnhancePanel(
             gravity = Gravity.CENTER; includeFontPadding = false
             setPadding(Ui.dp(c, 11), 0, Ui.dp(c, 11), 0)
             background = Ui.round(0xFF4B5263.toInt(), Ui.dp(c, 14).toFloat())
-            setOnClickListener { voice?.let { if (it.paused) it.resume() else it.pause() } }
+            setOnClickListener {
+                phrase?.takeIf { it.active }?.let { if (it.paused) it.resume() else it.pause() }
+                voice?.takeIf { it.active }?.let { if (it.paused) it.resume() else it.pause() }
+                tick.run()
+            }
         }
         listenBar.addView(pauseBtn, LayoutParams(LayoutParams.WRAP_CONTENT, Ui.dp(c, 28)).apply { marginEnd = Ui.dp(c, 6) })
         listenBar.addView(Ui.text(c, "■ Stop", 13f, Color.WHITE, true).apply {
             gravity = Gravity.CENTER; includeFontPadding = false
             setPadding(Ui.dp(c, 12), 0, Ui.dp(c, 12), 0)
             background = Ui.round(Ui.BAD, Ui.dp(c, 14).toFloat())
-            setOnClickListener { aiVoice?.stop(); voice?.stop() }
+            setOnClickListener { phrase?.stop(); aiVoice?.stop(); voice?.stop() }
         }, LayoutParams(LayoutParams.WRAP_CONTENT, Ui.dp(c, 28)))
         listenBar.visibility = View.GONE
         addView(listenBar, Ui.lp(top = Ui.dp(c, 6)))
@@ -423,13 +430,45 @@ class EnhancePanel(
     private fun listen() {
         voice?.let { if (it.active) { it.stop(); return } }
         aiVoice?.let { if (it.active) { it.stop(); return } }
+        phrase?.let { if (it.active) { it.stop(); return } }
         if (act.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             pendingListen = true
             act.requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), MIC_REQ)
             return
         }
-        // Main engine: Android live text (then Gemini cleans it). Backup: AI recording.
-        if (VoiceInput.available(act)) listenAndroid() else if (store.hasKey(AiVoice.gemini())) listenAi() else listenWithGoogle()
+        // Main engine: AI live by phrase (Gemini). Without a Gemini key: Android live, then Google's pop-up.
+        voiceSession++
+        if (store.hasKey(AiVoice.gemini())) listenPhrase()
+        else if (VoiceInput.available(act)) listenAndroid() else listenWithGoogle()
+    }
+
+    /** Records continuously; each phrase is written out by Gemini and appears in Original while you talk. */
+    private fun listenPhrase() {
+        markInsertPoint()
+        tabs.clear(); drawResult(); cleanRow.visibility = View.GONE
+        pauseBtn.visibility = View.VISIBLE
+        val session = voiceSession
+        val pv = PhraseVoice(act,
+            onText = { t, waiting -> if (session == voiceSession) showLive(t, if (waiting > 0) "…" else "") },
+            onState = { st ->
+                if (session == voiceSession) {
+                    listenText.tag = st
+                    pauseBtn.visibility = if (st == "finishing") View.GONE else View.VISIBLE
+                    if (st == null) { tickH.removeCallbacks(tick); showListen(null, "") } else tick.run()
+                }
+            },
+            onDone = { all ->
+                if (session != voiceSession) return@PhraseVoice
+                showLive(all, "")
+                if (all.isBlank()) { Ui.toast(act, "Nothing was heard — check the microphone or Bluetooth headset"); return@PhraseVoice }
+                cleanText.text = "✓ Written by Gemini · not enhanced yet"; undoText = null
+                cleanRow.visibility = View.VISIBLE
+            })
+        phrase = pv
+        if (!pv.start()) {
+            Ui.toast(act, "The microphone couldn't be opened — another app may be using it")
+            if (VoiceInput.available(act)) listenAndroid()
+        }
     }
 
     /** Where spoken text goes: at the cursor (or the end). */
@@ -471,14 +510,21 @@ class EnhancePanel(
     private val tickH = android.os.Handler(android.os.Looper.getMainLooper())
     private val tick = object : Runnable {
         override fun run() {
-            val v = voice ?: return
-            if (!v.active) return
-            val t = "${v.seconds / 60}:${String.format("%02d", v.seconds % 60)}"
+            tickH.removeCallbacks(this)
+            val pv = phrase?.takeIf { it.active }
+            val v = voice?.takeIf { it.active }
+            val secs = pv?.seconds ?: v?.seconds ?: return
+            val isPaused = pv?.paused ?: v?.paused ?: false
+            val t = "${secs / 60}:${String.format("%02d", secs % 60)}"
             val lang = langName(store.voiceLang).substringBefore("  (")
-            if (v.paused) showListen("⏸ Paused $t", "Tap Resume to continue", true)
-            else showListen("● Listening $t", "Android · $lang · live")
-            pauseBtn.text = if (v.paused) "▶ Resume" else "⏸ Pause"
-            pauseBtn.background = Ui.round(if (v.paused) Ui.GOOD else 0xFF4B5263.toInt(), Ui.dp(act, 14).toFloat())
+            when {
+                pv != null && !pv.paused && listenText.tag == "finishing" -> showListen("✍ Finishing the last phrase…", "")
+                isPaused -> showListen("⏸ Paused $t", "Tap Resume to continue", true)
+                pv != null -> showListen("● Listening $t", "AI (Gemini) · any language · text appears after each phrase")
+                else -> showListen("● Listening $t", "Android · $lang · live")
+            }
+            pauseBtn.text = if (isPaused) "▶ Resume" else "⏸ Pause"
+            pauseBtn.background = Ui.round(if (isPaused) Ui.GOOD else 0xFF4B5263.toInt(), Ui.dp(act, 14).toFloat())
             tickH.postDelayed(this, 500)
         }
     }
@@ -512,9 +558,11 @@ class EnhancePanel(
         showListen("✍ Cleaning up with Gemini…", "fixing misheard words and punctuation")
         pauseBtn.visibility = View.GONE
         val before = insBefore; val after = insAfter
+        val session = voiceSession
         Thread {
             val r = runCatching { AiVoice.cleanup(act, heard) }
             act.runOnUiThread {
+                if (session != voiceSession) return@runOnUiThread   // a newer recording has started
                 showListen(null, ""); pauseBtn.visibility = View.VISIBLE
                 r.onSuccess { clean ->
                     if (clean.isBlank()) return@onSuccess
@@ -575,7 +623,7 @@ class EnhancePanel(
         if (granted) listen() else Ui.toast(act, "Microphone permission is needed for voice input")
     }
 
-    fun stopVoice() { voice?.cancel(); aiVoice?.cancel() }
+    fun stopVoice() { voice?.cancel(); aiVoice?.cancel(); phrase?.cancel() }
 
     /** Fallback when the phone has no speech service for apps: Google's own pop-up. */
     private fun listenWithGoogle() {
