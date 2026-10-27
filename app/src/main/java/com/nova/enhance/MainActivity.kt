@@ -53,7 +53,7 @@ class MainActivity : BaseActivity() {
     override fun onResume() {
         super.onResume()
         val s = Store(this)
-        val ready = Providers.all.any { s.hasKey(it) || s.webProject(it).isNotBlank() }
+        val ready = Providers.all.any { s.hasKey(it) || AccountSend.installed(this, it) }
         setupCard.visibility = if (ready) android.view.View.GONE else android.view.View.VISIBLE
         panel.refresh()
     }

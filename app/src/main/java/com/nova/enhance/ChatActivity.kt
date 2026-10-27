@@ -40,7 +40,7 @@ class ChatActivity : BaseActivity() {
         head.addView(t, Ui.lp(0, weight = 1f))
         head.addView(Ui.button(c, "My ${p.label}") {
             val last = db.messages(conv.id).lastOrNull { it.role == "user" }?.content ?: ""
-            WebAccountActivity.send(c, p, last)
+            Ui.toast(c, AccountSend.send(c, p, last))
         }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT))
         root.addView(head)
 
@@ -78,7 +78,11 @@ class ChatActivity : BaseActivity() {
                 runOnUiThread {
                     list.removeView(spin); send.isEnabled = true
                     r.onSuccess { bubble(Msg("assistant", it)) }
-                        .onFailure { bubble(Msg("error", it.message ?: it.toString())) }
+                        .onFailure {
+                            ErrorLog.add(c, "Continue chat", p.label, store.model(p), (it as? AiException)?.code ?: 0,
+                                it.message ?: it.toString(), q)
+                            bubble(Msg("error", it.message ?: it.toString()))
+                        }
                 }
             }.start()
         }

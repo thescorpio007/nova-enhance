@@ -89,6 +89,51 @@ class Db private constructor(c: Context) : SQLiteOpenHelper(c, "nova_enhance.db"
         writableDatabase.delete("conversations", "id=?", arrayOf(id.toString()))
     }
 
+    /** Every conversation with its messages, for the backup file. */
+    fun exportJson(): org.json.JSONArray {
+        val arr = org.json.JSONArray()
+        for (c in list(null, "").reversed()) {
+            val msgs = org.json.JSONArray()
+            readableDatabase.rawQuery("SELECT role, content, ts FROM messages WHERE conv=? ORDER BY id", arrayOf(c.id.toString()))
+                .use { q -> while (q.moveToNext()) msgs.put(org.json.JSONObject()
+                    .put("role", q.getString(0)).put("content", q.getString(1)).put("ts", q.getLong(2))) }
+            arr.put(org.json.JSONObject().put("provider", c.provider).put("mode", c.mode).put("title", c.title)
+                .put("route", c.route).put("created", c.created).put("updated", c.updated).put("messages", msgs))
+        }
+        return arr
+    }
+
+    /** Adds conversations from a backup; ones already on the phone are skipped. Returns how many were added. */
+    fun importJson(arr: org.json.JSONArray): Int {
+        var added = 0
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                val exists = db.rawQuery("SELECT 1 FROM conversations WHERE provider=? AND created=? AND title=?",
+                    arrayOf(o.optString("provider"), o.optLong("created").toString(), o.optString("title"))).use { it.moveToFirst() }
+                if (exists) continue
+                val id = db.insert("conversations", null, ContentValues().apply {
+                    put("project", PROJECT); put("provider", o.optString("provider")); put("mode", o.optString("mode"))
+                    put("title", o.optString("title")); put("route", o.optString("route", "api"))
+                    put("created", o.optLong("created")); put("updated", o.optLong("updated"))
+                })
+                val msgs = o.optJSONArray("messages") ?: org.json.JSONArray()
+                for (j in 0 until msgs.length()) {
+                    val m = msgs.getJSONObject(j)
+                    db.insert("messages", null, ContentValues().apply {
+                        put("conv", id); put("role", m.optString("role")); put("content", m.optString("content"))
+                        put("ts", m.optLong("ts"))
+                    })
+                }
+                added++
+            }
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+        return added
+    }
+
     /** Whole project as Markdown, for export/backup. */
     fun exportMarkdown(): String {
         val fmt = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US)

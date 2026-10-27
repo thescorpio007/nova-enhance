@@ -13,16 +13,13 @@ class Store(c: Context) {
     fun model(p: Provider): String = sp.getString("model_${p.id}", "")!!.ifBlank { p.defaultModel }
     fun setModel(p: Provider, v: String) = sp.edit().putString("model_${p.id}", v.trim()).apply()
 
-    /** Address of the "Enhancement" project page inside the user's signed-in AI account. */
-    fun webProject(p: Provider): String = sp.getString("web_${p.id}", "")!!
-    fun setWebProject(p: Provider, v: String) = sp.edit().putString("web_${p.id}", v).apply()
 
     fun hasKey(p: Provider) = key(p).isNotBlank()
     fun keyed(): List<Provider> = Providers.all.filter { hasKey(it) }
 
     /** Selected AI on the enhance screen: a provider id, or "all". */
     var target: String
-        get() = sp.getString("target", "chatgpt")!!
+        get() = sp.getString("target", "gemini")!!
         set(v) = sp.edit().putString("target", v).apply()
 
     var mode: String

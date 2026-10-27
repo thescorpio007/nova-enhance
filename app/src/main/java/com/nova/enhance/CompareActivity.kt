@@ -107,21 +107,37 @@ class CompareActivity : BaseActivity() {
                 }
                 return@Thread
             }
+            // Build the list first, then test strictly one model at a time (fixes "waiting…" with nothing tested).
+            val rs = models.map { Res(it) }
             runOnUiThread {
-                status.text = "Testing ${models.size} main models…"
-                models.forEach { m -> results += Res(m).also { addCard(it) } }
+                status.text = "Testing ${models.size} main models, one by one…"
+                results.addAll(rs); rs.forEach { addCard(it) }
             }
             val first = Modes.firstMessage(Modes.byId("grammar"), "", SAMPLE)
-            for ((i, m) in models.withIndex()) {
+            var safeFound = false
+            for ((i, res) in rs.withIndex()) {
                 if (stop) return@Thread
-                runOnUiThread { status.text = "Testing ${i + 1}/${models.size}: $m" }
-                val res = results.getOrNull(i) ?: continue
-                var r = attempt(key, m, first, res)
-                // A per-minute limit (not a plan/quota limit): wait and try once more.
-                if (r?.code == 429 && !res.notInPlan) { Thread.sleep(6000); r = attempt(key, m, first, res) }
+                runOnUiThread { status.text = "Testing ${i + 1}/${rs.size}: ${res.model}" }
+                var r = attempt(key, res.model, first, res)
+                // A per-minute limit (not a plan/quota limit): wait, then try once more.
+                if (r?.code == 429 && !res.notInPlan) {
+                    runOnUiThread { status.text = "Per-minute limit reached — waiting 15 s, then retrying ${res.model}…" }
+                    Thread.sleep(15000)
+                    r = attempt(key, res.model, first, res)
+                }
+                if (!res.ok && !res.notInPlan) ErrorLog.add(this, "Compare models", p.label, res.model, r?.code ?: 0, res.text)
                 res.done = true
+                // As soon as one model works, make sure there is a usable default.
+                if (res.ok && !safeFound) {
+                    safeFound = true
+                    val defaultOk = rs.any { it.model == store.model(p) && it.ok }
+                    if (!defaultOk) {
+                        store.setModel(p, res.model)
+                        runOnUiThread { showCurrent(); Ui.toast(this, "✓ Working model found: ${res.model} (set as default for now)") }
+                    }
+                }
                 runOnUiThread { drawCard(res) }
-                if (!res.notInPlan) Thread.sleep(1500)
+                if (!res.notInPlan && i < rs.size - 1) Thread.sleep(2000)
             }
             score()
         }.start()

@@ -31,15 +31,15 @@ data class Answer(val text: String, val model: String, val switched: Boolean)
 
 object Providers {
     val all = listOf(
+        Provider("gemini", "Gemini", Api.GEMINI, "https://generativelanguage.googleapis.com/v1beta", "gemini-3.1-flash-lite",
+            "https://aistudio.google.com/app/apikey", "https://gemini.google.com/app",
+            listOf("^gemini-3\\.1-flash-lite$", "^gemini-[0-9.]+-flash$", "^gemini-[0-9.]+-pro$", "^gemini-[0-9.]+-flash", "^gemini-")),
         Provider("chatgpt", "ChatGPT", Api.OPENAI_COMPAT, "https://api.openai.com/v1", "gpt-4o-mini",
             "https://platform.openai.com/api-keys", "https://chatgpt.com/",
             listOf("^gpt-5(\\.\\d+)?-mini$", "^gpt-5(\\.\\d+)?$", "^gpt-4\\.1-mini$", "^gpt-4o-mini$", "^gpt-")),
         Provider("claude", "Claude", Api.ANTHROPIC, "https://api.anthropic.com/v1", "claude-sonnet-5-5",
             "https://console.anthropic.com/settings/keys", "https://claude.ai/new",
             listOf("^claude-sonnet-", "^claude-opus-", "^claude-haiku-", "^claude-")),
-        Provider("gemini", "Gemini", Api.GEMINI, "https://generativelanguage.googleapis.com/v1beta", "gemini-3.1-flash-lite",
-            "https://aistudio.google.com/app/apikey", "https://gemini.google.com/app",
-            listOf("^gemini-3\\.1-flash-lite$", "^gemini-[0-9.]+-flash$", "^gemini-[0-9.]+-pro$", "^gemini-[0-9.]+-flash", "^gemini-")),
         Provider("deepseek", "DeepSeek", Api.OPENAI_COMPAT, "https://api.deepseek.com", "deepseek-chat",
             "https://platform.deepseek.com/api_keys", "https://chat.deepseek.com/",
             listOf("^deepseek-chat$", "^deepseek-")),

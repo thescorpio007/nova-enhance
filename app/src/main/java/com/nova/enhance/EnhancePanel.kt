@@ -120,7 +120,7 @@ class EnhancePanel(
             setOnClickListener { input.setText(""); tabs.clear(); drawResult() }
         })
         addView(head)
-        addView(input, Ui.lp())
+        addView(input, Ui.lp(top = Ui.dp(c, 8)))
         addView(countText, Ui.lp(top = Ui.dp(c, 4)))
         addView(warnText, Ui.lp(top = Ui.dp(c, 2)))
         input.addTextChangedListener(object : TextWatcher {
@@ -207,7 +207,7 @@ class EnhancePanel(
         val opts = Providers.all.map { it.id to it.label } + ("all" to "All AIs")
         for ((id, label) in opts) {
             val p = Providers.byId(id)
-            val tag = if (p != null && !store.hasKey(p) && store.webProject(p).isBlank()) " ·" else ""
+            val tag = if (p != null && !store.hasKey(p) && !AccountSend.installed(act, p)) " ·" else ""
             row.addView(Ui.chip(act, label + tag, store.target == id) {
                 val changed = store.target != id
                 store.target = id; drawAis()
@@ -313,9 +313,8 @@ class EnhancePanel(
         when {
             t.account -> {
                 body.setTextColor(Ui.MUTED)
-                body.text = if (t.sent) "Sent to your $name account — its answer is in your ${Db.PROJECT} project there."
-                else "Not sent yet."
-                actions.addView(Ui.button(c, if (t.sent) "Open my $name" else "Send to my $name", !t.sent) {
+                body.text = if (t.sent) t.status.ifBlank { "Sent to your $name account." } else "Not sent yet."
+                actions.addView(Ui.button(c, if (t.sent) "Send again to $name" else "Send to my $name", !t.sent) {
                     sendAccount(t)
                 }, Ui.lp(0, weight = 1f))
             }
@@ -377,8 +376,8 @@ class EnhancePanel(
             db.addMsg(id, "user", msg)
             t.convId = id; t.sent = true
         }
+        t.status = AccountSend.send(act, t.p, msg)
         drawResult()
-        WebAccountActivity.send(act, t.p, msg)
     }
 
     private fun missingKeys(ps: List<Provider>) {
@@ -398,6 +397,7 @@ class EnhancePanel(
             val outs = mutableListOf<String>()
             var backup: String? = null
             var error: String? = null
+            var lastCode = 0
             for ((i, part) in parts.withIndex()) {
                 val prefix = if (parts.size > 1) "Part ${i + 1}/${parts.size}: " else ""
                 if (parts.size > 1) update { t.status = "${prefix}working…" }
@@ -410,6 +410,7 @@ class EnhancePanel(
                     if (a.switched) backup = a.model
                 } catch (e: Exception) {
                     error = prefix + (e.message ?: e.toString())
+                    lastCode = (e as? AiException)?.code ?: 0
                     break
                 }
             }
@@ -424,6 +425,7 @@ class EnhancePanel(
                 backup?.let { notes += "answered by backup model $it (usual one was busy)" }
                 update { t.text = joined; t.convId = id; t.note = notes.joinToString(" · ") }
             } else {
+                ErrorLog.add(act, "Enhance", p.label, store.model(p), lastCode, err, original)
                 update { t.error = true; t.status = err }
                 // API failed completely: send it to the signed-in account instead (uses the Pro plan).
                 if (autoAccount) act.runOnUiThread {
