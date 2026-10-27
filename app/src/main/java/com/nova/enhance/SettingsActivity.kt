@@ -82,7 +82,7 @@ class SettingsActivity : BaseActivity() {
         val errs = ErrorLog.count(c)
         row("🔑", "AI & API keys", "$keyed of ${Providers.all.size} connected · models · compare", S_AI)
         row("👤", "Accounts", "Send to the official AI apps · $apps installed", S_ACCOUNTS)
-        row("✂", "Capture", "Share menu, text selection, bubble, tile", S_CAPTURE)
+        row("✂", "Capture", "Nova keyboard, Share menu, text selection, bubble, tile", S_CAPTURE)
         row("✦", "Enhancement", "About me, default route, speaking language, custom instruction", S_ENHANCE)
         row("💾", "Backup & restore", "All settings, history and password-protected keys", S_BACKUP)
         row("⚠", "Error log", if (errs == 0) "No errors recorded" else "$errs record(s) · share with support", S_ERRORS)
@@ -298,6 +298,19 @@ class SettingsActivity : BaseActivity() {
         cap.addView(Ui.text(c, "Text selection & Share menu", 15f, Ui.TEXT, true))
         cap.addView(Ui.text(c, "Always on: select text ▸ ⋮ ▸ ✦ Enhance (enhances at once, then Replace), " +
             "or Share ▸ Nova Enhance. Tip: long-press Nova Enhance in the Share list ▸ Pin.", 13f, Ui.MUTED))
+
+        cap.addView(Ui.text(c, "Nova keyboard panel", 15f, Ui.TEXT, true).apply { setPadding(0, Ui.dp(c, 16), 0, 0) })
+        val imm = getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+        val kbOn = imm.enabledInputMethodList.any { it.packageName == packageName }
+        cap.addView(Ui.text(c, (if (kbOn) "✓ Turned on. " else "") + "In any app, tap the 🌐 key on your keyboard to switch to Nova, " +
+            "tap a mode to enhance the message in place, then ⌨ to go back. Android warns that keyboards can read what you " +
+            "type — Nova only sends text when you tap a button.", 13f, if (kbOn) Ui.GOOD else Ui.MUTED))
+        val kr = Ui.row(c)
+        kr.addView(Ui.button(c, if (kbOn) "Keyboard settings" else "1 · Turn on keyboard", !kbOn) {
+            startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
+        }, Ui.lp(0, weight = 1f, end = Ui.dp(c, 8)))
+        kr.addView(Ui.button(c, "2 · Switch now") { imm.showInputMethodPicker() }, Ui.lp(0, weight = 1f))
+        cap.addView(kr, Ui.lp(top = Ui.dp(c, 8)))
 
         cap.addView(Ui.text(c, "Floating bubble", 15f, Ui.TEXT, true).apply { setPadding(0, Ui.dp(c, 16), 0, 0) })
         cap.addView(Ui.text(c, "Copy text, then tap the bubble.", 13f, Ui.MUTED))
