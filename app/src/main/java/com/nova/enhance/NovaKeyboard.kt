@@ -69,7 +69,7 @@ class NovaKeyboard : InputMethodService() {
         root.addView(r1, Ui.lp(top = Ui.dp(c, 10)))
         root.addView(r2, Ui.lp(top = Ui.dp(c, 8)))
 
-        status = Ui.text(c, "Tap a mode — the message is enhanced and replaced in place.", 12.5f, Ui.MUTED).apply { maxLines = 2 }
+        status = Ui.text(c, "Tap a mode — replaced in place", 12.5f, Ui.MUTED).apply { maxLines = 1; isSingleLine = true; ellipsize = android.text.TextUtils.TruncateAt.END }
         root.addView(status, Ui.lp(top = Ui.dp(c, 8)))
 
         val bot = Ui.row(c)
@@ -81,11 +81,14 @@ class NovaKeyboard : InputMethodService() {
         root.addView(bot, Ui.lp(top = Ui.dp(c, 8)))
 
         drawAi(); drawModes()
-        // Keep the panel above the navigation buttons.
+        // Keep the panel above the navigation buttons: use the phone's navigation-bar height directly,
+        // because some Android versions don't report it to keyboards.
+        val navH = navBarHeight()
+        root.setPadding(root.paddingLeft, root.paddingTop, root.paddingRight, Ui.dp(c, 6) + navH)
         root.setOnApplyWindowInsetsListener { v, ins ->
-            val bottom = if (Build.VERSION.SDK_INT >= 30) ins.getInsets(android.view.WindowInsets.Type.navigationBars()).bottom
+            val reported = if (Build.VERSION.SDK_INT >= 30) ins.getInsets(android.view.WindowInsets.Type.navigationBars()).bottom
                 else @Suppress("DEPRECATION") ins.systemWindowInsetBottom
-            v.setPadding(v.paddingLeft, v.paddingTop, v.paddingRight, Ui.dp(c, 6) + bottom)
+            v.setPadding(v.paddingLeft, v.paddingTop, v.paddingRight, Ui.dp(c, 6) + maxOf(reported, navH))
             ins
         }
         return root
@@ -254,5 +257,13 @@ class NovaKeyboard : InputMethodService() {
             val ok = (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).switchToLastInputMethod(window.window?.attributes?.token)
             if (!ok) (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showInputMethodPicker()
         }
+    }
+
+    /** Height of the navigation bar (◀ ● ■), or 0 with gesture navigation. */
+    @android.annotation.SuppressLint("DiscouragedApi", "InternalInsetResource")
+    private fun navBarHeight(): Int {
+        if (Build.VERSION.SDK_INT < 35) return 0          // older Android already keeps keyboards above it
+        val id = resources.getIdentifier("navigation_bar_height", "dimen", "android")
+        return if (id > 0) resources.getDimensionPixelSize(id) else Ui.dp(this, 48)
     }
 }
