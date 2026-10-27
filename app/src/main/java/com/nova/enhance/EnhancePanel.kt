@@ -124,6 +124,12 @@ class EnhancePanel(
     private lateinit var choicesLabel: android.widget.TextView
     private val listenBar = Ui.row(act)
     private val listenText = Ui.text(act, "", 13f, Ui.TEXT)
+    private val listenDot = android.view.View(act)
+    private lateinit var pauseBtn: android.widget.TextView
+    /** "✓ Cleaned by Gemini · 2 words fixed · not enhanced yet   ↶ Undo" */
+    private val cleanRow = Ui.row(act)
+    private val cleanText = Ui.text(act, "", 12f, Ui.GOOD)
+    private var undoText: String? = null
     private var voice: VoiceInput? = null
     private var aiVoice: AiVoice? = null
 
@@ -160,16 +166,23 @@ class EnhancePanel(
         })
         head.addView(Ui.text(c, "Clear", 13f, Ui.MUTED, true).apply {
             setPadding(Ui.dp(c, 12), Ui.dp(c, 4), 0, Ui.dp(c, 4))
-            setOnClickListener { input.setText(""); tabs.clear(); drawResult() }
+            setOnClickListener { input.setText(""); tabs.clear(); cleanRow.visibility = View.GONE; drawResult() }
         })
         addView(head)
 
         // ---------------------------------------------------------------- listening bar
         listenBar.background = Ui.round(0xFF3A1D2A.toInt(), Ui.dp(c, 12).toFloat(), 1, 0x66FF6B6B)
         listenBar.setPadding(Ui.dp(c, 10), Ui.dp(c, 6), Ui.dp(c, 8), Ui.dp(c, 6))
-        listenBar.addView(android.view.View(c).apply { background = Ui.round(Ui.BAD, Ui.dp(c, 5).toFloat()) },
-            LayoutParams(Ui.dp(c, 10), Ui.dp(c, 10)).apply { marginEnd = Ui.dp(c, 10) })
+        listenDot.background = Ui.round(Ui.BAD, Ui.dp(c, 5).toFloat())
+        listenBar.addView(listenDot, LayoutParams(Ui.dp(c, 10), Ui.dp(c, 10)).apply { marginEnd = Ui.dp(c, 10) })
         listenBar.addView(listenText, Ui.lp(0, weight = 1f))
+        pauseBtn = Ui.text(c, "⏸ Pause", 13f, Color.WHITE, true).apply {
+            gravity = Gravity.CENTER; includeFontPadding = false
+            setPadding(Ui.dp(c, 11), 0, Ui.dp(c, 11), 0)
+            background = Ui.round(0xFF4B5263.toInt(), Ui.dp(c, 14).toFloat())
+            setOnClickListener { voice?.let { if (it.paused) it.resume() else it.pause() } }
+        }
+        listenBar.addView(pauseBtn, LayoutParams(LayoutParams.WRAP_CONTENT, Ui.dp(c, 28)).apply { marginEnd = Ui.dp(c, 6) })
         listenBar.addView(Ui.text(c, "■ Stop", 13f, Color.WHITE, true).apply {
             gravity = Gravity.CENTER; includeFontPadding = false
             setPadding(Ui.dp(c, 12), 0, Ui.dp(c, 12), 0)
@@ -183,6 +196,13 @@ class EnhancePanel(
         input.setOnFocusChangeListener { _, has -> if (has && tabs.isNotEmpty()) sizeBoxes(editing = true) }
         input.setOnClickListener { if (tabs.isNotEmpty()) sizeBoxes(editing = true) }
         addView(input, Ui.lp(top = Ui.dp(c, 6)))
+        cleanRow.addView(cleanText, Ui.lp(0, weight = 1f))
+        cleanRow.addView(Ui.text(c, "↶ Undo", 12f, Ui.ACCENT, true).apply {
+            setPadding(Ui.dp(c, 10), Ui.dp(c, 2), 0, Ui.dp(c, 2))
+            setOnClickListener { undoText?.let { input.setText(it); input.setSelection(it.length) }; cleanRow.visibility = View.GONE }
+        })
+        cleanRow.visibility = View.GONE
+        addView(cleanRow, Ui.lp(top = Ui.dp(c, 4)))
         addView(countText, Ui.lp(top = Ui.dp(c, 4)))
         addView(warnText, Ui.lp(top = Ui.dp(c, 2)))
         input.addTextChangedListener(object : TextWatcher {
@@ -408,57 +428,142 @@ class EnhancePanel(
             act.requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), MIC_REQ)
             return
         }
-        // Main engine: AI (Gemini) recognition. Fallback: Android's recognition.
-        if (store.hasKey(AiVoice.gemini())) listenAi() else listenAndroid()
+        // Main engine: Android live text (then Gemini cleans it). Backup: AI recording.
+        if (VoiceInput.available(act)) listenAndroid() else if (store.hasKey(AiVoice.gemini())) listenAi() else listenWithGoogle()
     }
 
-    private fun showListen(st: String?, sub: String) {
+    /** Where spoken text goes: at the cursor (or the end). */
+    private var insBefore = ""
+    private var insAfter = ""
+
+    private fun markInsertPoint() {
+        val t = input.text.toString()
+        val at = if (input.hasFocus()) input.selectionStart.coerceIn(0, t.length) else t.length
+        insBefore = t.substring(0, at); insAfter = t.substring(at)
+    }
+
+    private fun sep(a: String) = if (a.isEmpty() || a.endsWith(" ") || a.endsWith("\n")) "" else " "
+
+    /** Shows live text inside Original: confirmed words white, words being recognised grey. */
+    private fun showLive(final: String, partial: String) {
+        val sb = android.text.SpannableStringBuilder(insBefore)
+        val mid = listOf(final, partial).filter { it.isNotBlank() }.joinToString(" ")
+        if (mid.isNotEmpty()) sb.append(sep(insBefore)).append(final)
+        if (partial.isNotBlank()) {
+            if (final.isNotBlank()) sb.append(' ')
+            val st = sb.length
+            sb.append(partial)
+            sb.setSpan(android.text.style.ForegroundColorSpan(Ui.MUTED), st, sb.length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        val cursor = sb.length
+        if (insAfter.isNotEmpty() && mid.isNotEmpty()) sb.append(if (insAfter.startsWith(" ") || insAfter.startsWith("\n")) "" else " ")
+        sb.append(insAfter)
+        input.setText(sb); input.setSelection(cursor.coerceAtMost(input.text.length))
+    }
+
+    private fun showListen(st: String?, sub: String, paused: Boolean = false) {
         if (st == null) { listenBar.visibility = View.GONE; return }
         listenBar.visibility = View.VISIBLE
-        listenText.text = android.text.Html.fromHtml("<b>$st</b> <font color='#9AA3B5'>$sub</font>", 0)
+        listenDot.background = Ui.round(if (paused) 0xFFFFC857.toInt() else Ui.BAD, Ui.dp(act, 5).toFloat())
+        listenText.text = android.text.Html.fromHtml("<b>$st</b><br><font color='#9AA3B5'><small>$sub</small></font>", 0)
     }
 
-    private fun voiceResult(before: String, heard: String) {
-        if (heard.isBlank()) return
-        val full = listOf(before, heard).filter { it.isNotBlank() }.joinToString(if (before.endsWith("\n")) "" else " ")
-        input.setText(full); input.setSelection(input.text.length)
-        tabs.clear(); drawResult()
-        if (askMode) go(auto = true) else autoEnhance()
+    private val tickH = android.os.Handler(android.os.Looper.getMainLooper())
+    private val tick = object : Runnable {
+        override fun run() {
+            val v = voice ?: return
+            if (!v.active) return
+            val t = "${v.seconds / 60}:${String.format("%02d", v.seconds % 60)}"
+            val lang = langName(store.voiceLang).substringBefore("  (")
+            if (v.paused) showListen("⏸ Paused $t", "Tap Resume to continue", true)
+            else showListen("● Listening $t", "Android · $lang · live")
+            pauseBtn.text = if (v.paused) "▶ Resume" else "⏸ Pause"
+            pauseBtn.background = Ui.round(if (v.paused) Ui.GOOD else 0xFF4B5263.toInt(), Ui.dp(act, 14).toFloat())
+            tickH.postDelayed(this, 500)
+        }
     }
 
-    /** Records until Stop, then Gemini writes it out (any language, your technical terms). */
-    private fun listenAi() {
-        val before = input.text.toString().trim()
+    private fun listenAndroid() {
+        markInsertPoint()
+        tabs.clear(); drawResult(); cleanRow.visibility = View.GONE
+        pauseBtn.visibility = View.VISIBLE
+        voice = VoiceInput(act, langTag(store.voiceLang),
+            onText = { f, p -> showLive(f, p) },
+            onState = { st -> if (st == null) showListen(null, "") else tick.run() },
+            onDone = { heard -> afterSpeech(heard) },
+            onFatal = { heard ->
+                // Android's speech service failed: keep what was heard, continue with the AI recording.
+                showLive(heard, "")
+                if (store.hasKey(AiVoice.gemini())) {
+                    Ui.toast(act, "Android voice failed — continuing with AI recording")
+                    insBefore = input.text.toString().substring(0, input.selectionStart.coerceIn(0, input.text.length))
+                    insAfter = input.text.toString().substring(insBefore.length)
+                    listenAi(keepPoint = true)
+                } else { Ui.toast(act, "Android voice failed — opening Google voice"); listenWithGoogle() }
+            })
+        voice?.start()
+    }
+
+    /** After Stop: Gemini cleans Android's text (misheard words, punctuation). No enhancement runs. */
+    private fun afterSpeech(heard: String) {
+        showLive(heard, "")
+        if (heard.isBlank()) { Ui.toast(act, "Nothing was heard"); return }
+        if (!store.hasKey(AiVoice.gemini())) return
+        showListen("✍ Cleaning up with Gemini…", "fixing misheard words and punctuation")
+        pauseBtn.visibility = View.GONE
+        val before = insBefore; val after = insAfter
+        Thread {
+            val r = runCatching { AiVoice.cleanup(act, heard) }
+            act.runOnUiThread {
+                showListen(null, ""); pauseBtn.visibility = View.VISIBLE
+                r.onSuccess { clean ->
+                    if (clean.isBlank()) return@onSuccess
+                    val raw = input.text.toString()
+                    val sb = android.text.SpannableStringBuilder(before).append(sep(before))
+                    val st = sb.length
+                    sb.append(Diff.added(heard, clean))
+                    val end = sb.length
+                    if (after.isNotEmpty()) sb.append(if (after.startsWith(" ")) "" else " ").append(after)
+                    input.setText(sb); input.setSelection(end.coerceAtMost(input.text.length))
+                    val fixed = Diff.countChanged(heard, clean)
+                    undoText = raw
+                    cleanText.text = "✓ Cleaned by Gemini · $fixed word${if (fixed == 1) "" else "s"} fixed · not enhanced yet"
+                    cleanRow.visibility = View.VISIBLE
+                    if (st < 0) Unit
+                }.onFailure { e ->
+                    ErrorLog.add(act, "Voice cleanup", "Gemini", AiVoice.fastModel(act), (e as? AiException)?.code ?: 0, e.message ?: "", heard)
+                    Ui.toast(act, "Couldn't clean the text (${e.message}) — kept Android's text")
+                }
+            }
+        }.start()
+    }
+
+    /** Backup engine: records until Stop, then Gemini writes it out (any language, your technical terms). */
+    private fun listenAi(keepPoint: Boolean = false) {
+        if (!keepPoint) markInsertPoint()
+        pauseBtn.visibility = View.GONE
         var av: AiVoice? = null
         av = AiVoice(act,
             onState = { st -> showListen(st, if (st?.startsWith("🔴") == true) "AI (Gemini) · any language · pauses are fine" else "") },
-            onDone = { t -> voiceResult(before, t) },
+            onDone = { t ->
+                showLive(t, "")
+                pauseBtn.visibility = View.VISIBLE
+                cleanText.text = "✓ Written out by Gemini · not enhanced yet"; undoText = null
+                cleanRow.visibility = View.VISIBLE
+            },
             onFail = { msg, file ->
+                pauseBtn.visibility = View.VISIBLE
                 val b = AlertDialog.Builder(act).setTitle("Voice recognition").setMessage(msg)
                 if (file != null) b.setPositiveButton("Retry") { _, _ ->
                     showListen("✍ Writing it out with Gemini…", "")
                     Thread { av?.recognize(file) }.start()
                 }
-                b.setNeutralButton("Use Android voice") { _, _ -> file?.delete(); listenAndroid() }
                 b.setNegativeButton("Cancel") { _, _ -> file?.delete() }
                 b.show()
             })
         aiVoice = av
         tabs.clear(); drawResult()
-        if (!av.start()) { Ui.toast(act, "The microphone couldn't be opened — using Android voice"); listenAndroid() }
-    }
-
-    private fun listenAndroid() {
-        if (!VoiceInput.available(act)) { listenWithGoogle(); return }
-        val before = input.text.toString().trim()
-        val lang = langName(store.voiceLang).substringBefore("  (").substringBefore(" (")
-        voice = VoiceInput(act, langTag(store.voiceLang),
-            onText = { t -> input.setText(listOf(before, t).filter { it.isNotBlank() }.joinToString(" ")); input.setSelection(input.text.length) },
-            onState = { st -> showListen(st, "Android · $lang · pauses are fine") },
-            onDone = { heard -> voiceResult(before, heard) },
-            onFatal = { listenWithGoogle() })
-        tabs.clear(); drawResult()
-        voice?.start()
+        if (!av.start()) Ui.toast(act, "The microphone couldn't be opened — another app may be using it")
     }
 
     private var pendingListen = false
@@ -489,8 +594,7 @@ class EnhancePanel(
     fun onVoice(data: Intent?) {
         val said = data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
         if (said.isNullOrBlank()) return
-        setText(said, auto = !askMode)
-        if (askMode) go(auto = true)
+        markInsertPoint(); showLive(said, "")
     }
 
     private fun drawRoutes() {
@@ -728,7 +832,8 @@ class EnhancePanel(
                     }
                     if (strongAnswer != null) outs += strongAnswer
                     else {
-                        val a = Providers.chatSmart(p, key, model, sys, listOf(Msg("user", msgFor(part)))) { msg ->
+                        val a = Providers.chatSmart(p, key, model, sys, listOf(Msg("user", msgFor(part))),
+                            fast = !ask && mode.id == "grammar") { msg ->
                             update { t.status = prefix + msg }
                         }
                         outs += a.text

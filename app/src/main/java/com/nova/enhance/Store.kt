@@ -63,6 +63,11 @@ class Store(c: Context) {
     fun strongModel(p: Provider): String = sp.getString("strong_${p.id}", "")!!
     fun setStrongModel(p: Provider, v: String) = sp.edit().putString("strong_${p.id}", v).apply()
 
+    /** Quickest Gemini model for voice ("" = not looked up yet). */
+    var fastGemini: String
+        get() = sp.getString("fast_gemini", "")!!
+        set(v) = sp.edit().putString("fast_gemini", v).apply()
+
     var bubbleOn: Boolean
         get() = sp.getBoolean("bubble", false)
         set(v) = sp.edit().putBoolean("bubble", v).apply()

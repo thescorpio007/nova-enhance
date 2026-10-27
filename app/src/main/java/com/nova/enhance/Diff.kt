@@ -51,4 +51,46 @@ object Diff {
         while (j < m) { add(b[j], 1); j++ }
         return out
     }
+
+    /** The cleaned text with words that differ from [before] highlighted in green (nothing struck through). */
+    fun added(before: String, after: String): CharSequence {
+        val a = tokens(before); val b = tokens(after)
+        if (a.size > MAX_TOKENS || b.size > MAX_TOKENS) return after
+        val keep = common(a, b)
+        val out = SpannableStringBuilder()
+        b.forEachIndexed { j, t ->
+            val st = out.length; out.append(t)
+            if (t.isNotBlank() && j !in keep) {
+                out.setSpan(ForegroundColorSpan(0xFF3DDC97.toInt()), st, out.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                out.setSpan(BackgroundColorSpan(0x223DDC97), st, out.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+        }
+        return out
+    }
+
+    /** How many words of [after] are new or changed compared with [before]. */
+    fun countChanged(before: String, after: String): Int {
+        val a = tokens(before); val b = tokens(after)
+        if (a.size > MAX_TOKENS || b.size > MAX_TOKENS) return 0
+        val keep = common(a, b)
+        return b.indices.count { b[it].isNotBlank() && it !in keep }
+    }
+
+    /** Indexes in [b] that are part of the longest common word sequence with [a]. */
+    private fun common(a: List<String>, b: List<String>): Set<Int> {
+        val n = a.size; val m = b.size
+        val dp = Array(n + 1) { IntArray(m + 1) }
+        for (i in n - 1 downTo 0) for (j in m - 1 downTo 0)
+            dp[i][j] = if (a[i] == b[j]) dp[i + 1][j + 1] + 1 else maxOf(dp[i + 1][j], dp[i][j + 1])
+        val keep = HashSet<Int>()
+        var i = 0; var j = 0
+        while (i < n && j < m) {
+            when {
+                a[i] == b[j] -> { keep += j; i++; j++ }
+                dp[i + 1][j] >= dp[i][j + 1] -> i++
+                else -> j++
+            }
+        }
+        return keep
+    }
 }

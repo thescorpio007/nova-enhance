@@ -25,6 +25,25 @@ class AiVoice(
 
         fun gemini(): Provider = Providers.byId("gemini")!!
 
+        /** flash-lite if the account has it (fastest), otherwise the default Gemini model. */
+        fun fastModel(c: Context): String {
+            val s = Store(c); val p = gemini()
+            if (s.fastGemini.isBlank()) {
+                val m = runCatching { Providers.pickFast(Providers.listModels(p, s.key(p))) }.getOrNull()
+                s.fastGemini = m ?: "-"
+            }
+            return s.fastGemini.takeIf { it != "-" } ?: s.model(p)
+        }
+
+        /** Cleans text from Android's recognition: fixes misheard words and punctuation only. */
+        fun cleanup(c: Context, raw: String): String {
+            val s = Store(c); val p = gemini()
+            val system = "You correct text produced by speech recognition. It may contain misheard words. " +
+                "Fix misheard words (especially technical terms), add correct punctuation and capital letters. " +
+                "Do not rephrase, summarise, translate or add anything. Reply with ONLY the corrected text." + Profile.note(s)
+            return Providers.chatSmart(p, s.key(p), fastModel(c), system, listOf(Msg("user", raw)), fast = true) { }.text.trim()
+        }
+
         /** Gemini writes out the recording. Throws AiException on failure. */
         fun transcribe(c: Context, file: File): String {
             val s = Store(c)
@@ -47,7 +66,7 @@ class AiVoice(
             var last: AiException? = null
             for (attempt in 0..2) {
                 try {
-                    return Providers.rawGemini(key, s.model(p), body).trim()
+                    return Providers.rawGemini(key, fastModel(c), body, fast = true).trim()
                 } catch (e: AiException) {
                     last = e
                     if (e.code !in setOf(429, 500, 502, 503, 504)) throw e

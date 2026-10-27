@@ -52,7 +52,7 @@ object Providers {
 
     // ---------------------------------------------------------------- chat
 
-    fun chat(p: Provider, key: String, model: String, system: String, history: List<Msg>): String =
+    fun chat(p: Provider, key: String, model: String, system: String, history: List<Msg>, fast: Boolean = false): String =
         when (p.api) {
             Api.OPENAI_COMPAT -> {
                 val msgs = JSONArray().put(JSONObject().put("role", "system").put("content", system))
@@ -86,7 +86,7 @@ object Providers {
                 val body = JSONObject()
                     .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", system))))
                     .put("contents", contents)
-                val r = post("${p.baseUrl}/models/$model:generateContent", body, mapOf("x-goog-api-key" to key))
+                val r = geminiPost(key, model, body, fast)
                 val cands = r.optJSONArray("candidates")
                 if (cands == null || cands.length() == 0) {
                     val why = r.optJSONObject("promptFeedback")?.optString("blockReason") ?: "no answer"
@@ -113,9 +113,9 @@ object Providers {
      * then tries other models of the same AI. [status] reports progress ("retrying…").
      */
     fun chatSmart(p: Provider, key: String, model: String, system: String, history: List<Msg>,
-                  status: (String) -> Unit): Answer {
+                  fast: Boolean = false, status: (String) -> Unit): Answer {
         fun once(m: String): String = try {
-            chat(p, key, m, system, history).ifBlank { throw AiException("Empty answer") }
+            chat(p, key, m, system, history, fast).ifBlank { throw AiException("Empty answer") }
         } catch (e: java.io.IOException) {
             // No internet, VPN dropped, address blocked or timed out.
             throw AiException("No connection to ${p.label} — check your internet or VPN.", NO_CONNECTION)
@@ -158,10 +158,35 @@ object Providers {
         return out.take(3)
     }
 
+    /** Which "no thinking" setting each Gemini model accepts (0 = thinkingBudget 0, 1 = thinkingLevel low, 2 = none). */
+    private val thinkMode = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
+    /** Gemini request; with [fast], thinking is turned off (much quicker for simple tasks). */
+    private fun geminiPost(key: String, model: String, body: JSONObject, fast: Boolean): JSONObject {
+        val url = "${byId("gemini")!!.baseUrl}/models/$model:generateContent"
+        val h = mapOf("x-goog-api-key" to key)
+        if (!fast) return post(url, body, h)
+        var mode = thinkMode[model] ?: 0
+        while (true) {
+            val b = JSONObject(body.toString())
+            when (mode) {
+                0 -> b.put("generationConfig", JSONObject().put("thinkingConfig", JSONObject().put("thinkingBudget", 0)))
+                1 -> b.put("generationConfig", JSONObject().put("thinkingConfig", JSONObject().put("thinkingLevel", "low")))
+            }
+            try {
+                val r = post(url, b, h); thinkMode[model] = mode; return r
+            } catch (e: AiException) {
+                // This model doesn't accept that setting: try the next one.
+                if (e.code == 400 && mode < 2 && Regex("think", RegexOption.IGNORE_CASE).containsMatchIn(e.message ?: "")) { mode++; continue }
+                if (e.code == 400 && mode < 2) { mode++; continue }
+                throw e
+            }
+        }
+    }
+
     /** Direct Gemini call with a ready request body (used for voice recognition). */
-    fun rawGemini(key: String, model: String, body: JSONObject): String {
-        val g = byId("gemini")!!
-        val r = post("${g.baseUrl}/models/$model:generateContent", body, mapOf("x-goog-api-key" to key))
+    fun rawGemini(key: String, model: String, body: JSONObject, fast: Boolean = true): String {
+        val r = geminiPost(key, model, body, fast)
         val cands = r.optJSONArray("candidates") ?: return ""
         if (cands.length() == 0) return ""
         val parts = cands.getJSONObject(0).optJSONObject("content")?.optJSONArray("parts") ?: return ""
@@ -218,6 +243,13 @@ object Providers {
             if (hit != null) return hit
         }
         return null
+    }
+
+    /** The quickest Gemini model for voice (flash-lite), from the account's list. */
+    fun pickFast(ids: List<String>): String? {
+        val skip = Regex("preview|exp|tts|audio|image|live|embed|-\\d{4}-\\d{2}-\\d{2}$", RegexOption.IGNORE_CASE)
+        return ids.filter { !skip.containsMatchIn(it) && Regex("^gemini-[0-9.]+-flash-lite$").matches(it) }
+            .sortedDescending().firstOrNull()
     }
 
     /** Choose the best everyday model from what the account offers. */
