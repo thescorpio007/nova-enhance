@@ -86,6 +86,7 @@ class SettingsActivity : BaseActivity() {
         row("✦", "Enhancement", "About me, default route, speaking language, custom instruction", S_ENHANCE)
         row("💾", "Backup & restore", "All settings, history and password-protected keys", S_BACKUP)
         row("⚠", "Error log", if (errs == 0) "No errors recorded" else "$errs record(s) · share with support", S_ERRORS)
+        resetRow()
         row("ⓘ", "About", "Version ${version()}", S_ABOUT)
     }
 
@@ -106,6 +107,69 @@ class SettingsActivity : BaseActivity() {
         card.addView(t, Ui.lp(0, weight = 1f))
         card.addView(Ui.text(c, "›", 22f, Ui.MUTED))
         root.addView(card, Ui.lp(top = Ui.dp(c, 10)))
+    }
+
+    // ==================================================================== reset
+
+    private fun resetRow() {
+        val c = this
+        val card = Ui.row(c).apply {
+            background = Ui.round(Ui.CARD, Ui.dp(c, 16).toFloat())
+            setPadding(Ui.dp(c, 14), Ui.dp(c, 14), Ui.dp(c, 14), Ui.dp(c, 14))
+            setOnClickListener { resetDialog() }
+        }
+        card.addView(Ui.text(c, "↺", 18f, Ui.BAD, true).apply {
+            gravity = Gravity.CENTER; background = Ui.round(0xFF3A1D2A.toInt(), Ui.dp(c, 12).toFloat())
+        }, LinearLayout.LayoutParams(Ui.dp(c, 42), Ui.dp(c, 42)).apply { marginEnd = Ui.dp(c, 14) })
+        val t = Ui.col(c)
+        t.addView(Ui.text(c, "Reset", 16f, 0xFFFF8A8A.toInt(), true))
+        t.addView(Ui.text(c, "Back to factory settings — choose what to reset", 13f, Ui.MUTED))
+        card.addView(t, Ui.lp(0, weight = 1f))
+        card.addView(Ui.text(c, "›", 22f, Ui.MUTED))
+        root.addView(card, Ui.lp(top = Ui.dp(c, 10)))
+    }
+
+    private fun resetDialog() {
+        val c = this
+        val items = arrayOf(
+            "Settings & defaults — modes, AI choice, route, models, language, bubble",
+            "About me profile — field, description and My terms",
+            "API keys — all saved keys are deleted from this phone",
+            "History — all Enhancement and Ask AI conversations",
+            "Error log — all error records")
+        val checked = booleanArrayOf(true, false, false, false, false)
+        AlertDialog.Builder(c)
+            .setTitle("↺  Reset Nova Enhance")
+            .setMultiChoiceItems(items, checked) { _, w, on -> checked[w] = on }
+            .setPositiveButton("Reset") { _, _ ->
+                if (checked.none { it }) { Ui.toast(c, "Nothing selected"); return@setPositiveButton }
+                val list = items.filterIndexed { i, _ -> checked[i] }.joinToString("\n") { "• " + it.substringBefore(" —") }
+                AlertDialog.Builder(c).setTitle("Are you sure?")
+                    .setMessage("This will reset:\n$list\n\nIt can't be undone.")
+                    .setPositiveButton("Reset now") { _, _ -> doReset(checked) }
+                    .setNegativeButton("Cancel", null).show()
+            }
+            .setNeutralButton("💾 Backup first") { _, _ -> open(c, S_BACKUP) }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun doReset(what: BooleanArray) {
+        val sp = getSharedPreferences("nova_enhance", MODE_PRIVATE)
+        val e = sp.edit()
+        val profileKeys = setOf("p_fields", "p_about", "p_terms", "p_asked")
+        if (what[0]) {
+            for (k in sp.all.keys) if (!k.startsWith("key_") && k !in profileKeys) e.remove(k)
+            stopService(Intent(this, BubbleService::class.java))
+        }
+        if (what[1]) { profileKeys.forEach { e.remove(it) } }   // asks "Tell us about yourself" again on next start
+        if (what[2]) { for (k in sp.all.keys) if (k.startsWith("key_")) e.remove(k); e.remove("fast_gemini") }
+        e.commit()
+        if (what[3]) Db.get(this).clearAll()
+        if (what[4]) ErrorLog.clear(this)
+        Ui.toast(this, "Reset done")
+        startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
+        finish()
     }
 
     private fun header(title: String, sub: String) {

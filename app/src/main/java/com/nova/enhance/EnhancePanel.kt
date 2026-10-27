@@ -112,6 +112,8 @@ class EnhancePanel(
     private val refineRow = Ui.row(act)
     private val refineInput = Ui.input(act, "Tell the AI what to change…", false).apply { textSize = 14f }
     private var settingResult = false
+    private val refinePanel = Ui.col(act)
+    private val refineLabel = Ui.text(act, "", 11f, 0xFFB9B0FF.toInt(), true)
     private var barRefresh: () -> Unit = {}
     private val tabs = mutableListOf<Tab>()
     private var selected = 0
@@ -241,14 +243,19 @@ class EnhancePanel(
         box.addView(resultBox, Ui.lp(top = Ui.dp(c, 6)))
         box.addView(diffView, Ui.lp(top = Ui.dp(c, 6)))
         box.addView(actions, Ui.lp(top = Ui.dp(c, 10)))
-        box.addView(refineChips.first, Ui.lp(top = Ui.dp(c, 10)))
         refineRow.addView(refineInput, Ui.lp(0, weight = 1f, end = Ui.dp(c, 6)))
         refineRow.addView(Ui.text(c, "↻", 18f, Color.WHITE, true).apply {
             gravity = Gravity.CENTER; includeFontPadding = false
             background = Ui.round(Ui.ACCENT, Ui.dp(c, 18).toFloat())
             setOnClickListener { refine(refineInput.text.toString().trim()) }
         }, LayoutParams(Ui.dp(c, 36), Ui.dp(c, 36)))
-        box.addView(refineRow, Ui.lp(top = Ui.dp(c, 8)))
+        // Refine panel: shown below, under the Enhancement chips (added further down).
+        refinePanel.background = Ui.round(0xFF141821.toInt(), Ui.dp(c, 14).toFloat(), Ui.dp(c, 1), 0x887C6CFF)
+        refinePanel.setPadding(Ui.dp(c, 10), Ui.dp(c, 10), Ui.dp(c, 10), Ui.dp(c, 10))
+        refinePanel.addView(refineLabel)
+        refinePanel.addView(refineChips.first, Ui.lp(top = Ui.dp(c, 8)))
+        refinePanel.addView(refineRow, Ui.lp(top = Ui.dp(c, 8)))
+        refinePanel.visibility = View.GONE
         Ui.scrollBox(input); Ui.scrollBox(resultBox); Ui.scrollBox(diffView)
         resultBox.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, d: Int) {}
@@ -269,6 +276,7 @@ class EnhancePanel(
         addView(modeRow.first)
         customBox.setText(store.custom)
         addView(customBox, Ui.lp(top = Ui.dp(c, 8)))
+        addView(refinePanel, Ui.lp(top = Ui.dp(c, 10)))
         addView(Ui.section(c, "AI"))
         addView(aiRow.first)
         addView(Ui.section(c, "Send through"))
@@ -661,7 +669,7 @@ class EnhancePanel(
         val c = act
         tabsRow.second.removeAllViews(); actions.removeAllViews(); verRow.removeAllViews()
         resultBox.visibility = View.GONE; diffView.visibility = View.GONE; body.visibility = View.VISIBLE
-        refineChips.first.visibility = View.GONE; refineRow.visibility = View.GONE; verRow.visibility = View.GONE
+        refinePanel.visibility = View.GONE; verRow.visibility = View.GONE
         if (tabs.isEmpty()) {
             tabsRow.first.visibility = View.GONE
             noteText.visibility = View.GONE
@@ -752,7 +760,10 @@ class EnhancePanel(
     /** Quick refine chips + "Tell the AI what to change…". */
     private fun drawRefine(t: Tab) {
         val c = act
-        refineChips.first.visibility = View.VISIBLE; refineRow.visibility = View.VISIBLE
+        refinePanel.visibility = View.VISIBLE
+        refineLabel.text = android.text.Html.fromHtml(
+            if (t.ask) "FOLLOW UP <font color='#9AA3B5'>· asks about the answer above</font>"
+            else "REFINE RESULT <font color='#9AA3B5'>· changes the enhanced text above</font>", 0)
         val row = refineChips.second; row.removeAllViews()
         val opts = if (t.ask) listOf("More detail", "Shorter", "Simpler", "Give examples", "Next steps")
             else listOf("Shorter", "More formal", "Warmer", "Simpler", "Keep my wording")

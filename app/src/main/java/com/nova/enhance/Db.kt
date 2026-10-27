@@ -86,6 +86,11 @@ class Db private constructor(c: Context) : SQLiteOpenHelper(c, "nova_enhance.db"
         return out
     }
 
+    fun clearAll() {
+        writableDatabase.delete("messages", null, null)
+        writableDatabase.delete("conversations", null, null)
+    }
+
     fun delete(id: Long) {
         writableDatabase.delete("messages", "conv=?", arrayOf(id.toString()))
         writableDatabase.delete("conversations", "id=?", arrayOf(id.toString()))
