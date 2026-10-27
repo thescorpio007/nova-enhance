@@ -12,17 +12,17 @@ class MainActivity : BaseActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val c = this
-        val root = Ui.col(c, 18)
+        val root = Ui.col(c, 16).apply { setPadding(Ui.dp(c, 16), Ui.dp(c, 6), Ui.dp(c, 16), Ui.dp(c, 8)) }
 
         val head = Ui.row(c)
         val titles = Ui.col(c)
-        titles.addView(Ui.title(c, "Nova Enhance").apply { textSize = 21f; maxLines = 1; isSingleLine = true })
-        titles.addView(Ui.text(c, "Project: ${Db.PROJECT}", 13f, Ui.MUTED))
+        titles.addView(Ui.title(c, "Nova Enhance").apply { textSize = 20f; maxLines = 1; isSingleLine = true; setPadding(0, 0, 0, 0) })
+        titles.addView(Ui.text(c, "Project: ${Db.PROJECT}", 12f, Ui.MUTED))
         head.addView(titles, Ui.lp(0, weight = 1f))
-        head.addView(Ui.button(c, "History") { startActivity(Intent(c, HistoryActivity::class.java)) },
-            Ui.lp(android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 8)))
-        head.addView(Ui.button(c, "⚙") { startActivity(Intent(c, SettingsActivity::class.java)) },
-            Ui.lp(android.widget.LinearLayout.LayoutParams.WRAP_CONTENT))
+        head.addView(Ui.smallButton(c, "History") { startActivity(Intent(c, HistoryActivity::class.java)) },
+            Ui.lp(android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, Ui.dp(c, 32), end = Ui.dp(c, 8)))
+        head.addView(Ui.smallButton(c, "⚙") { startActivity(Intent(c, SettingsActivity::class.java)) },
+            Ui.lp(android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, Ui.dp(c, 32)))
         root.addView(head)
 
         setupCard = Ui.card(c)
@@ -36,10 +36,7 @@ class MainActivity : BaseActivity() {
         panel = EnhancePanel(this)
         root.addView(panel)
 
-        root.addView(Ui.signature(c))
-        root.addView(Ui.text(c, "Version ${appVersion()}", 11f, Ui.MUTED).apply {
-            gravity = android.view.Gravity.CENTER
-        })
+        root.addView(Ui.signature(c).apply { text = "${Ui.SIGNATURE} · ${appVersion()}"; textSize = 11f })
 
         setContentView(ScrollView(c).apply { isFillViewport = true; addView(root) })
         intent?.getStringExtra("text")?.let { panel.setText(it) }

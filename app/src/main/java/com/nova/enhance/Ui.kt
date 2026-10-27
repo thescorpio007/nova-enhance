@@ -28,7 +28,7 @@ object Ui {
     const val MUTED = 0xFF9AA3B5.toInt()
     const val GOOD = 0xFF3DDC97.toInt()
     const val BAD = 0xFFFF6B6B.toInt()
-    const val SIGNATURE = "Designed by A.H"
+    const val SIGNATURE = "Designed by A.HAMROUNI"
 
     fun dp(c: Context, v: Int): Int =
         TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), c.resources.displayMetrics).toInt()
@@ -60,9 +60,9 @@ object Ui {
         setPadding(0, 0, 0, dp(c, 4))
     }
 
-    fun section(c: Context, s: String): TextView = text(c, s.uppercase(), 12f, MUTED, true).apply {
+    fun section(c: Context, s: String): TextView = text(c, s.uppercase(), 11f, MUTED, true).apply {
         letterSpacing = 0.08f
-        setPadding(0, dp(c, 18), 0, dp(c, 8))
+        setPadding(0, dp(c, 12), 0, dp(c, 6))
     }
 
     fun card(c: Context): LinearLayout = col(c, 14).apply {
@@ -80,10 +80,22 @@ object Ui {
             setOnClickListener { onClick() }
         }
 
-    fun chip(c: Context, s: String, selected: Boolean, onClick: () -> Unit): TextView =
-        text(c, s, 14f, if (selected) Color.WHITE else TEXT).apply {
+    /** Slim button (32 dp high) for headers. */
+    fun smallButton(c: Context, s: String, onClick: () -> Unit): TextView =
+        text(c, s, 14f, TEXT).apply {
             gravity = Gravity.CENTER
-            setPadding(dp(c, 14), dp(c, 8), dp(c, 14), dp(c, 8))
+            includeFontPadding = false
+            setPadding(dp(c, 12), 0, dp(c, 12), 0)
+            background = round(CARD2, dp(c, 10).toFloat())
+            minHeight = dp(c, 32); height = dp(c, 32)
+            setOnClickListener { onClick() }
+        }
+
+    fun chip(c: Context, s: String, selected: Boolean, onClick: () -> Unit): TextView =
+        text(c, s, 13f, if (selected) Color.WHITE else TEXT).apply {
+            gravity = Gravity.CENTER
+            includeFontPadding = false
+            setPadding(dp(c, 12), dp(c, 7), dp(c, 12), dp(c, 7))
             background = if (selected) round(ACCENT, dp(c, 20).toFloat())
             else round(CARD2, dp(c, 20).toFloat(), 1, 0x33FFFFFF)
             setOnClickListener { onClick() }
@@ -125,7 +137,7 @@ object Ui {
 
     fun signature(c: Context): TextView = text(c, SIGNATURE, 12f, MUTED).apply {
         gravity = Gravity.CENTER
-        setPadding(0, dp(c, 20), 0, dp(c, 8))
+        setPadding(0, dp(c, 12), 0, dp(c, 6))
     }
 
     fun copy(c: Context, s: String) {

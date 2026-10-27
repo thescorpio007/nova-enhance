@@ -103,24 +103,29 @@ class EnhancePanel(
         // ---------------------------------------------------------------- original
         val head = Ui.row(c)
         head.addView(Ui.section(c, "Original"), Ui.lp(0, weight = 1f))
-        head.setPadding(0, Ui.dp(c, 6), 0, 0)
-        head.addView(langSwitch, Ui.lp(LayoutParams.WRAP_CONTENT, top = Ui.dp(c, 10), end = Ui.dp(c, 6)))
-        head.addView(Ui.text(c, "🎤", 15f, Color.WHITE).apply {
+        head.setPadding(0, Ui.dp(c, 8), 0, 0)
+        val origLabel = head.getChildAt(0) as android.widget.TextView
+        origLabel.setPadding(0, 0, 0, 0)
+        head.addView(langSwitch, Ui.lp(LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+        head.addView(Ui.text(c, "🎤", 12f, Color.WHITE).apply {
             gravity = Gravity.CENTER
             includeFontPadding = false
-            background = Ui.round(Ui.ACCENT, Ui.dp(c, 18).toFloat())
+            background = Ui.round(Ui.ACCENT, Ui.dp(c, 14).toFloat())
             setOnClickListener { listen() }
-        }, LayoutParams(Ui.dp(c, 36), Ui.dp(c, 36)).apply { topMargin = Ui.dp(c, 10); marginEnd = Ui.dp(c, 4) })
-        head.addView(Ui.text(c, "Paste", 14f, Ui.ACCENT, true).apply {
-            setPadding(Ui.dp(c, 10), Ui.dp(c, 18), Ui.dp(c, 4), Ui.dp(c, 8))
+        }, LayoutParams(Ui.dp(c, 28), Ui.dp(c, 28)).apply { marginEnd = Ui.dp(c, 4) })
+        head.addView(Ui.text(c, "Paste", 13f, Ui.ACCENT, true).apply {
+            setPadding(Ui.dp(c, 10), Ui.dp(c, 4), Ui.dp(c, 4), Ui.dp(c, 4))
             setOnClickListener { pasteClipboard() }
         })
-        head.addView(Ui.text(c, "Clear", 14f, Ui.MUTED, true).apply {
-            setPadding(Ui.dp(c, 12), Ui.dp(c, 18), 0, Ui.dp(c, 8))
+        head.addView(Ui.text(c, "Clear", 13f, Ui.MUTED, true).apply {
+            setPadding(Ui.dp(c, 12), Ui.dp(c, 4), 0, Ui.dp(c, 4))
             setOnClickListener { input.setText(""); tabs.clear(); drawResult() }
         })
         addView(head)
-        addView(input, Ui.lp(top = Ui.dp(c, 8)))
+        input.textSize = 15f
+        input.setOnFocusChangeListener { _, has -> if (has && tabs.isNotEmpty()) sizeBoxes(editing = true) }
+        input.setOnClickListener { if (tabs.isNotEmpty()) sizeBoxes(editing = true) }
+        addView(input, Ui.lp(top = Ui.dp(c, 6)))
         addView(countText, Ui.lp(top = Ui.dp(c, 4)))
         addView(warnText, Ui.lp(top = Ui.dp(c, 2)))
         input.addTextChangedListener(object : TextWatcher {
@@ -130,32 +135,32 @@ class EnhancePanel(
         })
 
         // ---------------------------------------------------------------- enhance button + enhanced window
-        val mid = Ui.row(c).apply { setPadding(0, Ui.dp(c, 14), 0, Ui.dp(c, 2)) }
+        val mid = Ui.row(c).apply { setPadding(0, Ui.dp(c, 8), 0, 0) }
         enhancedLabel.setPadding(0, 0, 0, 0)
         mid.addView(enhancedLabel, Ui.lp(0, weight = 1f))
-        mid.addView(Ui.text(c, "✦  Enhance", 16f, Color.WHITE, true).apply {
+        mid.addView(Ui.text(c, "✦ Enhance", 14f, Color.WHITE, true).apply {
             gravity = Gravity.CENTER
             includeFontPadding = false
-            setPadding(Ui.dp(c, 22), 0, Ui.dp(c, 22), 0)
-            background = Ui.round(Ui.ACCENT, Ui.dp(c, 23).toFloat())
+            setPadding(Ui.dp(c, 16), 0, Ui.dp(c, 16), 0)
+            background = Ui.round(Ui.ACCENT, Ui.dp(c, 17).toFloat())
             setOnClickListener { go() }
-        }, LayoutParams(LayoutParams.WRAP_CONTENT, Ui.dp(c, 46)))
+        }, LayoutParams(LayoutParams.WRAP_CONTENT, Ui.dp(c, 34)))
         addView(mid)
 
-        val box = Ui.col(c, 14)
+        val box = Ui.col(c, 12)
         box.background = Ui.round(Ui.CARD, Ui.dp(c, 16).toFloat(), Ui.dp(c, 1) + 1, Ui.ACCENT)
         box.addView(tabsRow.first, Ui.lp())
         box.addView(noteText, Ui.lp(top = Ui.dp(c, 6)))
         box.addView(body, Ui.lp(top = Ui.dp(c, 8)))
-        box.addView(actions, Ui.lp(top = Ui.dp(c, 12)))
-        addView(box, Ui.lp(top = Ui.dp(c, 8)))
-        addView(savedText, Ui.lp(top = Ui.dp(c, 6)))
+        box.addView(actions, Ui.lp(top = Ui.dp(c, 10)))
+        addView(box, Ui.lp(top = Ui.dp(c, 6)))
+        addView(savedText, Ui.lp(top = Ui.dp(c, 4)))
 
         // ---------------------------------------------------------------- choices
         addView(Ui.section(c, "Enhancement"))
         addView(modeRow.first)
         customBox.setText(store.custom)
-        addView(customBox, Ui.lp(top = Ui.dp(c, 10)))
+        addView(customBox, Ui.lp(top = Ui.dp(c, 8)))
         addView(Ui.section(c, "AI"))
         addView(aiRow.first)
         addView(Ui.section(c, "Send through"))
@@ -164,12 +169,36 @@ class EnhancePanel(
         drawModes(); drawAis(); drawRoutes(); drawLangs(); drawResult(); updateCount()
     }
 
-    fun setText(s: String) { input.setText(s); input.setSelection(input.text.length) }
+    /** [auto] = text arrived by Paste, Share, text menu, bubble, tile or voice: enhance it straight away. */
+    fun setText(s: String, auto: Boolean = false) {
+        input.setText(s); input.setSelection(input.text.length)
+        tabs.clear(); drawResult()
+        if (auto) post { autoEnhance() }
+    }
+
+    /** Auto-enhance always uses Fix grammar; other modes run when their chip is tapped. */
+    fun autoEnhance() {
+        if (input.text.isBlank()) return
+        if (store.mode != "grammar") { store.mode = "grammar"; drawModes() }
+        go(auto = true)
+    }
 
     fun pasteClipboard(): Boolean {
         val cm = act.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val t = cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(act)?.toString()
-        return if (!t.isNullOrBlank()) { setText(t); true } else { Ui.toast(act, "Clipboard is empty"); false }
+        return if (!t.isNullOrBlank()) { setText(t, auto = true); true } else { Ui.toast(act, "Clipboard is empty"); false }
+    }
+
+    /**
+     * Before a result: Original is big, Enhanced is a slim line.
+     * After a result: Original shrinks (tap it to expand and edit), Enhanced grows.
+     */
+    private fun sizeBoxes(editing: Boolean = false) {
+        val bigOriginal = tabs.isEmpty() || editing
+        val lines = if (bigOriginal) (if (tabs.isEmpty()) 15 else 10) else 5
+        input.minLines = lines; input.maxLines = lines
+        input.isVerticalScrollBarEnabled = true
+        body.minLines = if (tabs.isEmpty()) 1 else 6
     }
 
     fun refresh() { drawAis() }
@@ -270,8 +299,7 @@ class EnhancePanel(
     fun onVoice(data: Intent?) {
         val said = data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
         if (said.isNullOrBlank()) return
-        setText(said)
-        go()
+        setText(said, auto = true)
     }
 
     private fun drawRoutes() {
@@ -286,6 +314,7 @@ class EnhancePanel(
     // ------------------------------------------------------------------ enhanced window
 
     private fun drawResult() {
+        sizeBoxes()
         val c = act
         tabsRow.second.removeAllViews(); actions.removeAllViews()
         if (tabs.isEmpty()) {
