@@ -47,7 +47,12 @@ jobs:
       - name: Build
         env:
           NOVA_BUILD: ${{ github.run_number }}
-        run: gradle :app:assembleRelease --stacktrace --no-daemon
+        run: |
+          set -o pipefail
+          gradle :app:assembleRelease --no-daemon 2>&1 | tee build.log || {
+            grep -E "^e: |error:" build.log | head -20 | while read -r l; do echo "::error::$l"; done
+            exit 1
+          }
 
       - id: out
         name: Find APK
