@@ -90,8 +90,8 @@ class EnhancePanel(
     val input = Ui.input(act, "Paste, type or share text here…", true, 5)
     private val customBox = Ui.input(act, "Your instruction, e.g. \"Make it friendlier\"", true, 2)
     private val modeRow = Ui.chipRow(act)
-    private val langBox = Ui.col(act)
-    private val langRow = FlowLayout(act, Ui.dp(act, 8), Ui.dp(act, 8))
+    private val trBox = Ui.col(act)
+    private val trRow = FlowLayout(act, Ui.dp(act, 8), Ui.dp(act, 8))
     private val aiRow = Ui.chipRow(act)
     private val routeRow = Ui.chipRow(act)
     private val countText = Ui.text(act, "", 12f, Ui.MUTED)
@@ -278,9 +278,9 @@ class EnhancePanel(
         addView(modeRow.first)
         customBox.setText(store.custom)
         addView(customBox, Ui.lp(top = Ui.dp(c, 8)))
-        langBox.addView(Ui.section(c, "Translate to"))
-        langBox.addView(langRow)
-        addView(langBox)
+        trBox.addView(Ui.section(c, "Translate to"))
+        trBox.addView(trRow)
+        addView(trBox)
         addView(refinePanel, Ui.lp(top = Ui.dp(c, 10)))
         addView(Ui.section(c, "AI"))
         addView(aiRow.first)
@@ -373,7 +373,7 @@ class EnhancePanel(
                 }, Ui.lp(LayoutParams.WRAP_CONTENT, end = Ui.dp(act, 8)))
             }
             customBox.visibility = View.GONE
-            langBox.visibility = View.GONE
+            trBox.visibility = View.GONE
             enhancedLabel.text = "AI ANSWER · " + Modes.askById(store.askStyle).label.uppercase()
             return
         }
@@ -386,19 +386,19 @@ class EnhancePanel(
                 Ui.lp(LayoutParams.WRAP_CONTENT, end = Ui.dp(act, 8)))
         }
         customBox.visibility = if (store.mode == Modes.CUSTOM) View.VISIBLE else View.GONE
-        drawLangs()
+        drawTrLangs()
         enhancedLabel.text = "ENHANCED · " + Modes.label(Modes.byId(store.mode)).uppercase()
     }
 
     /** "Translate to" chips: tap a language to translate straight away. */
-    private fun drawLangs() {
-        langBox.visibility = if (!askMode && store.mode == "translate") View.VISIBLE else View.GONE
-        if (langBox.visibility != View.VISIBLE) return
-        langRow.removeAllViews()
+    private fun drawTrLangs() {
+        trBox.visibility = if (!askMode && store.mode == "translate") View.VISIBLE else View.GONE
+        if (trBox.visibility != View.VISIBLE) return
+        trRow.removeAllViews()
         val cur = store.trLang
         val isOther = Modes.MAIN_LANGS.none { it.first.equals(cur, true) }
-        for ((v, label) in Modes.MAIN_LANGS) langRow.addView(Ui.chip(act, label, v.equals(cur, true)) { pickLang(v) })
-        langRow.addView(Ui.chip(act, if (isOther) Modes.langLabel(cur) + " ▸" else "Others ▸", isOther) { otherLangs() })
+        for ((v, label) in Modes.MAIN_LANGS) trRow.addView(Ui.chip(act, label, v.equals(cur, true)) { pickLang(v) })
+        trRow.addView(Ui.chip(act, if (isOther) Modes.langLabel(cur) + " ▸" else "Others ▸", isOther) { otherLangs() })
     }
 
     private fun pickLang(v: String) {
