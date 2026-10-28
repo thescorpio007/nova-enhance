@@ -26,6 +26,13 @@ class Store(c: Context) {
         get() = sp.getString("mode", "grammar")!!
         set(v) = sp.edit().putString("mode", v).apply()
 
+    /** Translate target, as an English language name ("English", "Arabic", "French", "German", or any). */
+    var trLang: String
+        get() = sp.getString("tr_lang", "English")!!.ifBlank { "English" }
+        set(v) { sp.edit().putString("tr_lang", v.trim()).apply(); Modes.lang = v.trim().ifBlank { "English" } }
+
+    init { Modes.lang = sp.getString("tr_lang", "English")!!.ifBlank { "English" } }
+
     var custom: String
         get() = sp.getString("custom", "")!!
         set(v) = sp.edit().putString("custom", v).apply()

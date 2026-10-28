@@ -39,6 +39,10 @@ class NovaKeyboard : InputMethodService() {
     private lateinit var olderBtn: TextView
     private lateinit var origBtn: TextView
     private var origIdx = 0
+    private lateinit var langBox: LinearLayout
+    private lateinit var langMain: FlowLayout
+    private lateinit var langMore: FlowLayout
+    private var trBtn: TextView? = null
 
     private val modes = listOf("grammar", "shorten", "professional", "informal", "translate")
 
@@ -68,10 +72,15 @@ class NovaKeyboard : InputMethodService() {
 
         // 6 big buttons
         val labels = listOf("grammar" to "✦ Fix grammar", "shorten" to "Shorten", "professional" to "Professional",
-            "informal" to "Informal", "translate" to "Arabic ⇄ English")
+            "informal" to "Informal", "translate" to "🌐 Translate")
         val r1 = Ui.row(c); val r2 = Ui.row(c)
         labels.forEachIndexed { i, (id, label) ->
             val b = key(label, primary = false) { enhance(id) }
+            if (id == "translate") {
+                trBtn = b
+                // Tap = translate to the last language; long-press = pick another language.
+                b.setOnLongClickListener { toggleLangs(); true }
+            }
             modeBtns += id to b
             (if (i < 3) r1 else r2).addView(b, LinearLayout.LayoutParams(0, Ui.dp(c, 44), 1f).apply { marginEnd = Ui.dp(c, 8) })
         }
@@ -81,7 +90,20 @@ class NovaKeyboard : InputMethodService() {
         root.addView(r1, Ui.lp(top = Ui.dp(c, 10)))
         root.addView(r2, Ui.lp(top = Ui.dp(c, 8)))
 
-        status = Ui.text(c, "Tap a mode — replaced in place", 12.5f, Ui.MUTED).apply { maxLines = 1; isSingleLine = true; ellipsize = android.text.TextUtils.TruncateAt.END }
+        // 🌐 Translate to: shown by long-pressing Translate
+        langBox = Ui.col(c).apply {
+            background = Ui.round(0xFF181C24.toInt(), Ui.dp(c, 12).toFloat(), Ui.dp(c, 1), 0x667C6CFF)
+            setPadding(Ui.dp(c, 10), Ui.dp(c, 8), Ui.dp(c, 10), Ui.dp(c, 8))
+            visibility = View.GONE
+        }
+        langBox.addView(Ui.text(c, "🌐 TRANSLATE TO", 12f, 0xFFB9B0FF.toInt(), true))
+        langMain = FlowLayout(c, Ui.dp(c, 6), Ui.dp(c, 6))
+        langMore = FlowLayout(c, Ui.dp(c, 6), Ui.dp(c, 6)).apply { visibility = View.GONE }
+        langBox.addView(langMain, Ui.lp(top = Ui.dp(c, 6)))
+        langBox.addView(langMore, Ui.lp(top = Ui.dp(c, 6)))
+        root.addView(langBox, Ui.lp(top = Ui.dp(c, 8)))
+
+        status = Ui.text(c, "Tap a mode — long-press 🌐 to change the language", 12.5f, Ui.MUTED).apply { maxLines = 1; isSingleLine = true; ellipsize = android.text.TextUtils.TruncateAt.END }
         root.addView(status, Ui.lp(top = Ui.dp(c, 8)))
 
         // 📄 Original box: the text as it was before the last enhancements
@@ -159,7 +181,47 @@ class NovaKeyboard : InputMethodService() {
         setOnClickListener { f() }
     }
 
+    private fun langChip(s: String, on: Boolean, f: () -> Unit) = chip(s) { f() }.apply {
+        if (on) { setTextColor(Color.WHITE); background = Ui.round(Ui.ACCENT, Ui.dp(context, 15).toFloat()) }
+    }
+
+    private fun drawLangs() {
+        val cur = store.trLang
+        langMain.removeAllViews(); langMore.removeAllViews()
+        val isOther = Modes.MAIN_LANGS.none { it.first.equals(cur, true) }
+        for ((v, l) in Modes.MAIN_LANGS) langMain.addView(langChip(l, v.equals(cur, true)) { pickLang(v) }, chipLp0())
+        val open = langMore.visibility == View.VISIBLE
+        langMain.addView(langChip(if (open) "Others ▾" else if (isOther) Modes.langLabel(cur) + " ▸" else "Others ▸", isOther || open) {
+            langMore.visibility = if (langMore.visibility == View.VISIBLE) View.GONE else View.VISIBLE; drawLangs()
+        }, chipLp0())
+        for ((v, l) in Modes.OTHER_LANGS) langMore.addView(langChip(l, v.equals(cur, true)) { pickLang(v) }, chipLp0())
+        langMore.addView(langChip("✎ Type any", false) {
+            try {
+                langBox.visibility = View.GONE
+                back()   // your normal keyboard, so you can type the language name
+                startActivity(android.content.Intent(this, LangActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+            } catch (_: Exception) { say("Couldn't open — set it in the app", Ui.BAD) }
+        }, chipLp0())
+    }
+
+    private fun chipLp0() = android.view.ViewGroup.LayoutParams(android.view.ViewGroup.LayoutParams.WRAP_CONTENT, Ui.dp(this, 32))
+
+    private fun toggleLangs() {
+        if (langBox.visibility == View.VISIBLE) { langBox.visibility = View.GONE; drawModes(); return }
+        langMore.visibility = if (Modes.MAIN_LANGS.none { it.first.equals(store.trLang, true) }) View.VISIBLE else View.GONE
+        drawLangs(); langBox.visibility = View.VISIBLE
+        say("Tap a language — translated in place")
+    }
+
+    private fun pickLang(v: String) {
+        store.trLang = v
+        langBox.visibility = View.GONE
+        drawModes()
+        enhance("translate")
+    }
+
     private fun drawModes() {
+        trBtn?.text = "🌐 → " + Modes.langLabel(store.trLang)
         for ((id, b) in modeBtns) {
             val on = store.mode == id
             b.setTextColor(if (on) Color.WHITE else Ui.TEXT)
@@ -228,14 +290,14 @@ class NovaKeyboard : InputMethodService() {
                 busy = false
                 r.onSuccess { out ->
                     undoText = text; undoWhole = whole
-                    saveOriginal(text, out, whole, mode.label)
+                    saveOriginal(text, out, whole, Modes.label(mode))
                     put(out, whole)
                     val db = Db.get(this)
                     val id = db.newConv(p.id, modeId, text, "api")
                     db.addMsg(id, "user", Modes.firstMessage(mode, store.custom, text)); db.addMsg(id, "assistant", out)
                     val fixed = Diff.countChanged(text, out)
                     sub.text = String.format("Done in %.1f s", (System.currentTimeMillis() - t0) / 1000.0)
-                    say("✓ ${mode.label} applied" + (if (modeId == "grammar") " · $fixed word${if (fixed == 1) "" else "s"} fixed" else "") +
+                    say("✓ ${Modes.label(mode)} applied" + (if (modeId == "grammar") " · $fixed word${if (fixed == 1) "" else "s"} fixed" else "") +
                         " · original saved", Ui.GOOD)
                     if (origBox.visibility == View.VISIBLE) { origIdx = 0; drawOrig() }
                 }.onFailure { e ->

@@ -17,12 +17,33 @@ object Modes {
             "Rewrite the text in a warm, friendly and informal tone, as you would write to a colleague you know well. Keep every fact and the original language."),
         Mode("expand", "Expand",
             "Expand the text with more detail, explanation and smooth flow, without inventing facts that change its meaning."),
-        Mode("translate", "Arabic ⇄ English",
-            "If the text is mainly Arabic, translate it into natural, fluent English. Otherwise translate it into natural, fluent Modern Standard Arabic."),
+        Mode("translate", "Translate", ""),
         Mode(CUSTOM, "Custom", "")
     )
 
     fun byId(id: String?): Mode = all.firstOrNull { it.id == id } ?: all[0]
+
+    // ---------------------------------------------------------------- Translate
+
+    /** Current translate target (kept in sync by Store). */
+    @Volatile var lang: String = "English"
+
+    /** Main four, then "Others". Value = English name sent to the AI, label = native name shown. */
+    val MAIN_LANGS = listOf("English" to "English", "Arabic" to "العربية", "French" to "Français", "German" to "Deutsch")
+    val OTHER_LANGS = listOf("Spanish" to "Español", "Italian" to "Italiano", "Turkish" to "Türkçe", "Urdu" to "اردو Urdu",
+        "Hindi" to "हिन्दी", "Chinese" to "中文", "Russian" to "Русский", "Portuguese" to "Português")
+
+    fun langLabel(l: String = lang): String = (MAIN_LANGS + OTHER_LANGS).firstOrNull { it.first.equals(l, true) }?.second ?: l
+
+    fun translateInstruction(l: String = lang): String {
+        val target = if (l.equals("Arabic", true)) "Modern Standard Arabic" else l
+        val fallback = if (l.equals("English", true)) "Modern Standard Arabic" else "English"
+        return "Translate the text into natural, fluent $target, keeping the meaning, tone, names and technical terms. " +
+            "If the text is already in $l, translate it into $fallback instead."
+    }
+
+    /** Label shown for a mode, e.g. "Translate → Français". */
+    fun label(m: Mode): String = if (m.id == "translate") "Translate → " + langLabel() else m.label
 
     const val SYSTEM =
         "You are Nova Enhance, a text enhancement assistant. You receive a piece of text and an instruction. " +
@@ -72,7 +93,11 @@ object Modes {
     }
 
     fun firstMessage(mode: Mode, custom: String, text: String): String {
-        val instr = if (mode.id == CUSTOM) custom.ifBlank { "Improve this text." } else mode.instruction
+        val instr = when (mode.id) {
+            CUSTOM -> custom.ifBlank { "Improve this text." }
+            "translate" -> translateInstruction()
+            else -> mode.instruction
+        }
         return "Instruction: $instr\n\nText:\n$text"
     }
 }
