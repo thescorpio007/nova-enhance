@@ -133,6 +133,7 @@ jobs:
             adb pull /sdcard/shot.png shot.png
             adb logcat -d > logcat.txt
             if grep -q "FATAL EXCEPTION" logcat.txt; then grep -A 30 "FATAL EXCEPTION" logcat.txt; echo "::error title=Crash::the app crashed"; exit 1; fi
+            adb shell am force-stop com.nova.enhance
             adb logcat -c
             adb shell am start -W -n com.nova.enhance/.MainActivity --es updtest "build-$(printf '%02d' ${{ github.run_number }})"
             for i in $(seq 1 24); do sleep 5; adb logcat -d -s NOVA_UPDTEST:I > updtest.txt; grep -q "PASS\|FAIL" updtest.txt && break; done; cat updtest.txt
