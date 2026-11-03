@@ -66,16 +66,33 @@ jobs:
           name: apk
           path: app/build/outputs/apk/release/*.apk
 
-      - name: Release
+      - name: Checksums signed with the app's own key (the app checks them before updating)
+        env:
+          KP: ${{ secrets.NOVA_ENHANCE_KEY }}
+        run: |
+          set -e
+          cd app/build/outputs/apk/release
+          sha256sum *.apk > SHA256SUMS.txt
+          keytool -importkeystore -noprompt -srckeystore "$GITHUB_WORKSPACE/keystore/nova-enhance.jks" -srcalias novaenhance \
+            -srcstorepass:env KP -srckeypass:env KP -destkeystore /tmp/k.p12 -deststoretype PKCS12 -deststorepass:env KP -destkeypass:env KP
+          openssl pkcs12 -in /tmp/k.p12 -nocerts -nodes -passin env:KP -out /tmp/k.pem
+          openssl pkcs12 -in /tmp/k.p12 -nokeys -clcerts -passin env:KP | openssl x509 -pubkey -noout > /tmp/pub.pem
+          openssl dgst -sha256 -sign /tmp/k.pem -out SHA256SUMS.sig SHA256SUMS.txt
+          openssl dgst -sha256 -verify /tmp/pub.pem -signature SHA256SUMS.sig SHA256SUMS.txt
+          rm -f /tmp/k.p12 /tmp/k.pem
+          echo "::notice title=Checksums::SHA256SUMS.txt signed and verified"
+
+      - name: Release (marked pre-release until the emulator test passes)
         env:
           GH_TOKEN: ${{ github.token }}
           NOVA_BUILD: ${{ github.run_number }}
         run: |
           n=$(printf '%02d' "$NOVA_BUILD")
-          gh release create "build-$n" app/build/outputs/apk/release/*.apk \
+          cd app/build/outputs/apk/release
+          gh release create "build-$n" *.apk SHA256SUMS.txt SHA256SUMS.sig \
             --title "Nova Enhance 1.0 · build $n" \
             --notes "Nova Enhance 1.0 · build $n — tap the .apk below to download and install. Designed by A.H" \
-            --latest
+            --prerelease
 
   smoke-test:
     needs: build
@@ -116,6 +133,11 @@ jobs:
             adb pull /sdcard/shot.png shot.png
             adb logcat -d > logcat.txt
             if grep -q "FATAL EXCEPTION" logcat.txt; then grep -A 30 "FATAL EXCEPTION" logcat.txt; echo "::error title=Crash::the app crashed"; exit 1; fi
+            adb logcat -c
+            adb shell am start -W -n com.nova.enhance/.MainActivity --es updtest "build-$(printf '%02d' ${{ github.run_number }})"
+            for i in $(seq 1 24); do sleep 5; adb logcat -d -s NOVA_UPDTEST:I > updtest.txt; grep -q "PASS\|FAIL" updtest.txt && break; done; cat updtest.txt
+            grep -q "PASS" updtest.txt || { echo "::error title=Update self-test::$(grep NOVA_UPDTEST updtest.txt | tail -1 | cut -c1-400)"; exit 1; }
+            echo "::notice title=Update self-test::$(grep NOVA_UPDTEST updtest.txt | tail -1 | cut -c1-400)"
             adb shell pidof com.nova.enhance && echo "SHORT TEST OK"
 
       - uses: actions/upload-artifact@v4
@@ -125,3 +147,16 @@ jobs:
           path: |
             logcat.txt
             shot.png
+
+  publish:
+    needs: smoke-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Test passed — publish for the app's automatic updates
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOVA_BUILD: ${{ github.run_number }}
+        run: |
+          n=$(printf '%02d' "$NOVA_BUILD")
+          gh release edit "build-$n" --prerelease=false --latest -R "$GITHUB_REPOSITORY"
+          echo "::notice title=Published::build-$n is now the latest release"

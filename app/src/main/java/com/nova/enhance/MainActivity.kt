@@ -11,6 +11,10 @@ class MainActivity : BaseActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        intent?.getStringExtra("updtest")?.let { tag ->                  // automatic test: this build's release passes the update checks
+            val app = applicationContext
+            Thread { android.util.Log.i("NOVA_UPDTEST", Updater.selfTest(app, tag)) }.start()
+        }
         val c = this
         val root = Ui.col(c, 16).apply { setPadding(Ui.dp(c, 16), Ui.dp(c, 6), Ui.dp(c, 16), Ui.dp(c, 8)) }
 
@@ -55,6 +59,7 @@ class MainActivity : BaseActivity() {
         val ready = Providers.all.any { s.hasKey(it) || AccountSend.installed(this, it) }
         setupCard.visibility = if (ready) android.view.View.GONE else android.view.View.VISIBLE
         panel.refresh()
+        try { Updater.maybe(this); Updater.offerOnOpen(this) } catch (_: Exception) { }
     }
 
     private fun appVersion(): String = try {

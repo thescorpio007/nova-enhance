@@ -542,6 +542,9 @@ class SettingsActivity : BaseActivity() {
         card.addView(Ui.text(c, "Source code: github.com/thescorpio007/nova-enhance", 13f, Ui.ACCENT).apply {
             setPadding(0, Ui.dp(c, 10), 0, 0); setOnClickListener { openUrl("https://github.com/thescorpio007/nova-enhance") }
         })
+        card.addView(Ui.text(c, Updater.status(c).ifBlank { "Updates: checked once a day from GitHub (signature, SHA-256 and signing key verified before installing)." },
+            12f, Ui.MUTED).apply { setPadding(0, Ui.dp(c, 10), 0, 0) })
+        card.addView(Ui.button(c, "⬆ Check for updates") { startActivity(Intent(c, UpdateActivity::class.java)) }, Ui.lp(top = Ui.dp(c, 6)))
         root.addView(card, Ui.lp(top = Ui.dp(c, 6)))
     }
 
