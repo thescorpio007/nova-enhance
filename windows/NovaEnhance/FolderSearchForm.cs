@@ -233,6 +233,11 @@ class FolderSearchForm : NovaForm
         split.Panel2.Controls.Add(preview);
 
         var bottom = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, BackColor = Th.Bg, Padding = new Padding(14, 4, 14, 4) };
+        bottom.Controls.Add(Th.B("📌 Save as task", () =>
+        {
+            if (all.Count == 0) return;
+            Screens.Saved(Work.FromFiles(query.Text, folder.Text, all.ToList()));
+        }));
         bottom.Controls.Add(Th.B("⇩ Export", Export));
         bottom.Controls.Add(Th.B("🖨 Report", Report));
         bottom.Controls.Add(Th.B("📁 Search Results", () => Shell.Open(Paths.SearchResults)));

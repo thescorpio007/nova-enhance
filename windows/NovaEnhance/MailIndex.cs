@@ -83,6 +83,16 @@ static class Outlook
         finally { Release(item); }
     }
 
+    /// <summary>Saves the email as an Outlook .msg file (with its attachments).</summary>
+    public static void SaveMsg(string entry, string store, string path)
+    {
+        dynamic app = Get();
+        dynamic ns = app.GetNamespace("MAPI");
+        dynamic item = ns.GetItemFromID(entry, store);
+        try { item.SaveAs(path, 9); }   // olMSGUnicode
+        finally { Release(item); Release(ns); }
+    }
+
     public static void Open(string entry, string store)
     {
         dynamic app = Get();

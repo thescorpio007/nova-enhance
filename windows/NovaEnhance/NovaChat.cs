@@ -108,6 +108,16 @@ class NovaChat
                 case "copy": Clipboard.SetText(m["text"]?.ToString() ?? " "); break;
                 case "saveWord": SaveWord(m["id"]?.ToString(), m["idx"]?.GetValue<int>() ?? -1); break;
                 case "draftReply": DraftReply(m["id"]?.ToString(), m["idx"]?.GetValue<int>() ?? -1); break;
+                case "saveTask":
+                {
+                    var (chat, a, q) = Pick(m["id"]?.ToString(), m["idx"]?.GetValue<int>() ?? -1);
+                    if (a == null) break;
+                    var links = (a["sources"] as JsonArray ?? new JsonArray()).OfType<JsonObject>().Select(x => x["kind"]?.ToString() == "email"
+                        ? new WorkItem { Kind = "mail", Entry = x["entry"]?.ToString() ?? "", Store = x["store"]?.ToString() ?? "", Subject = x["label"]?.ToString() ?? "" }
+                        : new WorkItem { Kind = "file", Path = x["path"]?.ToString() ?? "", Subject = x["label"]?.ToString() ?? "", Loc = x["loc"]?.ToString() ?? "", Goto = x["goto"]?.ToString() ?? "" }).ToList();
+                    Screens.Saved(Work.FromText(q.Length > 0 ? q : chat?["title"]?.ToString() ?? "Nova Chat", q, a["text"]?.ToString() ?? "", "chat", links));
+                    break;
+                }
                 case "mic": await Mic(m["on"]?.GetValue<bool>() == true); break;
             }
         }

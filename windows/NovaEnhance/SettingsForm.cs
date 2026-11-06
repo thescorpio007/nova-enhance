@@ -290,6 +290,12 @@ class SettingsForm : NovaForm
         pp.Controls.Add(lead);
         pp.Controls.Add(Th.L("minutes before", 10, Th.Text));
 
+        page.Add(Th.Section("📌 My Work"));
+        Note("Saved searches and answers become live tasks (Documents\\Nova Enhance\\My Work), included in your backup.");
+        page.Add(Th.Check("Also create an Outlook task for each (shows in Outlook To-Do and Microsoft To Do on your phone; done there = done in Nova)", Work.OutlookSync, v => Work.OutlookSync = v));
+        page.Add(Th.Check("Write the 📊 weekly report every Thursday from 17:00", Work.WeeklyAuto, v => Work.WeeklyAuto = v));
+        page.Add(Th.Row(false)).Controls.Add(Th.B("📌 Open My Work", () => Screens.Work(null)));
+
         page.Add(Th.Section("Mailboxes and folders"));
         Note("Everything is indexed: your mailbox, shared mailboxes, Online Archive, Groups and .pst archives (public folders and Search Folders are skipped). Untick a folder to leave it out of the index and of the answers.");
         var folders = MailIndex.Folders();

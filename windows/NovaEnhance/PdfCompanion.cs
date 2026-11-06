@@ -233,6 +233,12 @@ class PdfPanel : NovaForm
         var r3 = s.Add(Th.Row());
         r3.Controls.Add(Th.B("⧉ Copy", () => { if (lastAnswer.Length > 0) Clipboard.SetText(lastAnswer); }));
         r3.Controls.Add(Th.B("More detail", () => { if (lastQuestion.Length > 0) Ask(lastQuestion, true); else Summary(); }));
+        r3.Controls.Add(Th.B("📌 Save as task", () =>
+        {
+            if (lastAnswer.Length == 0) { status.Text = "Ask or summarise first, then save it as a task."; return; }
+            var link = new WorkItem { Kind = "file", Path = path, Subject = Path.GetFileName(path) };
+            Screens.Saved(Work.FromText((lastQuestion.Length > 0 ? lastQuestion : "Check") + " · " + Path.GetFileNameWithoutExtension(path), lastQuestion, lastAnswer, "pdf", new[] { link }));
+        }));
 
         s.Add(Th.Section("Search in this PDF"));
         find = s.Add(Th.Box(false), true);

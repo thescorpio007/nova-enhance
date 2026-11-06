@@ -40,7 +40,9 @@ static class Backup
         };
         if (keys.Count > 0) root["keys"] = Encrypt(keys.ToJsonString(), password);
         root["windows"] = Encrypt(win.ToJsonString(), password);
-        var extra = new JsonObject { ["secrets"] = winSecrets, ["originals"] = OriginalsText() };
+        var work = new JsonArray();
+        try { foreach (var f in Directory.GetFiles(Work.Dir, "*.json")) work.Add(File.ReadAllText(f)); } catch { }
+        var extra = new JsonObject { ["secrets"] = winSecrets, ["originals"] = OriginalsText(), ["work"] = work };
         root["windows_extra"] = Encrypt(extra.ToJsonString(), password);
         return root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
     }
@@ -142,7 +144,17 @@ static class Backup
                 int ns = 0;
                 if (x["secrets"] is JsonObject sec) foreach (var (k, v) in sec) { Store.SetSecret(k, v?.ToString()); ns++; }
                 int no = RestoreOriginals(x["originals"]?.ToString());
-                extraNote = $" · {ns} sign-in(s) restored (Google Drive) · {no} original(s) restored";
+                int nw = 0;
+                foreach (var w in (x["work"] as JsonArray ?? new JsonArray()).Select(v => v?.ToString()).Where(v => !string.IsNullOrEmpty(v)))
+                    try
+                    {
+                        var id = JsonNode.Parse(w)?["Id"]?.ToString();
+                        if (string.IsNullOrEmpty(id)) continue;
+                        var file = Path.Combine(Work.Dir, id + ".json");
+                        if (!File.Exists(file)) { File.WriteAllText(file, w, new UTF8Encoding(false)); nw++; }
+                    }
+                    catch { }
+                extraNote = $" · {ns} sign-in(s) restored (Google Drive) · {no} original(s) restored · {nw} task(s) restored (My Work)";
             }
             catch { extraNote = " · Google Drive sign-in and originals NOT restored (wrong password)"; }
         }

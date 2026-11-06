@@ -80,6 +80,7 @@ class NovaContext : ApplicationContext
         m.Items.Add("✦  Enhance selected text      Ctrl+Shift+E", null, (_, _) => Screens.Enhance());
         m.Items.Add("🔍  Ask Nova about my email   Ctrl+Shift+F", null, (_, _) => Screens.Ask());
         m.Items.Add("💬  Nova Chat & AI Hub        Ctrl+Shift+A", null, (_, _) => Screens.Hub(null));
+        m.Items.Add("📌  My Work", null, (_, _) => Screens.Work(null));
         m.Items.Add("📄  Nova for this PDF                Ctrl+Shift+D", null, (_, _) => PdfCompanion.Open());
         m.Items.Add("📁  Search inside a folder…", null, (_, _) => Screens.FolderSearch(null));
         m.Items.Add("☀  Morning brief", null, (_, _) => Screens.Brief());
@@ -149,6 +150,7 @@ class NovaContext : ApplicationContext
             AutoBackup.MaybeRun();
             BriefLogic.MaybeShow();
             Calendar.Tick();
+            Work.Tick();
             if (ticks++ % 60 == 0 && Updater.Due) { await Updater.Check(); Updater.Offer(false); }
         }
         catch (Exception e) { Log.Error("tick", e); }
@@ -201,6 +203,25 @@ static class Screens
     static BriefForm brief;
     static FolderSearchForm folder;
     static HubForm hub;
+    static WorkForm work;
+
+    public static void Work(string id)
+    {
+        try
+        {
+            if (work == null || work.IsDisposed) work = new WorkForm();
+            Show(work);
+            work.Reload(id);
+        }
+        catch (Exception e) { Log.Error("My Work", e); }
+    }
+
+    /// <summary>📌 Save as task, then show it in My Work.</summary>
+    public static void Saved(WorkTask t)
+    {
+        Program.Balloon("📌 Saved in My Work", t.Title);
+        Work(t.Id);
+    }
 
     public static void HubAttach(string path)
     {

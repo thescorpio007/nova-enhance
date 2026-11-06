@@ -93,6 +93,7 @@
     btn("⧉ Copy", function () { post({ t: "copy", text: m.text }); });
     if (cur.ctxUsed && cur.ctxUsed.emails && cur.ctxUsed.emails.length) btn("✉ Draft reply to " + cur.ctxUsed.emails[0].from.split(" ")[0], function () { post({ t: "draftReply", id: cur.id, idx: idx }); });
     btn("⇩ Save as Word", function () { post({ t: "saveWord", id: cur.id, idx: idx }); });
+    btn("📌 Save as task", function () { post({ t: "saveTask", id: cur.id, idx: idx }); });
     if (!m.detailed) btn("More detail", function () { send(m.question || "", true); });
     d.appendChild(acts);
     function btn(t, f) { var b = el("button", null, t); b.onclick = f; acts.appendChild(b); }

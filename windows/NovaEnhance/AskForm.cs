@@ -142,6 +142,8 @@ class MailList : FlowLayoutPanel
             btns.Controls.Add(Th.B("Summary", () => OnSummary?.Invoke(h)));
             btns.Controls.Add(Th.B(h.Sent ? "✦ Draft follow-up" : "✦ Draft reply", () => OnDraft?.Invoke(h), true));
             if (!h.Sent && OnHandled != null) btns.Controls.Add(Th.B("✓ Handled", () => OnHandled(h)));
+            btns.Controls.Add(Th.B("💾 Save as…", () => MailFile.SaveAs(h, FindForm())));
+            btns.Controls.Add(Th.B("⧉ Copy as file", () => MailFile.Copy(h, FindForm())));
             card.Controls.Add(btns);
         }
         else
@@ -157,6 +159,53 @@ class MailList : FlowLayoutPanel
         s ??= "";
         var parts = s.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         return parts.Length <= max ? string.Join(", ", parts) : string.Join(", ", parts.Take(max)) + $" +{parts.Length - max}";
+    }
+}
+
+/// <summary>💾 Save as… and ⧉ Copy as file: the email as an Outlook .msg file, named date · sender · subject.</summary>
+static class MailFile
+{
+    public static string Name(MailHit h)
+    {
+        var who = h.Sent ? "Me" : (h.FromName ?? "");
+        var subj = System.Text.RegularExpressions.Regex.Replace(h.Subject ?? "", @"^\s*((re|fw|fwd)\s*:\s*)+", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        var name = $"{h.Date:yyyy-MM-dd} {who} - {subj}";
+        name = System.Text.RegularExpressions.Regex.Replace(name, @"[\\/:*?""<>|\r\n\t]+", " ");
+        name = System.Text.RegularExpressions.Regex.Replace(name, @"\s{2,}", " ").Trim().TrimEnd('.');
+        return name.Length > 150 ? name[..150].Trim() : name;
+    }
+
+    public static void SaveAs(MailHit h, IWin32Window owner)
+    {
+        try
+        {
+            using var d = new SaveFileDialog { Title = "Save the email", Filter = "Outlook email with attachments (*.msg)|*.msg", FileName = Name(h) + ".msg", AddExtension = true, DefaultExt = "msg", OverwritePrompt = true };
+            var last = Store.Str("win_msg_dir");
+            if (last.Length > 0 && Directory.Exists(last)) d.InitialDirectory = last;
+            if (d.ShowDialog(owner) != DialogResult.OK) return;
+            Outlook.SaveMsg(h.Entry, h.StoreId, d.FileName);
+            Store.Set("win_msg_dir", Path.GetDirectoryName(d.FileName) ?? "");
+            Work.LogMail(h, "💾 Saved as " + Path.GetFileName(d.FileName));
+            Program.Balloon("Nova Enhance", "✓ Email saved: " + Path.GetFileName(d.FileName));
+        }
+        catch (Exception e) { MessageBox.Show(owner, "Could not save the email: " + e.Message + "\n\n(Outlook needs to be open.)", "Nova Enhance"); Log.Error("save msg", e); }
+    }
+
+    public static void Copy(MailHit h, IWin32Window owner)
+    {
+        try
+        {
+            var dir = Path.Combine(Paths.Cache, "copied emails", DateTime.Now.ToString("yyyyMMdd-HHmmss"));
+            Directory.CreateDirectory(dir);
+            var file = Path.Combine(dir, Name(h) + ".msg");
+            Outlook.SaveMsg(h.Entry, h.StoreId, file);
+            var list = new System.Collections.Specialized.StringCollection { file };
+            Clipboard.SetFileDropList(list);
+            Program.Balloon("Nova Enhance", "✓ Copied — open any folder and press Ctrl+V to paste the email there");
+            // Old copies are cleaned after a week.
+            try { foreach (var old in Directory.GetDirectories(Path.Combine(Paths.Cache, "copied emails")).Where(x => Directory.GetCreationTime(x) < DateTime.Now.AddDays(-7))) Directory.Delete(old, true); } catch { }
+        }
+        catch (Exception e) { MessageBox.Show(owner, "Could not copy the email: " + e.Message + "\n\n(Outlook needs to be open.)", "Nova Enhance"); Log.Error("copy msg", e); }
     }
 }
 
@@ -222,6 +271,8 @@ class ReadPane : Panel
         btns.Controls.Add(Th.B("Summary", () => OnSummary?.Invoke(h)));
         btns.Controls.Add(Th.B(h.Sent ? "✦ Draft follow-up" : "✦ Draft reply", () => OnDraft?.Invoke(h), true));
         if (!h.Sent) btns.Controls.Add(Th.B("✓ Mark as handled", () => OnHandled?.Invoke(h)));
+        btns.Controls.Add(Th.B("💾 Save as…", () => MailFile.SaveAs(h, FindForm())));
+        btns.Controls.Add(Th.B("⧉ Copy as file", () => MailFile.Copy(h, FindForm())));
         var body = (h.Body ?? "").Replace("\r\n", "\n").Trim();
         if (body.Length > 20000) body = body[..20000] + "\n…";
         var bl = s.Add(Th.Wrap(body.Length > 0 ? body : "(no text)", 10.5f, Th.Text));
@@ -368,6 +419,12 @@ class AskForm : NovaForm
         follow.PlaceholderText = "Ask a follow-up… e.g. only with attachments";
         bottom.Controls.Add(follow);
         bottom.Controls.Add(Th.B("Ask", () => Run(follow.Text, true)));
+        bottom.Controls.Add(Th.B("📌 Save as task", () =>
+        {
+            if (hits.Count == 0) return;
+            var intent = lastFilter?["intent"]?.ToString() ?? "search";
+            Screens.Saved(NovaEnhance.Work.FromMail(lastQuestion, lastFilter, intent, hits));
+        }, true));
         bottom.Controls.Add(Th.B("⇩ Export list", Export));
         bottom.Controls.Add(Th.B("☀ Brief", Screens.Brief));
         bottom.Controls.Add(Th.B("📁 Search a folder", () => Screens.FolderSearch(null)));
@@ -546,6 +603,7 @@ class AskForm : NovaForm
     void MarkHandled(MailHit h)
     {
         Outstanding.MarkHandled(h, true);
+        NovaEnhance.Work.LogMail(h, "✓ Handled");
         lastHandled = h;
         var i = list.Order.IndexOf(h);
         hits.Remove(h);
@@ -595,6 +653,7 @@ class AskForm : NovaForm
             try
             {
                 Outlook.Reply(h.Entry, h.StoreId, draft, false);
+                NovaEnhance.Work.LogMail(h, "✦ Draft reply opened");
                 ShowMessage("✓ The draft is open in Outlook — check it, then press Send. A copy is saved in Documents\\Nova Enhance\\Drafts.");
             }
             catch (Exception e)
@@ -640,6 +699,8 @@ class BriefForm : NovaForm
         info = stack.Add(Th.Wrap("", 9.5f));
         var row = stack.Add(Th.Row());
         row.Controls.Add(Th.B("↻ Refresh", Reload, true));
+        row.Controls.Add(Th.B("📌 Save as task", () => { if (lastNeeds.Count > 0) Screens.Saved(NovaEnhance.Work.FromMail("What is waiting for my reply (morning brief)", null, "outstanding", lastNeeds, "brief")); }));
+        row.Controls.Add(Th.B("📌 My Work", () => Screens.Work(null)));
         row.Controls.Add(Th.B("⇩ Export", Export));
         row.Controls.Add(Th.B("📁 Briefs folder", () => Shell.Open(Paths.Briefs)));
         row.Controls.Add(Th.B("🔍 Ask Nova", Screens.Ask));
@@ -695,7 +756,9 @@ class BriefForm : NovaForm
             lastNeeds = n; lastFollow = f;
             await DrawCalendar(n);
             int red = n.Count(h => h.Status == "needs"), orange = n.Count(h => h.Status == "week"), fyi = n.Count(h => h.Status == "fyi");
-            info.Text = $"{DateTime.Now:dddd dd MMMM} · 🔴 {red} overdue · 🟠 {orange} this week · ⚪ {fyi} FYI · ↩ {f.Count} follow-ups · last {Store.BriefDays} days · Index: {MailIndex.Status}";
+            var wk = NovaEnhance.Work.All();
+            int wDue = wk.Count(t => t.DueToday), wOver = wk.Count(t => t.Overdue), wWait = wk.Count(t => t.Status == "waiting");
+            info.Text = (wDue + wOver + wWait > 0 ? $"📌 My Work: {wDue} due today · {wOver} overdue · {wWait} waiting for others\n" : "") + $"{DateTime.Now:dddd dd MMMM} · 🔴 {red} overdue · 🟠 {orange} this week · ⚪ {fyi} FYI · ↩ {f.Count} follow-ups · last {Store.BriefDays} days · Index: {MailIndex.Status}";
             needsTitle.Text = $"WAITING FOR YOUR REPLY ({n.Count})";
             followTitle.Text = Store.FollowUps ? $"YOUR EMAILS WITH NO ANSWER AFTER {Store.FollowDays} DAYS ({f.Count})" : "FOLLOW-UPS ARE OFF (SETTINGS → EMAIL & AI)";
             var w = Math.Max(300, stack.ClientSize.Width - 50);
