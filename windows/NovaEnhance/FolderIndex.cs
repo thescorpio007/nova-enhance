@@ -401,7 +401,7 @@ static class FolderIndex
         }
     }
 
-    class ReadResult { public Item It; public List<Seg> Segs; public string Note = ""; public Problem Problem; }
+    class ReadResult { public Item It; public List<Seg> Segs; public string Note = ""; public Problem Problem; public bool ContentRead; }
 
     static void SearchLocked(string root, Matcher m, HashSet<string> kinds, Action<FileHit> onHit, Action<string> onRemove, Progress pg, CancellationToken ct, Options opt)
     {
@@ -511,6 +511,7 @@ static class FolderIndex
                     r.Problem ??= new Problem { Path = it.Key, Name = it.Name, Reason = "Could not save in the index: " + e.Message, Action = "" };
                 }
                 if (r.Problem != null) pg.Problems.Enqueue(r.Problem);
+                if (r.ContentRead) pg.Read++;
                 pg.Done++;
                 Interlocked.Add(ref pg.Bytes, it.Size);
                 if (++batch >= 15) { tx.Commit(); tx.Dispose(); tx = c.BeginTransaction(); batch = 0; }
@@ -567,6 +568,7 @@ static class FolderIndex
                 FileText.LastError = null;
                 var segs = FileText.Extract(local);
                 r.Segs.AddRange(segs);
+                r.ContentRead = true;
                 var err = FileText.LastError;
                 if (err != null)
                     r.Problem = new Problem

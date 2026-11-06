@@ -180,11 +180,11 @@ static class Smoke
         try { new Matcher("A-(", "regex", false, false); Ok(false, "Bad regular expression refused"); } catch (ArgumentException) { Ok(true, "Bad regular expression refused with a clear message"); }
 
         var spec = Path.Combine(r10, "Sub", "Specification.pdf");
-        using (var pv = new PdfPreview(spec))
+        using (var pdfPrev = new PdfPreview(spec))
         {
-            var marks = pv.Marks(3, new Matcher("A-201 Rev C", "phrase", false, false));
-            using var bmp = pv.Render(3, 800);
-            Ok(pv.Pages == 3 && marks.Count >= 1 && bmp.Width == 800 && marks[0].Width > 0.05 && marks[0].Y > 0 && marks[0].Y < 0.3,
+            var marks = pdfPrev.Marks(3, new Matcher("A-201 Rev C", "phrase", false, false));
+            using var bmp = pdfPrev.Render(3, 800);
+            Ok(pdfPrev.Pages == 3 && marks.Count >= 1 && bmp.Width == 800 && marks[0].Width > 0.05 && marks[0].Y > 0 && marks[0].Y < 0.3,
                 $"Preview: page 3 drawn ({bmp.Width}×{bmp.Height}), yellow mark at x {marks.FirstOrDefault().X:0.00} y {marks.FirstOrDefault().Y:0.00} w {marks.FirstOrDefault().Width:0.00}");
         }
         FolderIndex.Forget(r10);
