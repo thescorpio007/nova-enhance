@@ -797,7 +797,7 @@ static class FolderIndex
 
     public static string Export(string title, IEnumerable<FileHit> hits)
     {
-        var dir = Path.Combine(Paths.Root, "Search Results");
+        var dir = Paths.SearchResults;
         Directory.CreateDirectory(dir);
         var stamp = DateTime.Now.ToString("yyyy-MM-dd-HHmm");
         var csv = Path.Combine(dir, $"{History.SafeName(title, 40)} {stamp}.csv");

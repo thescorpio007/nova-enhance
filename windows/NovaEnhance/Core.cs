@@ -16,6 +16,7 @@ static class Paths
     public static string Briefs => Sub("Briefs");
     public static string Drafts => Sub("Drafts");
     public static string Logs => Sub("Logs");
+    public static string SearchResults => Sub("Search Results");
     public static string MailIndexDocs => Sub("Mail Index");
     /// <summary>Used when "keep the mail index on this PC only" is on (not synced by OneDrive).</summary>
     public static string MailIndexLocal => Make(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Nova Enhance", "Mail Index"));
@@ -35,7 +36,13 @@ static class Shell
 {
     public static void Open(string path)
     {
-        try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); } catch (Exception e) { Log.Error("open " + path, e); }
+        try
+        {
+            // A Nova folder that hasn't been used yet (e.g. Search Results before the first export) is created instead of failing.
+            if (path.StartsWith(Paths.Root, StringComparison.OrdinalIgnoreCase) && !File.Exists(path) && !Directory.Exists(path)) Directory.CreateDirectory(path);
+            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+        }
+        catch (Exception e) { Log.Error("open " + path, e); }
     }
 
     public static void Select(string file)

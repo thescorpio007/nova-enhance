@@ -235,7 +235,7 @@ class FolderSearchForm : NovaForm
         var bottom = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, BackColor = Th.Bg, Padding = new Padding(14, 4, 14, 4) };
         bottom.Controls.Add(Th.B("⇩ Export", Export));
         bottom.Controls.Add(Th.B("🖨 Report", Report));
-        bottom.Controls.Add(Th.B("📁 Search Results", () => Shell.Open(Path.Combine(Paths.Root, "Search Results"))));
+        bottom.Controls.Add(Th.B("📁 Search Results", () => Shell.Open(Paths.SearchResults)));
         bottom.Controls.Add(Th.B("⚙ File types & OCR", () => Screens.Settings("Folder search")));
         var sig = Th.Signature(); sig.Margin = new Padding(20, 10, 0, 0);
         bottom.Controls.Add(sig);

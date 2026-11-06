@@ -101,7 +101,7 @@ static class FolderAsk
 
     public static string Save(string question, string answer, List<FolderIndex.Passage> ps, string root)
     {
-        var dir = Path.Combine(Paths.Root, "Search Results");
+        var dir = Paths.SearchResults;
         Directory.CreateDirectory(dir);
         var f = Path.Combine(dir, $"Ask AI {History.SafeName(question, 40)} {DateTime.Now:yyyy-MM-dd-HHmm}.txt");
         var sb = new StringBuilder();
