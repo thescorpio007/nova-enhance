@@ -255,15 +255,32 @@ class SettingsForm : NovaForm
         ir.Controls.Add(Th.B("📁 Index folder", () => Shell.Open(Store.IndexLocal ? Paths.MailIndexLocal : Paths.MailIndexDocs)));
     }
 
+    // Options on one page share one parent, and Windows would treat them all as ONE group (picking an email source
+    // un-ticked "What the AI may see"). Each run of options under a heading is its own group instead.
+    List<RadioButton> optGroup;
+    Control optPage;
+    int optEnd = -1;
+
     void Opt(string title, string sub, bool on, Action pick)
     {
-        var r = page.Add(Th.Radio(title, on, pick));
+        if (optPage != page || page.Controls.Count != optEnd) { optGroup = new List<RadioButton>(); optPage = page; }
+        var group = optGroup;
+        var r = page.Add(Th.Radio(title, on, null));
+        r.AutoCheck = false;
         r.Margin = new Padding(0, 6, 0, 0);
+        r.Click += (_, _) =>
+        {
+            if (r.Checked) return;
+            foreach (var o in group) o.Checked = o == r;
+            pick?.Invoke();
+        };
+        group.Add(r);
         if (sub.Length > 0)
         {
             var l = Note(sub);
             l.Margin = new Padding(20, 0, 0, 2);
         }
+        optEnd = page.Controls.Count;
     }
 
     // ------------------------------------------------------------------ Folder search
