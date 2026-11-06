@@ -19,10 +19,16 @@ static class Backup
         var settings = new JsonObject();
         var keys = new JsonObject();
         var win = new JsonObject();
+        var winSecrets = new JsonObject();
         foreach (var (k, v) in Store.Snapshot())
         {
             if (k == "win_backup_pw") continue;
             if (k.StartsWith("key_")) { var s = Store.Secret(k); if (s.Length > 0) keys[k] = s; continue; }
+            if (k.StartsWith("win_") && v is JsonValue sv && sv.TryGetValue<string>(out var str) && str.StartsWith("dpapi:"))
+            {
+                // Locked to this Windows account: unlock and keep it under the backup password instead, so it works on another PC.
+                var plain = Store.Secret(k); if (plain.Length > 0) winSecrets[k] = plain; continue;
+            }
             if (k.StartsWith("win_")) { win[k] = v?.DeepClone(); continue; }
             var t = Typed(v);
             if (t != null) settings[k] = t;
@@ -34,7 +40,41 @@ static class Backup
         };
         if (keys.Count > 0) root["keys"] = Encrypt(keys.ToJsonString(), password);
         root["windows"] = Encrypt(win.ToJsonString(), password);
+        var extra = new JsonObject { ["secrets"] = winSecrets, ["originals"] = OriginalsText() };
+        root["windows_extra"] = Encrypt(extra.ToJsonString(), password);
         return root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    static string OriginalsFile => Path.Combine(Paths.Originals, "originals.jsonl");
+
+    static string OriginalsText()
+    {
+        try { return File.Exists(OriginalsFile) ? File.ReadAllText(OriginalsFile) : ""; } catch { return ""; }
+    }
+
+    static int RestoreOriginals(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return 0;
+        var have = File.Exists(OriginalsFile) ? new HashSet<string>(File.ReadAllLines(OriginalsFile)) : new HashSet<string>();
+        var add = text.Split('\n').Select(l => l.TrimEnd('\r')).Where(l => l.Trim().Length > 0 && !have.Contains(l)).ToList();
+        if (add.Count == 0) return 0;
+        // Merge by time so the newest 20 shown in Nova stay the real newest.
+        var all = have.Where(l => l.Trim().Length > 0).Concat(add)
+            .OrderBy(l => { try { return JsonNode.Parse(l)?["Ts"]?.GetValue<long>() ?? 0; } catch { return 0L; } }).ToList();
+        File.WriteAllLines(OriginalsFile, all.TakeLast(500));
+        return add.Count;
+    }
+
+    /// <summary>Opens a backup file that was just written and unlocks every locked part, so a damaged file is found now and not on the day it's needed.</summary>
+    public static string Verify(string path, string password)
+    {
+        JsonObject root;
+        try { root = JsonNode.Parse(File.ReadAllText(path))?.AsObject(); } catch { throw new InvalidDataException("the file can't be read back"); }
+        if (root?["app"]?.ToString() != "Nova Enhance" || root["settings"] is not JsonObject) throw new InvalidDataException("the file is incomplete");
+        foreach (var part in new[] { "keys", "windows", "windows_extra" })
+            if (root[part] is JsonObject enc)
+                try { JsonNode.Parse(Decrypt(enc, password)); } catch { throw new InvalidDataException($"the locked part \"{part}\" can't be opened with the password"); }
+        return $"✓ checked ({new FileInfo(path).Length / 1024.0:0.#} KB)";
     }
 
     static JsonObject Typed(JsonNode v)
@@ -93,6 +133,20 @@ static class Backup
             catch { winNote = " · Windows email settings NOT restored (wrong password)"; }
         }
 
+        var extraNote = "";
+        if (root["windows_extra"] is JsonObject xenc)
+        {
+            try
+            {
+                var x = JsonNode.Parse(Decrypt(xenc, password)).AsObject();
+                int ns = 0;
+                if (x["secrets"] is JsonObject sec) foreach (var (k, v) in sec) { Store.SetSecret(k, v?.ToString()); ns++; }
+                int no = RestoreOriginals(x["originals"]?.ToString());
+                extraNote = $" · {ns} sign-in(s) restored (Google Drive) · {no} original(s) restored";
+            }
+            catch { extraNote = " · Google Drive sign-in and originals NOT restored (wrong password)"; }
+        }
+
         int conv = 0;
         if (root["history"] is JsonArray hist && hist.Count > 0)
         {
@@ -100,7 +154,21 @@ static class Backup
             var from = root["from"]?.ToString() == "windows" ? "windows" : "phone";
             File.WriteAllText(Path.Combine(Paths.History, $"restored-{from}-{DateTime.Now:yyyy-MM-dd-HHmm}.json"), hist.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         }
-        return $"{n} setting(s) restored · {keysNote}{winNote} · {conv} conversation(s) saved in History";
+        var applied = Reapply();
+        return $"{n} setting(s) restored · {keysNote}{winNote}{extraNote} · {conv} conversation(s) saved in History{applied}";
+    }
+
+    /// <summary>Sets up again on this PC what lives outside the settings file: start with Windows, the Explorer menu, the Office add-in.</summary>
+    public static Func<bool> OfficeReinstall = () => { OfficeAddin.InstallForMe(); return true; };
+
+    static string Reapply()
+    {
+        var done = new List<string>();
+        try { Startup.Apply(); done.Add("start with Windows"); } catch (Exception e) { Log.Error("restore startup", e); }
+        try { ExplorerMenu.Apply(); done.Add("Explorer menu"); } catch (Exception e) { Log.Error("restore explorer", e); }
+        if (Store.Bool("win_addin", false))
+            try { if (OfficeReinstall()) done.Add("Office add-in"); } catch (Exception e) { Log.Error("restore office", e); done.Add("⚠ Office add-in (open Settings → Office)"); }
+        return done.Count > 0 ? "\nSet up again on this PC: " + string.Join(", ", done) : "";
     }
 
     static long ToLong(JsonNode v)
@@ -154,7 +222,38 @@ static class Backup
         var name = $"Nova-Enhance-Backup-{DateTime.Now:yyyy-MM-dd-HHmm}{(auto ? "-auto" : "")}{Ext}";
         var path = Path.Combine(Paths.Backups, name);
         File.WriteAllText(path, Build(password), new UTF8Encoding(false));
+        try { LastCheck = Verify(path, password); }
+        catch (Exception e)
+        {
+            LastCheck = "⚠ check failed: " + e.Message;
+            Log.Error("backup check", e);
+            Program.Balloon("Backup check failed", "The new backup could not be opened again (" + e.Message + "). Try Backup now in Settings.");
+            throw new InvalidDataException("The backup was written but the check failed: " + e.Message);
+        }
         return path;
+    }
+
+    public static string LastCheck = "";
+
+    public static bool DriveCopy { get => Store.Bool("win_backup_gdrive", false); set => Store.SetBool("win_backup_gdrive", value); }
+
+    /// <summary>Second copy in Google Drive ("Nova Enhance Backups"), when the box is ticked. Returns a short status.</summary>
+    public static async Task<string> CopyToDrive(string path)
+    {
+        if (!DriveCopy) return "";
+        try
+        {
+            await GDrive.SaveBackup(path, Store.KeepBackups);
+            var note = $"☁ copied to Google Drive {DateTime.Now:dd MMM HH:mm}";
+            Store.Set("win_last_drive_note", "✓ " + note);
+            return " · " + note;
+        }
+        catch (Exception e)
+        {
+            Log.Error("backup drive copy", e);
+            Store.Set("win_last_drive_note", $"⚠ Google Drive copy failed {DateTime.Now:dd MMM HH:mm}: {e.Message}");
+            return " · ⚠ Google Drive copy failed: " + e.Message;
+        }
     }
 }
 
@@ -163,7 +262,7 @@ static class AutoBackup
 {
     public static string Status => Store.Str("win_last_backup_note", "No automatic backup yet");
 
-    public static void MaybeRun()
+    public static async void MaybeRun()
     {
         if (!Store.AutoBackup) return;
         var today = DateTime.Now.ToString("yyyy-MM-dd");
@@ -182,8 +281,10 @@ static class AutoBackup
         {
             var f = Backup.WriteFile(pw, true);
             Store.Set("win_last_backup_day", today);
-            Store.Set("win_last_backup_note", $"✓ Last automatic backup {DateTime.Now:dd MMM yyyy HH:mm} · {Path.GetFileName(f)}");
+            Store.Set("win_last_backup_note", $"✓ Last automatic backup {DateTime.Now:dd MMM yyyy HH:mm} · {Path.GetFileName(f)} · {Backup.LastCheck}");
             Prune();
+            var drive = await Backup.CopyToDrive(f);
+            if (drive.Length > 0) Store.Set("win_last_backup_note", Store.Str("win_last_backup_note") + drive);
         }
         catch (Exception e) { Store.Set("win_last_backup_note", "⚠ Automatic backup failed: " + e.Message); Log.Error("auto backup", e); }
     }

@@ -23,7 +23,9 @@ class DriveFile
 /// </summary>
 static class GDrive
 {
-    const string Scope = "https://www.googleapis.com/auth/drive.readonly";
+    const string Scope = "https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file";
+    const string Upload = "https://www.googleapis.com/upload/drive/v3";
+    const string BackupFolder = "Nova Enhance Backups";
     const string Api = "https://www.googleapis.com/drive/v3";
     public const string Folder = "application/vnd.google-apps.folder";
 
@@ -95,6 +97,7 @@ static class GDrive
         var refresh = tok["refresh_token"]?.ToString();
         if (string.IsNullOrEmpty(refresh)) throw new InvalidOperationException("Google did not give a lasting sign-in — remove Nova in your Google account's third-party access and sign in again.");
         Refresh = refresh;
+        Store.Set("win_gd_scope", tok["scope"]?.ToString() ?? "");
         access = tok["access_token"]?.ToString();
         accessUntil = DateTime.UtcNow.AddSeconds((tok["expires_in"]?.GetValue<int>() ?? 3600) - 120);
         try
@@ -106,10 +109,82 @@ static class GDrive
         return Account;
     }
 
+    /// <summary>True when the sign-in allows Nova to save its own files (backups) in Drive. Older sign-ins were read-only.</summary>
+    public static bool CanSave => SignedIn && Store.Str("win_gd_scope").Contains("drive.file");
+
+    static async Task<HttpResponseMessage> Send(HttpMethod method, string url, HttpContent body = null)
+    {
+        using var req = new HttpRequestMessage(method, url) { Content = body };
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", await Token());
+        return await Http.SendAsync(req);
+    }
+
+    static async Task<JsonObject> SendJson(HttpMethod method, string url, HttpContent body = null)
+    {
+        using var res = await Send(method, url, body);
+        var text = await res.Content.ReadAsStringAsync();
+        if (!res.IsSuccessStatusCode)
+        {
+            string msg = text;
+            try { msg = JsonNode.Parse(text)?["error"]?["message"]?.ToString() ?? text; } catch { }
+            if ((int)res.StatusCode == 403 && msg.Contains("scope", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("The Google sign-in doesn't allow saving backups — sign in again in Settings → Google Drive.");
+            throw new InvalidOperationException($"Google Drive {(int)res.StatusCode}: {msg}");
+        }
+        return string.IsNullOrWhiteSpace(text) ? new JsonObject() : JsonNode.Parse(text)?.AsObject() ?? new JsonObject();
+    }
+
+    static async Task<string> BackupFolderId()
+    {
+        var cached = Store.Str("win_gd_backup_folder");
+        if (cached.Length > 0)
+        {
+            try
+            {
+                var f = await SendJson(HttpMethod.Get, $"{Api}/files/{cached}?fields=id,trashed");
+                if (f["trashed"]?.GetValue<bool>() != true) return cached;
+            }
+            catch { }
+        }
+        var q = Uri.EscapeDataString($"name='{BackupFolder}' and mimeType='{Folder}' and trashed=false");
+        var list = await SendJson(HttpMethod.Get, $"{Api}/files?q={q}&fields=files(id)&spaces=drive");
+        var id = (list["files"] as JsonArray)?.FirstOrDefault()?["id"]?.ToString();
+        if (id == null)
+        {
+            var meta = new JsonObject { ["name"] = BackupFolder, ["mimeType"] = Folder };
+            id = (await SendJson(HttpMethod.Post, $"{Api}/files?fields=id", new StringContent(meta.ToJsonString(), Encoding.UTF8, "application/json")))["id"]?.ToString();
+        }
+        Store.Set("win_gd_backup_folder", id ?? "");
+        return id;
+    }
+
+    /// <summary>Copies a backup file into "Nova Enhance Backups" in the user's Drive; keeps the newest <paramref name="keepAuto"/> automatic copies.</summary>
+    public static async Task SaveBackup(string path, int keepAuto)
+    {
+        if (!CanSave) throw new InvalidOperationException("Sign in to Google Drive again in Settings → Google Drive to allow saving backups.");
+        var folder = await BackupFolderId();
+        var meta = new JsonObject { ["name"] = Path.GetFileName(path), ["parents"] = new JsonArray(JsonValue.Create(folder)) };
+        using var body = new MultipartContent("related");
+        body.Add(new StringContent(meta.ToJsonString(), Encoding.UTF8, "application/json"));
+        var file = new ByteArrayContent(await File.ReadAllBytesAsync(path));
+        file.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        body.Add(file);
+        var up = await SendJson(HttpMethod.Post, $"{Upload}/files?uploadType=multipart&fields=id,size", body);
+        if (up["id"] == null) throw new InvalidOperationException("Google Drive did not confirm the upload.");
+
+        var q = Uri.EscapeDataString($"'{folder}' in parents and name contains '-auto' and trashed=false");
+        var list = await SendJson(HttpMethod.Get, $"{Api}/files?q={q}&fields=files(id,name)&pageSize=200&orderBy=name desc");
+        foreach (var old in (list["files"] as JsonArray ?? new JsonArray()).Skip(keepAuto))
+        {
+            var oldId = old?["id"]?.ToString();
+            if (oldId != null) try { using var _ = await Send(HttpMethod.Delete, $"{Api}/files/{oldId}"); } catch { }
+        }
+    }
+
     public static async Task SignOut()
     {
         var r = Refresh;
-        Refresh = ""; access = null; Store.Set("win_gd_email", "");
+        Refresh = ""; access = null; Store.Set("win_gd_email", ""); Store.Set("win_gd_scope", "");
         if (r.Length > 0)
             try { await Http.PostAsync("https://oauth2.googleapis.com/revoke?token=" + Uri.EscapeDataString(r), null); } catch { }
     }

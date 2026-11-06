@@ -23,6 +23,25 @@
     <button data-mode="translate" id="tr">🌐 → English</button>
   </div>
   <div class="row"><span class="small">Translate to</span> <select id="lang"></select></div>
+  <div id="xlnote" class="small muted hide">Excel: select one cell, or many cells (each is changed on its own). Select one empty cell to do the whole sheet.</div>
+</div>
+
+<div id="xlask" class="hide">
+  <div class="sec">Whole sheet?</div>
+  <div class="small">No text is selected. Change every text cell on this sheet?</div>
+  <div class="row"><button id="xlyes" class="primary">▦ Yes, whole sheet</button> <button id="xlno">Cancel</button></div>
+</div>
+
+<div id="xlprog" class="hide">
+  <div class="bar"><div id="xlbar"></div></div>
+  <div class="row"><span id="xlcount" class="small"></span> <button id="xlstop">■ Stop</button></div>
+</div>
+
+<div id="xlreview" class="hide">
+  <div class="sec" id="xltitle">Changes</div>
+  <div class="row small"><a href="#" id="xlall">Tick all</a> · <a href="#" id="xlnone">Untick all</a></div>
+  <div id="xllist" class="xllist"></div>
+  <div class="row"><button id="xlapply" class="primary">✓ Apply</button> <button id="xlcancel">Cancel</button></div>
 </div>
 
 <div id="mailread" class="hide">

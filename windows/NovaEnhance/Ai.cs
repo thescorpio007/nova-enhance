@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace NovaEnhance;
@@ -211,6 +212,37 @@ static class Ai
         foreach (var part in parts)
             outs.Add(await Chat(Modes.System(), Modes.FirstMessage(mode, part), true, false, p, ct));
         return string.Join("\n\n", outs);
+    }
+
+    /// <summary>
+    /// Excel: many cells in one request. Each cell is handled on its own; codes, references, names and numbers come back unchanged.
+    /// Returns the new text by cell id (cells the AI left out are missing from the result).
+    /// </summary>
+    public static async Task<Dictionary<string, string>> EnhanceCells(Provider p, string modeId, IList<(string Id, string Text)> cells, CancellationToken ct)
+    {
+        var mode = Modes.ById(modeId);
+        string instr = mode.Id switch
+        {
+            "custom" => string.IsNullOrWhiteSpace(Store.Custom) ? "Improve this text." : Store.Custom,
+            "translate" => $"Translate the text into natural, fluent {(Store.TrLang.Equals("Arabic", StringComparison.OrdinalIgnoreCase) ? "Modern Standard Arabic" : Store.TrLang)}, keeping the meaning, names and technical terms. If a cell is already in that language, return it unchanged.",
+            _ => mode.Instruction
+        };
+        var sys = "You are Nova Enhance working on spreadsheet cells. You receive a JSON object \"cells\" mapping a cell id to its text, and one instruction. " +
+                  "Apply the instruction to EACH cell separately; never merge, split, move or drop cells. " +
+                  "Return a cell UNCHANGED when it is a code, drawing or document reference, revision, item number, unit, name, e-mail, link, number or date " +
+                  "(e.g. \"A-201 Rev C\", \"D-03\", \"RFI-044\", \"mm\", \"Nos\"), or when it needs no change. " +
+                  "Keep each cell's line breaks, and keep it about as short as it was unless the instruction says otherwise. " +
+                  "Reply with ONLY a JSON object {\"cells\": {...}} with exactly the same ids." + Modes.ProfileNote();
+        var input = new JsonObject();
+        foreach (var (id, text) in cells) input[id] = text;
+        var user = $"Instruction: {instr}\n\n" + new JsonObject { ["cells"] = input }.ToJsonString(new JsonSerializerOptions { Encoder = global::System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+        var reply = await Chat(sys, user, true, true, p, ct);
+        var res = new Dictionary<string, string>();
+        var o = ParseJson(reply);
+        var map = o["cells"] as JsonObject ?? o;
+        foreach (var (id, _) in cells)
+            if (map[id] is JsonValue v && v.TryGetValue<string>(out var t)) res[id] = t;
+        return res;
     }
 
     static List<string> Split(string t, int max)

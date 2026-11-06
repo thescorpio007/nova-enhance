@@ -447,7 +447,7 @@ static class Server
         switch (p)
         {
             case "/api/ping":
-                return new JsonObject { ["ok"] = true, ["build"] = Program.Build, ["ai"] = Ai.Active()?.Label ?? "", ["lang"] = Store.TrLang, ["langLabel"] = Modes.LangLabel(), ["sign"] = Program.Sign };
+                return new JsonObject { ["ok"] = true, ["build"] = Program.Build, ["ai"] = Ai.Active()?.Label ?? "", ["lang"] = Store.TrLang, ["langLabel"] = Modes.LangLabel(), ["sign"] = Program.Sign, ["cellReview"] = Store.Bool("win_xl_review", true) };
             case "/api/langs":
             {
                 var a = new JsonArray();
@@ -466,6 +466,35 @@ static class Server
                 History.SaveOriginal(mode, text, outText);
                 History.Add("enhance", prov.Id, Store.Model(prov.Id), mode, text, outText);
                 return new JsonObject { ["result"] = outText, ["label"] = Modes.Label(mode), ["ai"] = prov.Label };
+            }
+            case "/api/cells":
+            {
+                // Excel: a batch of cells (the panel sends up to ~25 at a time and shows the progress).
+                var mode = S(r, "mode"); if (mode.Length == 0) mode = "grammar";
+                if (S(r, "lang").Length > 0) Store.TrLang = S(r, "lang");
+                var prov = Ai.Active() ?? throw new AiException("Add an AI key in Nova Enhance → Settings → AI & API keys");
+                var list = new List<(string, string)>();
+                foreach (var it in r["items"] as JsonArray ?? new JsonArray())
+                    if (it is JsonObject jo && S(jo, "id").Length > 0 && S(jo, "text").Trim().Length > 0) list.Add((S(jo, "id"), S(jo, "text")));
+                if (list.Count == 0) return new JsonObject { ["items"] = new JsonArray() };
+                using var _ = Log.Doing($"Office panel · Excel cells · {Modes.Label(mode)} ({list.Count})");
+                var got = await Ai.EnhanceCells(prov, mode, list, CancellationToken.None);
+                var outArr = new JsonArray();
+                foreach (var (id, text) in list)
+                    outArr.Add(new JsonObject { ["id"] = id, ["result"] = got.TryGetValue(id, out var t) ? t : null });
+                History.Add("enhance", prov.Id, Store.Model(prov.Id), mode, $"Excel · {list.Count} cells", $"{got.Count} answered");
+                return new JsonObject { ["items"] = outArr, ["label"] = Modes.Label(mode), ["ai"] = prov.Label };
+            }
+            case "/api/cellsoriginal":
+            {
+                // Keeps the cells' text before the change in Documents\Nova Enhance\Originals (the panel also keeps it for ↩ Put back original).
+                var mode = S(r, "mode");
+                var sb = new StringBuilder();
+                var after = new StringBuilder();
+                foreach (var it in r["items"] as JsonArray ?? new JsonArray())
+                    if (it is JsonObject jo) { sb.Append(S(jo, "addr")).Append(": ").AppendLine(S(jo, "before")); after.Append(S(jo, "addr")).Append(": ").AppendLine(S(jo, "after")); }
+                if (sb.Length > 0) History.SaveOriginal(mode, sb.ToString().TrimEnd(), after.ToString().TrimEnd());
+                return new JsonObject { ["ok"] = true };
             }
             case "/api/originals":
             {

@@ -682,7 +682,7 @@ class PageCanvas : Control
         g.Clear(BackColor);
         if (Message.Length > 0)
         {
-            TextRenderer.DrawText(g, Message, Th.F(11), ClientRectangle, Th.Muted, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
+            TextRenderer.DrawText(g, Message, Th.F(11), ClientRectangle, Th.Muted, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
             return;
         }
         if (Zoom <= 0) return;

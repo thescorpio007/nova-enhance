@@ -14,3 +14,8 @@ input{width:100%;margin:2px 0 4px}textarea{width:100%;resize:vertical}
 .orig{background:#181C24;border:1px solid #3A3320;border-radius:8px;padding:8px;color:#FFD27A;max-height:120px;overflow:auto;white-space:pre-wrap}
 .hide{display:none}
 .foot{margin-top:14px;font-size:11px;color:#6B7385}.foot a{color:#B9B0FF}
+.bar{height:6px;background:#232A3A;border-radius:3px;overflow:hidden;margin:6px 0}#xlbar{height:6px;width:0;background:#7C6CFF}
+.xllist{max-height:340px;overflow:auto;border:1px solid #2E3546;border-radius:8px;background:#181C24}
+.xlit{padding:6px 8px;border-bottom:1px solid #232A3A;font-size:12px}.xlit label{display:block;cursor:pointer}
+.xlit .ad{color:#B9B0FF;font-weight:bold;margin-right:4px}.xlit .b{color:#9AA3B5;text-decoration:line-through;white-space:pre-wrap}.xlit .a{color:#ECEEF3;white-space:pre-wrap}
+.foot a,.row a{color:#B9B0FF}

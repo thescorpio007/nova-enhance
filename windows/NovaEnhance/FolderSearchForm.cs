@@ -276,7 +276,7 @@ class FolderSearchForm : NovaForm
         {
             using var b = new SolidBrush(Color.FromArgb(0x15, 0x19, 0x22));
             e.Graphics.FillRectangle(b, e.Bounds);
-            TextRenderer.DrawText(e.Graphics, e.Header.Text.ToUpperInvariant(), Th.F(8, true), new Rectangle(e.Bounds.X + 6, e.Bounds.Y, e.Bounds.Width - 6, e.Bounds.Height), Th.Muted, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
+            TextRenderer.DrawText(e.Graphics, e.Header.Text.ToUpperInvariant(), Th.F(8, true), new Rectangle(e.Bounds.X + 6, e.Bounds.Y, e.Bounds.Width - 6, e.Bounds.Height), Th.Muted, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         };
         lv.DrawItem += (_, e) => { };
         lv.DrawSubItem += (s, e) =>
@@ -312,7 +312,7 @@ class FolderSearchForm : NovaForm
             var sz = TextRenderer.MeasureText(e.Graphics, t, f, new Size(int.MaxValue, e.Bounds.Height), flags);
             var r = new Rectangle(x, e.Bounds.Y + 2, Math.Min(sz.Width, right - x), e.Bounds.Height - 4);
             if (back != null) using (var bb = new SolidBrush(back.Value)) e.Graphics.FillRectangle(bb, r);
-            TextRenderer.DrawText(e.Graphics, t, f, r, c, flags | TextFormatFlags.EndEllipsis);
+            TextRenderer.DrawText(e.Graphics, t, f, r, c, flags | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
             x += sz.Width;
         }
         Part(pre, Th.F(9.5f), Color.FromArgb(0xC9, 0xCE, 0xD8), null);

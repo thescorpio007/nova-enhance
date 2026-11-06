@@ -28,7 +28,7 @@ class SettingsForm : NovaForm
             using var bg = new SolidBrush(sel ? Th.Card2 : nav.BackColor);
             e.Graphics.FillRectangle(bg, e.Bounds);
             TextRenderer.DrawText(e.Graphics, Sections[e.Index], Th.F(10.5f, sel), new Rectangle(e.Bounds.X + 16, e.Bounds.Y, e.Bounds.Width - 16, e.Bounds.Height),
-                sel ? Color.White : Color.FromArgb(0xC9, 0xCE, 0xD8), TextFormatFlags.VerticalCenter | TextFormatFlags.Left);
+                sel ? Color.White : Color.FromArgb(0xC9, 0xCE, 0xD8), TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix);
         };
         nav.SelectedIndexChanged += (_, _) => Draw(Sections[Math.Max(0, nav.SelectedIndex)]);
         host = new Panel { Dock = DockStyle.Fill, BackColor = Th.Bg };
@@ -323,9 +323,9 @@ class SettingsForm : NovaForm
     // ------------------------------------------------------------------ Google Drive
     void GoogleDrive()
     {
-        Note("Two ways: (1) Google Drive for desktop — your Drive appears as G:\\ and Nova searches it like any folder; (2) the Google sign-in below — Nova reads Drive folders directly, including Google Docs, Sheets and Slides. Access is read-only.");
+        Note("Two ways: (1) Google Drive for desktop — your Drive appears as G:\\ and Nova searches it like any folder; (2) the Google sign-in below — Nova reads Drive folders directly, including Google Docs, Sheets and Slides. Nova only reads your files; the one thing it writes is its own \"Nova Enhance Backups\" folder, when you tick that box in Backup & restore.");
         page.Add(Th.Section("Status"));
-        Note(GDrive.SignedIn ? $"✓ Connected{(GDrive.Account.Length > 0 ? " as " + GDrive.Account : "")} (read-only)" : GDrive.Configured ? "Not signed in yet" : "Not set up yet — follow the steps below once", GDrive.SignedIn ? Th.Good : Th.Warn);
+        Note(GDrive.SignedIn ? $"✓ Connected{(GDrive.Account.Length > 0 ? " as " + GDrive.Account : "")}{(GDrive.CanSave ? "" : " (read-only — sign in again to allow backups)")}" : GDrive.Configured ? "Not signed in yet" : "Not set up yet — follow the steps below once", GDrive.SignedIn ? Th.Good : Th.Warn);
         var row = page.Add(Th.Row(false));
         var st = Th.L("", 9.5f, Th.Muted);
         if (GDrive.SignedIn)
@@ -383,7 +383,7 @@ class SettingsForm : NovaForm
     // ------------------------------------------------------------------ Backup
     void BackupPage()
     {
-        Note("One file with your settings, About me, terms and history. API keys and email choices inside it are locked with your password. Same format as the phone: a phone backup restores here, and this one restores on the phone.");
+        Note("One file with all your settings, About me, terms, saved searches, history and kept originals. API keys, the Google Drive sign-in and the Windows choices inside it are locked with your password, so it also restores on a new PC. Each backup is opened again right after it is written to check it. Same format as the phone: a phone backup restores here, and this one restores on the phone.");
         page.Add(Th.Section("Backup password"));
         var pw = page.Add(Th.Row(false));
         var a = Th.Box(false, 1, true); a.Width = 220; a.PlaceholderText = "Password";
@@ -407,16 +407,47 @@ class SettingsForm : NovaForm
         ab.Controls.Add(keep);
         Note(AutoBackup.Status, Th.Text);
 
+        page.Add(Th.Section("Second copy in Google Drive"));
+        var gd = page.Add(Th.Row(false));
+        var gst = Th.L("", 9.5f, Th.Muted);
+        void GdState()
+        {
+            if (!Backup.DriveCopy) { gst.Text = "Off — backups stay only in Documents\\Nova Enhance\\Backups"; gst.ForeColor = Th.Muted; return; }
+            if (!GDrive.SignedIn) { gst.Text = "⚠ Sign in to Google Drive first (Settings → Google Drive)"; gst.ForeColor = Th.Warn; return; }
+            if (!GDrive.CanSave) { gst.Text = "⚠ Sign in to Google Drive again to allow Nova to save backups"; gst.ForeColor = Th.Warn; return; }
+            var n = Store.Str("win_last_drive_note");
+            gst.Text = n.Length > 0 ? n : $"✓ On — each backup is also saved in \"Nova Enhance Backups\" in {GDrive.Account}";
+            gst.ForeColor = n.StartsWith("⚠") ? Th.Warn : Th.Good;
+        }
+        gd.Controls.Add(Th.Check("Also save each backup in my Google Drive (folder \"Nova Enhance Backups\", same number kept)", Backup.DriveCopy, v => { Backup.DriveCopy = v; GdState(); }));
+        if (GDrive.Configured && !GDrive.CanSave)
+            gd.Controls.Add(Th.B("Sign in to Google Drive", async () =>
+            {
+                try { await GDrive.SignIn(); } catch (Exception e) { gst.Text = "⚠ " + e.Message; gst.ForeColor = Th.Bad; return; }
+                Store.Set("win_last_drive_note", ""); GdState();
+            }));
+        GdState();
+        page.Add(gst);
+
         page.Add(Th.Section("Now"));
         var st = Th.L("", 9.5f, Th.Good);
         var row = page.Add(Th.Row());
-        row.Controls.Add(Th.B("💾 Backup now", () =>
+        row.Controls.Add(Th.B("💾 Backup now", async () =>
         {
             var p = Store.BackupPassword;
             if (p.Length == 0) p = Prompt.Ask(this, "Backup", "Password for the API keys in this backup:", "", true);
             if (string.IsNullOrEmpty(p)) return;
-            try { var f = Backup.WriteFile(p, false); st.Text = "✓ " + Path.GetFileName(f); st.ForeColor = Th.Good; Shell.Select(f); }
-            catch (Exception e) { st.Text = "⚠ " + e.Message; st.ForeColor = Th.Bad; }
+            string f;
+            try { f = Backup.WriteFile(p, false); st.Text = "✓ " + Path.GetFileName(f) + " · " + Backup.LastCheck; st.ForeColor = Th.Good; Shell.Select(f); }
+            catch (Exception e) { st.Text = "⚠ " + e.Message; st.ForeColor = Th.Bad; return; }
+            if (Backup.DriveCopy)
+            {
+                st.Text += " · ☁ copying to Google Drive…";
+                var d = await Backup.CopyToDrive(f);
+                st.Text = "✓ " + Path.GetFileName(f) + " · " + Backup.LastCheck + d;
+                if (d.Contains("⚠")) st.ForeColor = Th.Warn;
+                GdState();
+            }
         }, true));
         row.Controls.Add(Th.B("↺ Restore…", () =>
         {
@@ -573,6 +604,13 @@ class SettingsForm : NovaForm
             OfficeAddin.Uninstall(); Draw("Office tab");
         }));
         page.Add(st);
+
+        page.Add(Th.Section("Excel · many cells at once"));
+        Note("Select cells (or one empty cell for the whole sheet) and press any button in the Nova panel: each text cell is changed on its own. Empty cells, numbers, dates, formulas and codes like \"A-201 Rev C\" are skipped. ↩ Put back original restores every changed cell.");
+        var rv = page.Add(Th.Row());
+        bool review = Store.Bool("win_xl_review", true);
+        rv.Controls.Add(Th.Radio("Show the list of changes first (Cell · Before → After), then Apply", review, () => Store.SetBool("win_xl_review", true)));
+        rv.Controls.Add(Th.Radio("Apply straight away and mark changed cells in light yellow", !review, () => Store.SetBool("win_xl_review", false)));
 
         page.Add(Th.Section("B · Through company IT (Microsoft 365)"));
         Note("Nova saves the two add-in files and a one-page note for IT. IT uploads them once in the Microsoft 365 admin center → Integrated apps; the Nova tab then appears by itself in Outlook, Word, Excel and PowerPoint. Each PC still needs Nova Enhance installed and the panel trusted (button below).", Th.Text);

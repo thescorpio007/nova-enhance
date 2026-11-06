@@ -8,6 +8,9 @@ using Microsoft.Data.Sqlite;
 namespace NovaEnhance;
 
 /// <summary>Talks to the classic Outlook already installed and signed in on this PC.</summary>
+/// <summary>Stops an index pass at once when Outlook goes away or is busy; the next pass carries on where this one stopped.</summary>
+class OutlookPause : Exception { public readonly bool Closed; public OutlookPause(bool closed, Exception inner) : base(closed ? "Outlook was closed" : "Outlook is busy", inner) { Closed = closed; } }
+
 static class Outlook
 {
     [DllImport("ole32.dll")] static extern int CLSIDFromProgID([MarshalAs(UnmanagedType.LPWStr)] string progId, out Guid clsid);
@@ -33,6 +36,22 @@ static class Outlook
         if (o != null) return o;
         var t = Type.GetTypeFromProgID("Outlook.Application") ?? throw new InvalidOperationException("Outlook isn't installed on this PC");
         return Activator.CreateInstance(t);
+    }
+
+    /// <summary>Outlook was closed, restarted or crashed while Nova was reading it (the connection is gone).</summary>
+    public static bool Gone(Exception e)
+    {
+        for (var x = e; x != null; x = x.InnerException)
+            if ((uint)x.HResult is 0x800706BA or 0x800706BE or 0x80010108 or 0x80010012) return true;
+        return false;
+    }
+
+    /// <summary>Outlook is busy (a dialog is open, or it is syncing) and refused the call for now.</summary>
+    public static bool Busy(Exception e)
+    {
+        for (var x = e; x != null; x = x.InnerException)
+            if ((uint)x.HResult is 0x80010001 or 0x8001010A) return true;
+        return false;
     }
 
     public static void Release(object o)
@@ -244,6 +263,15 @@ static class MailIndex
                 if (Store.EmailSource == "m365") Status = "Microsoft 365 connection comes in build 2 (needs IT approval) — choose \"Outlook on this PC\" or \"Both\"";
                 else Pass();
             }
+            catch (Exception e) when (e is OutlookPause || Outlook.Gone(e) || Outlook.Busy(e))
+            {
+                bool closed = e is OutlookPause op ? op.Closed : Outlook.Gone(e);
+                Status = closed ? $"Outlook was closed at {DateTime.Now:HH:mm} — the index carries on by itself when Outlook is open"
+                                : $"Outlook was busy at {DateTime.Now:HH:mm} — trying again in 2 minutes";
+                Log.Warn("index", closed ? "Outlook was closed or restarted while the mail index was reading it — will continue later (nothing lost)" : "Outlook was busy — will try again");
+                wake.WaitOne(TimeSpan.FromMinutes(2));
+                continue;
+            }
             catch (Exception e) { Status = "⚠ " + e.Message; Log.Error("index", e); }
             wake.WaitOne(TimeSpan.FromMinutes(10));
         }
@@ -320,6 +348,8 @@ static class MailIndex
                     Walk(c, (object)root, storeId, sentId, skip, cutoff, 0);
                     Outlook.Release(root);
                 }
+                catch (OutlookPause) { throw; }
+                catch (Exception e) when (Outlook.Gone(e) || Outlook.Busy(e)) { throw new OutlookPause(Outlook.Gone(e), e); }
                 catch (Exception e) { Log.Error("index store", e); }
                 finally { Outlook.Release(st); }
             }
@@ -377,6 +407,8 @@ static class MailIndex
         {
             bool sent = id.Equals(sentId, StringComparison.OrdinalIgnoreCase) || name.Contains("Sent", StringComparison.OrdinalIgnoreCase);
             try { IndexFolder(c, (object)folder, id, name, storeId, sent, cutoff); }
+            catch (OutlookPause) { throw; }
+            catch (Exception e) when (Outlook.Gone(e) || Outlook.Busy(e)) { throw new OutlookPause(Outlook.Gone(e), e); }
             catch (Exception e) { Log.Error("index folder " + name, e); }
         }
         dynamic subs = null;
@@ -390,6 +422,8 @@ static class MailIndex
                 try { Walk(c, (object)f, storeId, sentId, skip, cutoff, depth + 1); } finally { Outlook.Release(f); }
             }
         }
+        catch (OutlookPause) { throw; }
+        catch (Exception e) when (Outlook.Gone(e)) { throw new OutlookPause(true, e); }
         catch { }
         finally { Outlook.Release(subs); }
     }
@@ -441,6 +475,7 @@ static class MailIndex
                         }
                     }
                 }
+                catch (Exception e) when (Outlook.Gone(e) || Outlook.Busy(e)) { Outlook.Release(it); throw new OutlookPause(Outlook.Gone(e), e); }
                 catch (Exception e) { if (errors++ < 3) Log.Error("index item", e); }
                 Outlook.Release(it);
                 if (batch >= 50)
