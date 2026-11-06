@@ -1,0 +1,31 @@
+{
+ "app": "Nova Enhance",
+ "format": 1,
+ "created": 1762400000000,
+ "settings": {
+  "p_fields": {
+   "t": "s",
+   "v": "Architecture"
+  },
+  "tr_lang": {
+   "t": "s",
+   "v": "French"
+  },
+  "p_asked": {
+   "t": "b",
+   "v": true
+  },
+  "first_run": {
+   "t": "b",
+   "v": true
+  }
+ },
+ "history": [],
+ "keys": {
+  "alg": "AES-256-GCM/PBKDF2-SHA256",
+  "iter": 120000,
+  "salt": "fkBGVEVXhJLUGBdAL7n9Gg==",
+  "iv": "pdz6AnA5R8baWEVP",
+  "data": "hSC5hb2xx9ZSz9RAAI0Aw8Ww2oIfL+NV3BQwexIqK4t0PWQ50yl8ilNQuy+ZUyQ="
+ }
+}

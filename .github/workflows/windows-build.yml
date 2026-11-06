@@ -1,0 +1,135 @@
+name: Build Windows
+
+# Nova Enhance for Windows. Only runs when the Windows code changes (the APK build ignores it).
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'windows/**'
+      - '.github/workflows/windows-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-windows
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Signing key (public half built into the app, private half signs the checksums)
+        shell: bash
+        env:
+          KP: ${{ secrets.NOVA_ENHANCE_KEY }}
+        run: |
+          set -e
+          [ -n "$KP" ] || { echo "::error title=Signing key::NOVA_ENHANCE_KEY secret missing"; exit 1; }
+          K="$RUNNER_TEMP/k"; mkdir -p "$K"
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in keystore/nova-enhance.jks.enc -out "$K/ne.jks" -pass env:KP
+          KT="$JAVA_HOME_17_X64/bin/keytool"; [ -x "$KT" ] || KT="$JAVA_HOME_21_X64/bin/keytool"; [ -x "$KT" ] || KT="$JAVA_HOME/bin/keytool"; [ -x "$KT" ] || KT=keytool
+          "$KT" -importkeystore -noprompt -srckeystore "$K/ne.jks" -srcalias novaenhance -srcstorepass:env KP -srckeypass:env KP \
+            -destkeystore "$K/k.p12" -deststoretype PKCS12 -deststorepass:env KP -destkeypass:env KP
+          openssl pkcs12 -in "$K/k.p12" -nocerts -nodes -passin env:KP -out "$K/k.pem" 2>/dev/null || openssl pkcs12 -legacy -in "$K/k.p12" -nocerts -nodes -passin env:KP -out "$K/k.pem"
+          { openssl pkcs12 -in "$K/k.p12" -nokeys -clcerts -passin env:KP 2>/dev/null || openssl pkcs12 -legacy -in "$K/k.p12" -nokeys -clcerts -passin env:KP; } | openssl x509 -pubkey -noout > "$K/pub.pem"
+          rm -f "$K/ne.jks" "$K/k.p12"
+          python - "$K/pub.pem" windows/NovaEnhance/UpdateKey.cs <<'PY'
+          import sys, subprocess, base64
+          pem, out = sys.argv[1], sys.argv[2]
+          txt = subprocess.run(["openssl", "rsa", "-pubin", "-in", pem, "-text", "-noout"], capture_output=True, text=True, check=True).stdout
+          mod = subprocess.run(["openssl", "rsa", "-pubin", "-in", pem, "-modulus", "-noout"], capture_output=True, text=True, check=True).stdout.strip().split("=", 1)[1]
+          exp = int([l for l in txt.splitlines() if l.startswith("Exponent")][0].split()[1])
+          eb = exp.to_bytes((exp.bit_length() + 7) // 8, "big")
+          m = base64.b64encode(bytes.fromhex(mod)).decode(); e = base64.b64encode(eb).decode()
+          open(out, "w", encoding="utf-8").write('namespace NovaEnhance;\n\n/// <summary>Public half of Nova Enhance\'s signing key (written by the build).</summary>\nstatic class UpdateKey\n{\n    public const string Modulus = "%s";\n    public const string Exponent = "%s";\n}\n' % (m, e))
+          print("modulus bytes:", len(bytes.fromhex(mod)))
+          PY
+          echo "::notice title=Signing key::ready"
+
+      - name: Build
+        run: |
+          dotnet publish windows/NovaEnhance/NovaEnhance.csproj -c Release -r win-x64 -o out "-p:Version=1.0.${{ github.run_number }}" -nologo 2>&1 | Tee-Object -FilePath build.log
+          if ($LASTEXITCODE -ne 0) {
+            Select-String -Path build.log -Pattern ' error ' | Select-Object -First 40 | ForEach-Object { Write-Host "::error::$($_.Line.Trim())" }
+            exit 1
+          }
+          $f = Get-Item out\NovaEnhance.exe
+          Write-Host ("::notice title=App::NovaEnhance.exe {0:N1} MB" -f ($f.Length / 1MB))
+
+      - name: Short test (storage, backup, phone backup, encrypted index, search, every window)
+        run: |
+          $o = "$env:RUNNER_TEMP\smoke.txt"
+          $p = Start-Process -FilePath out\NovaEnhance.exe -ArgumentList "--smoke","--data","`"$pwd\windows\NovaEnhance\TestData`"","--out","`"$o`"" -PassThru
+          if (-not $p.WaitForExit(180000)) { $p.Kill(); Write-Host "::error title=Short test::did not finish"; exit 1 }
+          $t = if (Test-Path $o) { Get-Content $o -Raw } else { "no result file" }
+          Write-Host $t
+          $err = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'Nova Enhance\Logs\errors.log'
+          if (Test-Path $err) { Write-Host "--- errors.log ---"; Get-Content $err | Select-Object -Last 30 }
+          $summary = ($t -split "`n" | Where-Object { $_ -match 'FAIL|PASSED|FAILED' }) -join '%0A'
+          if ($p.ExitCode -ne 0) { Write-Host "::error title=Short test::$summary"; exit 1 }
+          Write-Host "::notice title=Short test::$summary"
+
+      - name: Installer
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          & $iscc /Qp "/DAppVersion=1.0.${{ github.run_number }}" "/DBuildNo=${{ github.run_number }}" "/DSourceDir=$((Resolve-Path out).Path)" "/O$((Resolve-Path dist).Path)" windows\installer.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Get-ChildItem dist | ForEach-Object { Write-Host ("::notice title=Output::{0} {1:N1} MB" -f $_.Name, ($_.Length / 1MB)) }
+
+      - name: Checksums signed with the app's key
+        shell: bash
+        env:
+          KP: ${{ secrets.NOVA_ENHANCE_KEY }}
+        run: |
+          set -e
+          K="$RUNNER_TEMP/k"
+          cd dist
+          sha256sum NovaEnhance-Windows-*-Setup.exe > SHA256SUMS.txt
+          openssl dgst -sha256 -sign "$K/k.pem" -out SHA256SUMS.sig SHA256SUMS.txt
+          openssl dgst -sha256 -verify "$K/pub.pem" -signature SHA256SUMS.sig SHA256SUMS.txt
+          rm -f "$K/k.pem"
+          cat SHA256SUMS.txt
+
+      - name: Publish as a test release (PCs ignore it until the update self-test passes)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $n = "${{ github.run_number }}"
+          gh release create "win-build-$n" (Get-ChildItem dist\*).FullName --title "Nova Enhance for Windows 1.0 · build $n" `
+            --notes "Nova Enhance for Windows · build $n — download NovaEnhance-Windows-1.0-build-$n-Setup.exe and open it. Designed by A.HAMROUNI" --latest=false --prerelease
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Update self-test (downloads this release, checks signature + SHA-256, and that a changed checksum file is refused)
+        run: |
+          $o = "$env:RUNNER_TEMP\upd.txt"
+          $p = Start-Process -FilePath out\NovaEnhance.exe -ArgumentList "--update-selftest","win-build-${{ github.run_number }}","--out","`"$o`"" -PassThru
+          if (-not $p.WaitForExit(300000)) { $p.Kill(); Write-Host "::error::update self-test hung"; exit 1 }
+          $t = Get-Content $o -Raw; Write-Host $t
+          if ($p.ExitCode -ne 0) { Write-Host "::error title=Update self-test::$($t -replace "`r?`n", '%0A')"; exit 1 }
+          Write-Host "::notice title=Update self-test::$($t -replace "`r?`n", '%0A')"
+
+      - name: Release it to PCs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release edit "win-build-${{ github.run_number }}" --prerelease=false --latest=false
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Write-Host "::notice title=Published::win-build-${{ github.run_number }} is live for PCs (the phone's latest release is unchanged)"
+
+      - name: Clean up the key
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/k"
