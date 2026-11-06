@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
