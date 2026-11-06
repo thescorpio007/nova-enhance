@@ -392,6 +392,13 @@ static class FolderIndex
     /// <summary>"page 12", "slide 4", "Sheet "BOQ" · D45", "line 120"…</summary>
     public static string Where(PieceHit p)
     {
+        if (p.Goto.StartsWith("zip:") && p.Goto.Contains('|'))
+        {
+            var entry = p.Goto[4..p.Goto.IndexOf('|')];
+            var inner = new PieceHit { Loc = p.Loc, Goto = p.Goto[(p.Goto.IndexOf('|') + 1)..], Text = p.Text, Matches = p.Matches };
+            var w = Where(inner);
+            return w == p.Loc ? p.Loc : $"› {entry} · {w}";
+        }
         var first = p.Matches.Count > 0 ? p.Matches[0].Index : 0;
         if (p.Goto.StartsWith("cell:"))
         {

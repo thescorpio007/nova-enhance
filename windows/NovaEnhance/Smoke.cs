@@ -124,7 +124,7 @@ static class Smoke
         Ok(W("plan.dxf").Contains("A-ANNO"), "DXF: " + W("plan.dxf"));
         Ok(W("model.ifc").Contains("IFCWALL"), "IFC: " + W("model.ifc"));
         Ok(W("mail.eml") == "email", "Email: " + W("mail.eml"));
-        Ok(W("Submission.zip").Contains("notes-copy.txt"), "Zip: " + W("Submission.zip"));
+        Ok(W("Submission.zip") == "› inside/notes-copy.txt · line 3", "Zip: " + W("Submission.zip"));
         var pv = FolderIndex.Preview(first.First(h => h.Name == "Facade report.docx").Pieces[0], 30);
         Ok(pv.Mid == "A-201 Rev C", $"Preview: …{pv.Pre}[{pv.Mid}]{pv.Post}");
         var again = Run("A-201 Rev C", "phrase", out var pg2);
