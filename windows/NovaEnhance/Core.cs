@@ -31,31 +31,6 @@ static class Paths
     }
 }
 
-static class Log
-{
-    static readonly object L = new();
-    static string FilePath => Path.Combine(Paths.Logs, "errors.log");
-
-    public static void Error(string where, Exception e) => Write($"{where}: {e.GetType().Name}: {e.Message}");
-
-    public static void Write(string s)
-    {
-        try
-        {
-            lock (L)
-            {
-                File.AppendAllText(FilePath, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}  {s}\r\n");
-                var fi = new FileInfo(FilePath);
-                if (fi.Length > 2_000_000) { var t = File.ReadAllText(FilePath); File.WriteAllText(FilePath, t[^1_000_000..]); }
-            }
-        }
-        catch { }
-    }
-
-    public static string Read() { try { lock (L) return File.Exists(FilePath) ? File.ReadAllText(FilePath) : ""; } catch { return ""; } }
-    public static void Clear() { try { lock (L) File.WriteAllText(FilePath, ""); } catch { } }
-}
-
 static class Shell
 {
     public static void Open(string path)

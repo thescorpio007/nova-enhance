@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=Edge">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nova Enhance</title>
+<link rel="stylesheet" href="taskpane.css">
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+</head>
+<body>
+<div class="head"><span class="logo">✦</span> <b>Nova Enhance</b> <span id="ai" class="pill"></span></div>
+<div id="status" class="status">Connecting to Nova Enhance on this PC…</div>
+
+<div id="doc" class="hide">
+  <div class="sec">Selected text</div>
+  <div class="grid">
+    <button data-mode="grammar" class="primary">✦ Fix grammar</button>
+    <button data-mode="shorten">Shorten</button>
+    <button data-mode="professional">Professional</button>
+    <button data-mode="informal">Informal</button>
+    <button data-mode="expand">Expand</button>
+    <button data-mode="translate" id="tr">🌐 → English</button>
+  </div>
+  <div class="row"><span class="small">Translate to</span> <select id="lang"></select></div>
+</div>
+
+<div id="mailread" class="hide">
+  <div class="sec">This email</div>
+  <div class="grid">
+    <button id="sum" class="primary">✦ Summarise</button>
+    <button id="draft">✦ Draft reply</button>
+    <button id="trmail">🌐 Translate</button>
+    <button id="asknova">🔍 Ask Nova</button>
+  </div>
+  <input id="instr" placeholder="For the reply (optional): e.g. agree, send drawings by Thursday">
+  <div class="small muted">The email text goes to your AI only when you click a button.</div>
+</div>
+
+<div id="mailcompose" class="hide">
+  <div class="sec">Your email</div>
+  <div class="small muted">Select text in your email, or nothing to use the whole email.</div>
+  <div class="grid">
+    <button data-mode="grammar" class="primary">✦ Fix grammar</button>
+    <button data-mode="shorten">Shorten</button>
+    <button data-mode="professional">Professional</button>
+    <button data-mode="informal">Informal</button>
+    <button data-mode="translate" class="trc">🌐 Translate</button>
+    <button data-mode="expand">Expand</button>
+  </div>
+</div>
+
+<div id="out" class="hide">
+  <div class="sec" id="outlabel">Result</div>
+  <textarea id="result" rows="9"></textarea>
+  <div class="row">
+    <button id="replace" class="primary">⇄ Replace</button>
+    <button id="insert">＋ Insert</button>
+    <button id="copy">⧉ Copy</button>
+  </div>
+</div>
+
+<div class="sec">📄 Original</div>
+<div id="orig" class="orig small muted">The text before each enhancement is kept here and in Documents\Nova Enhance\Originals.</div>
+<div class="row"><button id="putback">↩ Put back original</button> <button id="older">🕘 Older</button></div>
+
+<div class="foot">Undo in Office: Ctrl + Z · <a href="#" id="settings">Nova settings</a><br><span id="sign">Designed by A.HAMROUNI</span></div>
+<script src="taskpane.js"></script>
+</body>
+</html>

@@ -1,121 +1,178 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace NovaEnhance;
 
-/// <summary>Right-click a folder → "Search inside with Nova": codes, references or sentences inside PDF, Word, PowerPoint, Excel and more.</summary>
+/// <summary>
+/// Right-click a folder → "Search inside with Nova". Simple by default; ⚙ More options adds file names, skip folders, dates, sizes,
+/// wildcards / regular expressions, subfolders and speed. Results as a table (or cards), hits of the selected file, ⚠ Problems,
+/// and a big 👁 preview of the page with the words in yellow. ✦ Ask AI answers questions from the folder.
+/// </summary>
 class FolderSearchForm : NovaForm
 {
     static readonly (string Key, string Label)[] KindChips =
     {
         ("A", "📝 Word"), ("B", "📽 PowerPoint"), ("C", "📊 Excel"), ("D", "📕 PDF"), ("E", "🖼 Images"),
-        ("F", "✉ Emails"), ("G", "📄 Text"), ("H", "📐 CAD / BIM"), ("I", "🗜 Zip"), ("J", "📁 Other files")
+        ("F", "✉ Emails"), ("G", "📄 Text"), ("H", "📐 CAD / BIM"), ("I", "🗜 Zip"), ("K", "☁ Google files"), ("J", "📁 Other files")
     };
 
-    readonly Stack stack;
-    readonly TextBox folder, query;
-    readonly Label status, summary;
-    readonly ProgressBar bar;
-    readonly FlowLayoutPanel results, kindRow;
-    readonly Button stopBtn, searchBtn;
+    // ---------------------------------------------------------------- controls
+    readonly Stack top;
+    readonly Label intro, status, stats, termsLbl, hitsTitle;
+    readonly TextBox folder, query, fNames, fSkip;
+    readonly Button tabFind, tabAsk, searchBtn, pauseBtn, stopBtn, micBtn, moreBtn, tabFiles, tabProblems, viewBtn;
     readonly RadioButton rPhrase, rAll, rAny;
-    readonly CheckBox cCase, cWhole;
+    readonly CheckBox cCase, cWhole, cSub;
+    readonly ComboBox cbModified, cbSize, cbMode, cbSpeed;
+    readonly DateTimePicker dAfter, dBefore;
+    readonly NumericUpDown nMin, nMax;
+    readonly FlowLayoutPanel optRow, kindRow, answerPanel;
+    readonly TableLayoutPanel morePanel;
+    readonly ProgressBar bar;
+    readonly RichTextBox answerBox;
+    readonly SplitContainer split;
+    readonly ListView filesList, hitsList, problemsList;
+    readonly FlowLayoutPanel cardsPanel;
+    readonly PreviewPane preview;
     readonly HashSet<string> kinds = new();
     readonly Dictionary<string, Button> kindBtns = new();
+
+    // ---------------------------------------------------------------- state
     readonly ConcurrentQueue<(FileHit Hit, string Removed)> inbox = new();
-    readonly Dictionary<string, (FileHit Hit, Control Card)> shown = new(StringComparer.OrdinalIgnoreCase);
     readonly List<FileHit> all = new();
+    readonly Dictionary<string, FileHit> byPath = new(StringComparer.OrdinalIgnoreCase);
+    readonly List<FolderIndex.Problem> problems = new();
     readonly System.Windows.Forms.Timer pump;
     FolderIndex.Progress pg;
     CancellationTokenSource cts;
     Thread worker;
     Matcher matcher;
-    const int MaxCards = 300;
-    string driveRoot;
-    bool askMode, asking;
-    readonly Button tabFind, tabAsk, micBtn;
-    readonly FlowLayoutPanel optRow, answerPanel;
-    readonly Label termsLbl, intro;
-    readonly RichTextBox answerBox;
+    string driveRoot, lastRoot = "";
+    bool askMode, asking, cards, dirty;
+    int sortCol = -1; bool sortDesc;
     readonly Voice voice = new();
     List<FolderIndex.Passage> passages = new();
-    string lastQuestion = "", lastAnswer = "", history = "", lastRoot = "";
+    string lastQuestion = "", lastAnswer = "", history = "";
+    const int MaxRows = 3000;
 
     public FolderSearchForm()
     {
         Text = "Nova Enhance · Search inside a folder";
-        Width = 940; Height = 820;
-        MinimumSize = new Size(700, 560);
+        Width = 1500; Height = 950;
+        MinimumSize = new Size(900, 640);
         KeyPreview = true;
-        stack = new Stack();
-        Controls.Add(stack);
 
-        stack.Add(Th.L("📁 Search inside a folder", 14, Th.Text, true));
-        intro = stack.Add(Th.Wrap("", 9.5f));
-        var tabs = stack.Add(Th.Row(false));
-        tabFind = Th.Chip("🔍 Find words", true, () => SetMode(false));
-        tabAsk = Th.Chip("✦ Ask AI", false, () => SetMode(true));
-        tabs.Controls.Add(tabFind); tabs.Controls.Add(tabAsk);
+        // ============================================================ top: folder, words, options
+        top = new Stack { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, AutoScroll = false, Padding = new Padding(16, 10, 16, 4) };
 
-        var frow = stack.Add(new TableLayoutPanel { ColumnCount = 4, RowCount = 1, AutoSize = false, Height = 40, BackColor = Color.Transparent, Margin = new Padding(0, 8, 0, 4) }, true);
+        var head = top.Add(Th.Row(false));
+        head.Controls.Add(Th.L("📁 Search inside a folder", 14, Th.Text, true));
+        tabFind = Th.Chip("🔍 Find words", true, () => SetMode(false)); tabFind.Margin = new Padding(16, 2, 4, 0);
+        tabAsk = Th.Chip("✦ Ask AI", false, () => SetMode(true)); tabAsk.Margin = new Padding(0, 2, 4, 0);
+        head.Controls.Add(tabFind); head.Controls.Add(tabAsk);
+        var saved = Th.Chip("★ Saved searches ▾", false, null); saved.Margin = new Padding(16, 2, 0, 0);
+        saved.Click += (_, _) => SavedMenu().Show(saved, new Point(0, saved.Height));
+        head.Controls.Add(saved);
+        intro = top.Add(Th.Wrap("", 9.5f));
+
+        var frow = top.Add(new TableLayoutPanel { ColumnCount = 4, RowCount = 1, AutoSize = false, Height = 38, BackColor = Color.Transparent, Margin = new Padding(0, 6, 0, 2) }, true);
         frow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        frow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        frow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        for (int i = 0; i < 3; i++) frow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         folder = Th.Box(false); folder.Dock = DockStyle.Fill; folder.PlaceholderText = "Folder to search";
         frow.Controls.Add(folder, 0, 0);
-        var browse = Th.B("Change…", Browse); browse.Margin = new Padding(8, 0, 0, 0);
-        frow.Controls.Add(browse, 1, 0);
+        var browse = Th.B("Change…", Browse); browse.Margin = new Padding(8, 0, 0, 0); frow.Controls.Add(browse, 1, 0);
         var recent = Th.B("Recent ▾", null); recent.Margin = new Padding(8, 0, 0, 0);
         recent.Click += (_, _) => RecentMenu().Show(recent, new Point(0, recent.Height));
         frow.Controls.Add(recent, 2, 0);
-        frow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        var gd = Th.B("☁ Google Drive…", PickDrive); gd.Margin = new Padding(8, 0, 0, 0);
-        frow.Controls.Add(gd, 3, 0);
+        var gd = Th.B("☁ Google Drive…", PickDrive); gd.Margin = new Padding(8, 0, 0, 0); frow.Controls.Add(gd, 3, 0);
 
-        var qrow = stack.Add(new TableLayoutPanel { ColumnCount = 4, RowCount = 1, AutoSize = false, Height = 42, BackColor = Color.Transparent, Margin = new Padding(0, 4, 0, 4) }, true);
+        var qrow = top.Add(new TableLayoutPanel { ColumnCount = 5, RowCount = 1, AutoSize = false, Height = 42, BackColor = Color.Transparent, Margin = new Padding(0, 4, 0, 2) }, true);
         qrow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        qrow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        qrow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        query = Th.Box(false); query.Font = Th.F(12); query.Dock = DockStyle.Fill;
-        query.PlaceholderText = "e.g. A-201 Rev C · RFI-044 · fire rating of the curtain wall";
+        for (int i = 0; i < 4; i++) qrow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        query = Th.Box(false); query.Font = Th.F(12.5f); query.Dock = DockStyle.Fill;
         qrow.Controls.Add(query, 0, 0);
-        searchBtn = Th.B("🔍 Search", Start, true); searchBtn.Margin = new Padding(8, 0, 0, 0);
-        qrow.Controls.Add(searchBtn, 1, 0);
-        stopBtn = Th.B("■ Stop", Stop); stopBtn.Margin = new Padding(8, 0, 0, 0); stopBtn.Enabled = false;
-        qrow.Controls.Add(stopBtn, 2, 0);
-        qrow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        micBtn = Th.B("🎤", ToggleMic); micBtn.Margin = new Padding(8, 0, 0, 0); micBtn.Visible = false;
-        qrow.Controls.Add(micBtn, 3, 0);
+        searchBtn = Th.B("🔍 Search", Start, true); searchBtn.Margin = new Padding(8, 0, 0, 0); qrow.Controls.Add(searchBtn, 1, 0);
+        micBtn = Th.B("🎤", ToggleMic); micBtn.Margin = new Padding(8, 0, 0, 0); micBtn.Visible = false; qrow.Controls.Add(micBtn, 2, 0);
+        pauseBtn = Th.B("⏸ Pause", Pause); pauseBtn.Margin = new Padding(8, 0, 0, 0); pauseBtn.Enabled = false; qrow.Controls.Add(pauseBtn, 3, 0);
+        stopBtn = Th.B("■ Stop", Stop); stopBtn.Margin = new Padding(8, 0, 0, 0); stopBtn.Enabled = false; qrow.Controls.Add(stopBtn, 4, 0);
 
-        var orow = optRow = stack.Add(Th.Row());
+        optRow = top.Add(Th.Row());
         var mode = Store.Str("win_fs_mode", "phrase");
         rPhrase = Th.Radio("Exact phrase", mode == "phrase", () => Store.Set("win_fs_mode", "phrase"));
         rAll = Th.Radio("All words", mode == "all", () => Store.Set("win_fs_mode", "all"));
         rAny = Th.Radio("Any word", mode == "any", () => Store.Set("win_fs_mode", "any"));
         cCase = Th.Check("Match case", Store.Bool("win_fs_case", false), v => Store.SetBool("win_fs_case", v));
         cWhole = Th.Check("Whole word", Store.Bool("win_fs_whole", false), v => Store.SetBool("win_fs_whole", v));
-        foreach (Control c in new Control[] { rPhrase, rAll, rAny, cCase, cWhole }) orow.Controls.Add(c);
+        foreach (Control c in new Control[] { rPhrase, rAll, rAny, cCase, cWhole }) optRow.Controls.Add(c);
+        moreBtn = Th.B("", ToggleMore); moreBtn.BackColor = Th.Bg; moreBtn.ForeColor = Th.AccentText; moreBtn.Margin = new Padding(24, 0, 0, 0);
+        optRow.Controls.Add(moreBtn);
 
-        kindRow = stack.Add(Th.Row());
+        // ---- ⚙ More options
+        morePanel = top.Add(new TableLayoutPanel { ColumnCount = 4, RowCount = 3, AutoSize = true, BackColor = Color.FromArgb(0x15, 0x19, 0x22), Padding = new Padding(10, 6, 10, 6), Margin = new Padding(0, 4, 0, 6) }, true);
+        for (int i = 0; i < 4; i++) morePanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
+        Control Field(string label, Control c)
+        {
+            var p = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, BackColor = Color.Transparent, Margin = new Padding(0, 0, 12, 6), Dock = DockStyle.Fill };
+            p.Controls.Add(Th.L(label, 8.5f, Th.Muted));
+            p.Controls.Add(c);
+            return p;
+        }
+        ComboBox Combo(string key, string[] items, int def)
+        {
+            var cb = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 230, BackColor = Th.Card2, ForeColor = Th.Text, FlatStyle = FlatStyle.Flat, Font = Th.F(9.5f) };
+            cb.Items.AddRange(items);
+            cb.SelectedIndex = Math.Clamp(Store.Int(key, def), 0, items.Length - 1);
+            cb.SelectedIndexChanged += (_, _) => { Store.SetInt(key, cb.SelectedIndex); ShowRanges(); };
+            return cb;
+        }
+        fNames = Th.Box(false); fNames.Width = 260; fNames.PlaceholderText = "*.pdf; *.docx; *BOQ*  (empty = all)"; fNames.Text = Store.Str("win_fso_names");
+        fNames.TextChanged += (_, _) => Store.Set("win_fso_names", fNames.Text);
+        fSkip = Th.Box(false); fSkip.Width = 260; fSkip.PlaceholderText = "Superseded; Archive; _old"; fSkip.Text = Store.Str("win_fso_skip");
+        fSkip.TextChanged += (_, _) => Store.Set("win_fso_skip", fSkip.Text);
+        cbModified = Combo("win_fso_mod", new[] { "Any time", "Last 7 days", "Last 30 days", "Last 12 months", "Between dates…" }, 0);
+        dAfter = new DateTimePicker { Format = DateTimePickerFormat.Short, Width = 110, Value = DateTime.Today.AddMonths(-1) };
+        dBefore = new DateTimePicker { Format = DateTimePickerFormat.Short, Width = 110, Value = DateTime.Today };
+        var dates = new FlowLayoutPanel { AutoSize = true, BackColor = Color.Transparent, Margin = new Padding(0) };
+        dates.Controls.Add(dAfter); dates.Controls.Add(Th.L("→", 10, Th.Muted)); dates.Controls.Add(dBefore);
+        cbSize = Combo("win_fso_size", new[] { "Any size", "Smaller than 1 MB", "Smaller than 10 MB", "Larger than 10 MB", "Larger than 100 MB", "Between sizes…" }, 0);
+        nMin = new NumericUpDown { Minimum = 0, Maximum = 100000, Value = 0, Width = 80, BackColor = Th.Card, ForeColor = Th.Text };
+        nMax = new NumericUpDown { Minimum = 0, Maximum = 100000, Value = 50, Width = 80, BackColor = Th.Card, ForeColor = Th.Text };
+        var sizes = new FlowLayoutPanel { AutoSize = true, BackColor = Color.Transparent, Margin = new Padding(0) };
+        sizes.Controls.Add(nMin); sizes.Controls.Add(Th.L("→", 10, Th.Muted)); sizes.Controls.Add(nMax); sizes.Controls.Add(Th.L("MB", 9.5f, Th.Muted));
+        cbMode = Combo("win_fso_rx", new[] { "Normal", "Wildcards  * ?", "Regular expression" }, 0);
+        cSub = Th.Check("Include subfolders", Store.Bool("win_fso_sub", true), v => Store.SetBool("win_fso_sub", v));
+        cbSpeed = Combo("win_fso_speed", new[] { $"Fast · {Math.Clamp(System.Environment.ProcessorCount, 2, 8)} files at once", "Gentle · in the background while I work" }, 0);
+        morePanel.Controls.Add(Field("File names (optional)", fNames), 0, 0);
+        morePanel.Controls.Add(Field("Skip folders", fSkip), 0, 1);
+        var modBox = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, BackColor = Color.Transparent, Margin = new Padding(0) };
+        modBox.Controls.Add(cbModified); modBox.Controls.Add(dates);
+        morePanel.Controls.Add(Field("Modified", modBox), 1, 0);
+        var sizeBox = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, BackColor = Color.Transparent, Margin = new Padding(0) };
+        sizeBox.Controls.Add(cbSize); sizeBox.Controls.Add(sizes);
+        morePanel.Controls.Add(Field("Size", sizeBox), 1, 1);
+        morePanel.Controls.Add(Field("Search mode", cbMode), 2, 0);
+        morePanel.Controls.Add(Field("Subfolders", cSub), 2, 1);
+        morePanel.Controls.Add(Field("Speed", cbSpeed), 3, 0);
+        kindRow = new FlowLayoutPanel { AutoSize = true, BackColor = Color.Transparent, Margin = new Padding(0), MaximumSize = new Size(1400, 0) };
         var allBtn = Th.Chip("All types", true, null);
         allBtn.Click += (_, _) => { kinds.Clear(); DrawKinds(); };
-        kindBtns["*"] = allBtn;
-        kindRow.Controls.Add(allBtn);
+        kindBtns["*"] = allBtn; kindRow.Controls.Add(allBtn);
         foreach (var (k, l) in KindChips)
         {
             var kk = k;
             var b = Th.Chip(l, false, () => { if (!kinds.Remove(kk)) kinds.Add(kk); DrawKinds(); });
-            kindBtns[k] = b;
-            kindRow.Controls.Add(b);
+            b.Font = Th.F(9); kindBtns[k] = b; kindRow.Controls.Add(b);
         }
+        var kindField = Field("File types", kindRow);
+        morePanel.Controls.Add(kindField, 0, 2);
+        morePanel.SetColumnSpan(kindField, 4);
 
-        answerPanel = stack.Add(new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, BackColor = Color.Transparent, Margin = new Padding(0, 4, 0, 4), Visible = false });
+        // ---- Ask AI answer
+        answerPanel = top.Add(new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, BackColor = Color.Transparent, Margin = new Padding(0, 4, 0, 4), Visible = false });
         termsLbl = Th.L("", 9, Th.Muted);
         answerPanel.Controls.Add(termsLbl);
-        answerBox = new RichTextBox
-        {
-            ReadOnly = true, BorderStyle = BorderStyle.None, BackColor = Th.Card, ForeColor = Th.Text, Font = Th.F(10.5f),
-            ScrollBars = RichTextBoxScrollBars.Vertical, Height = 150, Margin = new Padding(0, 6, 0, 6), DetectUrls = false
-        };
+        answerBox = new RichTextBox { ReadOnly = true, BorderStyle = BorderStyle.None, BackColor = Th.Card, ForeColor = Th.Text, Font = Th.F(10.5f), ScrollBars = RichTextBoxScrollBars.Vertical, Height = 140, Margin = new Padding(0, 6, 0, 6), DetectUrls = false };
         answerPanel.Controls.Add(answerBox);
         var arow = Th.Row(false);
         arow.Controls.Add(Th.B("▾ More detail", () => Answer(true), true));
@@ -123,26 +180,289 @@ class FolderSearchForm : NovaForm
         arow.Controls.Add(Th.B("⇩ Save with sources", SaveAnswer));
         arow.Controls.Add(Th.B("✚ New question", () => { history = ""; lastQuestion = ""; query.Text = ""; answerBox.Text = ""; query.Focus(); status.Text = "New question — the conversation was cleared"; }));
         answerPanel.Controls.Add(arow);
-        bar = stack.Add(new ProgressBar { Height = 6, Style = ProgressBarStyle.Continuous, Visible = false, Margin = new Padding(0, 6, 0, 2) }, true);
-        status = stack.Add(Th.Wrap("", 9.5f, Th.AccentText));
-        summary = stack.Add(Th.Wrap("", 9.5f, Th.Muted));
-        results = stack.Add(new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = Color.Transparent, Margin = new Padding(0) });
 
-        var bottom = stack.Add(Th.Row(false));
-        bottom.Controls.Add(Th.B("⇩ Export list", Export));
-        bottom.Controls.Add(Th.B("📁 Search Results folder", () => Shell.Open(Path.Combine(Paths.Root, "Search Results"))));
-        bottom.Controls.Add(Th.B("⚙ File types", () => Screens.Settings("Folder search")));
-        stack.Add(Th.Signature());
+        // ---- counters
+        stats = top.Add(Th.Wrap("", 9.5f, Th.Text));
+        stats.BackColor = Color.FromArgb(0x15, 0x19, 0x22); stats.Padding = new Padding(10, 6, 10, 6);
+        bar = top.Add(new ProgressBar { Height = 5, Style = ProgressBarStyle.Continuous, Visible = false, Margin = new Padding(0, 2, 0, 2) }, true);
+        status = top.Add(Th.Wrap("", 9.5f, Th.AccentText));
+
+        // ============================================================ results (left) · preview (right)
+        split = new SplitContainer { Dock = DockStyle.Fill, BackColor = Th.Line, SplitterWidth = 6, Orientation = Orientation.Vertical };
+        split.Panel1.BackColor = Th.Bg; split.Panel2.BackColor = Th.Bg;
+        var left = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, BackColor = Th.Bg, Padding = new Padding(12, 0, 6, 4) };
+        left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        left.RowStyles.Add(new RowStyle(SizeType.Percent, 58));
+        left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        left.RowStyles.Add(new RowStyle(SizeType.Percent, 42));
+        var tabs = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, BackColor = Color.Transparent, Margin = new Padding(0, 2, 0, 2) };
+        tabFiles = Th.Chip("Files (0)", true, () => ShowTab(false));
+        tabProblems = Th.Chip("⚠ Problems (0)", false, () => ShowTab(true));
+        viewBtn = Th.Chip("▦ Cards", false, ToggleCards);
+        tabs.Controls.Add(tabFiles); tabs.Controls.Add(tabProblems); tabs.Controls.Add(viewBtn);
+        left.Controls.Add(tabs, 0, 0);
+        var mid = new Panel { Dock = DockStyle.Fill, BackColor = Th.Bg, Margin = new Padding(0) };
+        filesList = NewList(("Name", 330), ("Hits", 60), ("Folder", 220), ("Modified", 100), ("Size", 80));
+        filesList.SelectedIndexChanged += (_, _) => FileSelected();
+        filesList.DoubleClick += (_, _) => { if (Selected() is { } h) Opener.Open(h, h.Pieces.FirstOrDefault(), matcher?.Query); };
+        filesList.ColumnClick += (_, e) => { sortDesc = sortCol == e.Column ? !sortDesc : e.Column is 1 or 3 or 4; sortCol = e.Column; dirty = true; RefreshList(); };
+        filesList.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter && Selected() is { } h) Opener.Open(h, h.Pieces.FirstOrDefault(), matcher?.Query); };
+        var menu = new ContextMenuStrip { Font = Th.F(10) };
+        menu.Items.Add("Open", null, (_, _) => { if (Selected() is { } h) Opener.Open(h, h.Pieces.FirstOrDefault(), matcher?.Query); });
+        menu.Items.Add("📁 Show in folder", null, (_, _) => { if (Selected() is { } h && string.IsNullOrEmpty(h.Remote)) Shell.Select(h.Path); });
+        menu.Items.Add("⧉ Copy path", null, (_, _) => { if (Selected() is { } h) Clipboard.SetText(string.IsNullOrEmpty(h.Remote) ? h.Path : DriveLink(h)); });
+        menu.Items.Add("⧉ Pop out the preview", null, (_, _) => { if (Selected() is { } h) new PreviewWindow(h, matcher, 0, false).Show(); });
+        filesList.ContextMenuStrip = menu;
+        problemsList = NewList(("File", 300), ("Problem", 330), ("What you can do", 240));
+        problemsList.Visible = false;
+        problemsList.DoubleClick += (_, _) => ProblemAction();
+        cardsPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, BackColor = Th.Bg, Visible = false };
+        mid.Controls.Add(filesList); mid.Controls.Add(problemsList); mid.Controls.Add(cardsPanel);
+        left.Controls.Add(mid, 0, 1);
+        hitsTitle = Th.L("HITS IN THIS FILE", 8.5f, Th.Muted, true); hitsTitle.Margin = new Padding(0, 8, 0, 4);
+        left.Controls.Add(hitsTitle, 0, 2);
+        hitsList = NewList(("Where", 150), ("Found", 600));
+        hitsList.OwnerDraw = true;
+        hitsList.DrawSubItem += DrawHit;
+        hitsList.SelectedIndexChanged += (_, _) => HitSelected();
+        hitsList.DoubleClick += (_, _) => { if (Selected() is { } h && hitsList.SelectedItems.Count > 0) Opener.Open(h, (PieceHit)hitsList.SelectedItems[0].Tag, matcher?.Query); };
+        left.Controls.Add(hitsList, 0, 3);
+        split.Panel1.Controls.Add(left);
+        preview = new PreviewPane { Dock = DockStyle.Fill };
+        preview.WindowRequested += full => { if (preview.Hit != null) new PreviewWindow(preview.Hit, preview.Matcher, preview.HitIndex, full).Show(); };
+        split.Panel2.Controls.Add(preview);
+
+        var bottom = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, BackColor = Th.Bg, Padding = new Padding(14, 4, 14, 4) };
+        bottom.Controls.Add(Th.B("⇩ Export", Export));
+        bottom.Controls.Add(Th.B("🖨 Report", Report));
+        bottom.Controls.Add(Th.B("📁 Search Results", () => Shell.Open(Path.Combine(Paths.Root, "Search Results"))));
+        bottom.Controls.Add(Th.B("⚙ File types & OCR", () => Screens.Settings("Folder search")));
+        var sig = Th.Signature(); sig.Margin = new Padding(20, 10, 0, 0);
+        bottom.Controls.Add(sig);
+
+        Controls.Add(split);
+        Controls.Add(bottom);
+        Controls.Add(top);
 
         query.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; Start(); } };
-        KeyDown += (_, e) => { if (e.KeyCode == Keys.Escape) { if (worker != null) Stop(); else Hide(); } };
+        KeyDown += (_, e) => { if (e.KeyCode == Keys.Escape) { if (worker != null || asking) Stop(); else Hide(); } };
         FormClosing += (_, e) => { if (e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Stop(); Hide(); } };
-        Resize += (_, _) => { answerBox.Width = Math.Max(300, stack.ClientSize.Width - 52); };
+        Shown += (_, _) =>
+        {
+            try { split.SplitterDistance = Math.Clamp(Store.Int("win_fs_split", (int)(split.Width * 0.42)), 380, Math.Max(400, split.Width - 420)); } catch { }
+            split.SplitterMoved += (_, _) => Store.SetInt("win_fs_split", split.SplitterDistance);
+        };
+        Resize += (_, _) => answerBox.Width = Math.Max(300, top.ClientSize.Width - 40);
+        morePanel.Visible = Store.Bool("win_fso_open", false);
+        DrawMore();
+        ShowRanges();
         SetMode(false);
-        pump = new System.Windows.Forms.Timer { Interval = 350 };
+        pump = new System.Windows.Forms.Timer { Interval = 300 };
         pump.Tick += (_, _) => Flush();
         pump.Start();
     }
+
+    // ================================================================ list helpers (dark tables)
+
+    static ListView NewList(params (string Name, int Width)[] cols)
+    {
+        var lv = new ListView
+        {
+            View = View.Details, FullRowSelect = true, HideSelection = false, MultiSelect = false, Dock = DockStyle.Fill,
+            BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.None, Font = Th.F(9.5f), OwnerDraw = true, HeaderStyle = ColumnHeaderStyle.Clickable
+        };
+        foreach (var (n, w) in cols) lv.Columns.Add(n, w);
+        lv.DrawColumnHeader += (_, e) =>
+        {
+            using var b = new SolidBrush(Color.FromArgb(0x15, 0x19, 0x22));
+            e.Graphics.FillRectangle(b, e.Bounds);
+            TextRenderer.DrawText(e.Graphics, e.Header.Text.ToUpperInvariant(), Th.F(8, true), new Rectangle(e.Bounds.X + 6, e.Bounds.Y, e.Bounds.Width - 6, e.Bounds.Height), Th.Muted, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
+        };
+        lv.DrawItem += (_, e) => { };
+        lv.DrawSubItem += (s, e) =>
+        {
+            var sel = e.Item.Selected;
+            using var b = new SolidBrush(sel ? Th.Card2 : Th.Card);
+            e.Graphics.FillRectangle(b, e.Bounds);
+            var color = e.ColumnIndex == 0 ? Th.Text : Th.Muted;
+            if (e.Item.ForeColor == Th.Warn) color = Th.Warn;
+            TextRenderer.DrawText(e.Graphics, e.SubItem.Text, e.ColumnIndex == 0 ? Th.F(9.5f, sel) : Th.F(9.5f), new Rectangle(e.Bounds.X + 6, e.Bounds.Y, e.Bounds.Width - 8, e.Bounds.Height), color,
+                TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+        };
+        return lv;
+    }
+
+    void DrawHit(object s, DrawListViewSubItemEventArgs e)
+    {
+        var sel = e.Item.Selected;
+        using (var b = new SolidBrush(sel ? Th.Card2 : Th.Card)) e.Graphics.FillRectangle(b, e.Bounds);
+        if (e.ColumnIndex == 0)
+        {
+            TextRenderer.DrawText(e.Graphics, e.SubItem.Text, Th.F(9.5f, true), new Rectangle(e.Bounds.X + 6, e.Bounds.Y, e.Bounds.Width - 8, e.Bounds.Height), Th.AccentText,
+                TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+            return;
+        }
+        var p = (PieceHit)e.Item.Tag;
+        var (pre, midText, post) = FolderIndex.Preview(p, 70);
+        var flags = TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding | TextFormatFlags.SingleLine;
+        int x = e.Bounds.X + 6, right = e.Bounds.Right - 4;
+        void Part(string t, Font f, Color c, Color? back)
+        {
+            if (x >= right || t.Length == 0) return;
+            var sz = TextRenderer.MeasureText(e.Graphics, t, f, new Size(int.MaxValue, e.Bounds.Height), flags);
+            var r = new Rectangle(x, e.Bounds.Y + 2, Math.Min(sz.Width, right - x), e.Bounds.Height - 4);
+            if (back != null) using (var bb = new SolidBrush(back.Value)) e.Graphics.FillRectangle(bb, r);
+            TextRenderer.DrawText(e.Graphics, t, f, r, c, flags | TextFormatFlags.EndEllipsis);
+            x += sz.Width;
+        }
+        Part(pre, Th.F(9.5f), Color.FromArgb(0xC9, 0xCE, 0xD8), null);
+        Part(midText, Th.F(9.5f, true), Color.Black, Th.Yellow);
+        Part(post, Th.F(9.5f), Color.FromArgb(0xC9, 0xCE, 0xD8), null);
+    }
+
+    FileHit Selected() => filesList.SelectedItems.Count > 0 ? filesList.SelectedItems[0].Tag as FileHit : null;
+
+    static string DriveLink(FileHit h) { var p = h.Remote.Split('|'); return GDrive.WebLink(p[0], p.Length > 1 ? p[1] : ""); }
+
+    static string FmtSize(long b) => b <= 0 ? "" : b < 1024 * 1024 ? $"{b / 1024.0:0} KB" : $"{b / 1048576.0:0.0} MB";
+
+    void RefreshList()
+    {
+        if (!dirty) return;
+        dirty = false;
+        var sel = Selected()?.Path;
+        IEnumerable<FileHit> q = all;
+        q = sortCol switch
+        {
+            0 => sortDesc ? q.OrderByDescending(h => h.Name) : q.OrderBy(h => h.Name),
+            1 => sortDesc ? q.OrderByDescending(h => h.Hits) : q.OrderBy(h => h.Hits),
+            2 => sortDesc ? q.OrderByDescending(h => h.Folder) : q.OrderBy(h => h.Folder),
+            3 => sortDesc ? q.OrderByDescending(h => h.Mtime) : q.OrderBy(h => h.Mtime),
+            4 => sortDesc ? q.OrderByDescending(h => h.Size) : q.OrderBy(h => h.Size),
+            _ => q
+        };
+        filesList.BeginUpdate();
+        filesList.Items.Clear();
+        foreach (var h in q.Take(MaxRows))
+        {
+            var rel = h.Folder.StartsWith(h.Root, StringComparison.OrdinalIgnoreCase) ? "." + h.Folder[h.Root.Length..] : h.Folder;
+            var it = new ListViewItem(new[]
+            {
+                $"{KindIcon(h.Kind)} {h.Name}", h.Hits.ToString("N0"), rel.Length <= 1 ? "." : rel,
+                h.Mtime > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(h.Mtime).LocalDateTime.ToString("dd MMM yyyy") : "", FmtSize(h.Size)
+            }) { Tag = h };
+            filesList.Items.Add(it);
+            if (h.Path.Equals(sel, StringComparison.OrdinalIgnoreCase)) it.Selected = true;
+        }
+        filesList.EndUpdate();
+        tabFiles.Text = $"Files ({all.Count:N0})";
+        if (cards) DrawCards();
+        if (filesList.SelectedItems.Count == 0 && filesList.Items.Count > 0 && preview.Hit == null) filesList.Items[0].Selected = true;
+    }
+
+    void FileSelected()
+    {
+        var h = Selected();
+        hitsList.BeginUpdate();
+        hitsList.Items.Clear();
+        if (h != null)
+        {
+            hitsTitle.Text = $"HITS IN THIS FILE ({h.Hits:N0})";
+            foreach (var p in h.Pieces.Take(1000))
+                hitsList.Items.Add(new ListViewItem(new[] { FolderIndex.Where(p), "" }) { Tag = p });
+        }
+        else hitsTitle.Text = "HITS IN THIS FILE";
+        hitsList.EndUpdate();
+        if (h != null) preview.Show(h, matcher, 0);
+    }
+
+    void HitSelected()
+    {
+        var h = Selected();
+        if (h == null || hitsList.SelectedItems.Count == 0) return;
+        var p = (PieceHit)hitsList.SelectedItems[0].Tag;
+        int start = 0;
+        foreach (var x in h.Pieces) { if (x == p) break; start += Math.Max(1, x.Matches?.Count ?? 1); }
+        preview.Show(h, matcher, start);
+    }
+
+    void ShowTab(bool problemsTab)
+    {
+        Th.SetChip(tabFiles, !problemsTab); Th.SetChip(tabProblems, problemsTab);
+        problemsList.Visible = problemsTab;
+        filesList.Visible = !problemsTab && !cards;
+        cardsPanel.Visible = !problemsTab && cards;
+        if (problemsTab) problemsList.BringToFront(); else if (cards) cardsPanel.BringToFront(); else filesList.BringToFront();
+    }
+
+    void ToggleCards()
+    {
+        cards = !cards;
+        viewBtn.Text = cards ? "☰ Table" : "▦ Cards";
+        if (cards) DrawCards();
+        ShowTab(false);
+    }
+
+    void DrawCards()
+    {
+        cardsPanel.SuspendLayout();
+        foreach (Control c in cardsPanel.Controls) c.Dispose();
+        cardsPanel.Controls.Clear();
+        foreach (var h in all.Take(150)) cardsPanel.Controls.Add(Card(h));
+        cardsPanel.ResumeLayout();
+    }
+
+    // ================================================================ options
+
+    void ToggleMore()
+    {
+        morePanel.Visible = !morePanel.Visible;
+        Store.SetBool("win_fso_open", morePanel.Visible);
+        DrawMore();
+        top.FitAll();
+    }
+
+    void DrawMore()
+    {
+        var active = MoreActive();
+        moreBtn.Text = (morePanel.Visible ? "⚙ More options ▴" : "⚙ More options ▾") + (active > 0 && !morePanel.Visible ? $"  ({active} on)" : "");
+    }
+
+    int MoreActive() =>
+        (fNames.Text.Trim().Length > 0 ? 1 : 0) + (fSkip.Text.Trim().Length > 0 ? 1 : 0) + (cbModified.SelectedIndex > 0 ? 1 : 0) + (cbSize.SelectedIndex > 0 ? 1 : 0) +
+        (cbMode.SelectedIndex > 0 ? 1 : 0) + (!cSub.Checked ? 1 : 0) + (kinds.Count > 0 ? 1 : 0);
+
+    void ShowRanges()
+    {
+        dAfter.Parent.Visible = cbModified.SelectedIndex == 4;
+        nMin.Parent.Visible = cbSize.SelectedIndex == 5;
+        rPhrase.Enabled = rAll.Enabled = rAny.Enabled = cbMode.SelectedIndex == 0;
+        DrawMore();
+    }
+
+    void DrawKinds()
+    {
+        Th.SetChip(kindBtns["*"], kinds.Count == 0);
+        foreach (var (k, _) in KindChips) Th.SetChip(kindBtns[k], kinds.Contains(k));
+        DrawMore();
+    }
+
+    FolderIndex.Options Options()
+    {
+        DateTime? after = cbModified.SelectedIndex switch { 1 => DateTime.Today.AddDays(-7), 2 => DateTime.Today.AddDays(-30), 3 => DateTime.Today.AddMonths(-12), 4 => dAfter.Value.Date, _ => null };
+        DateTime? before = cbModified.SelectedIndex == 4 ? dBefore.Value.Date : null;
+        const long MB = 1024 * 1024;
+        (long min, long max) = cbSize.SelectedIndex switch
+        {
+            1 => (0L, MB), 2 => (0L, 10 * MB), 3 => (10 * MB, 0L), 4 => (100 * MB, 0L),
+            5 => ((long)nMin.Value * MB, nMax.Value > 0 ? (long)nMax.Value * MB : 0L), _ => (0L, 0L)
+        };
+        return FolderIndex.Options.From(fNames.Text, fSkip.Text, after, before, min, max, cSub.Checked, cbSpeed.SelectedIndex == 1);
+    }
+
+    string MatchMode() => cbMode.SelectedIndex switch { 1 => "wildcard", 2 => "regex", _ => rAll.Checked ? "all" : rAny.Checked ? "any" : "phrase" };
+
+    // ================================================================ folder
 
     public void Begin(string path)
     {
@@ -178,6 +498,12 @@ class FolderSearchForm : NovaForm
         return false;
     }
 
+    void Browse()
+    {
+        using var d = new FolderBrowserDialog { Description = "Folder to search", UseDescriptionForTitle = true, SelectedPath = Directory.Exists(folder.Text) ? folder.Text : "" };
+        if (d.ShowDialog(this) == DialogResult.OK) SetRoot(d.SelectedPath);
+    }
+
     void PickDrive()
     {
         if (!GDrive.SignedIn)
@@ -188,33 +514,6 @@ class FolderSearchForm : NovaForm
         }
         using var d = new DrivePicker();
         if (d.ShowDialog(this) == DialogResult.OK && d.Picked.Id != null) SetRoot(GDrive.RootKey(d.Picked.Id, d.Picked.Name));
-    }
-
-    void SetMode(bool ask)
-    {
-        askMode = ask;
-        Th.SetChip(tabFind, !ask); Th.SetChip(tabAsk, ask);
-        optRow.Visible = !ask; kindRow.Visible = !ask; micBtn.Visible = ask;
-        answerPanel.Visible = ask && answerBox.Text.Length > 0;
-        searchBtn.Text = ask ? "✦ Ask" : "🔍 Search";
-        query.PlaceholderText = ask ? "e.g. What is the fire rating required for the curtain wall?" : "e.g. A-201 Rev C · RFI-044 · fire rating of the curtain wall";
-        intro.Text = ask
-            ? "Ask in your own words: the AI answers from the files of this folder, with the file and page of every point. You are asked before any extract is sent."
-            : "Finds a code, a reference or a sentence inside PDF, Word, PowerPoint, Excel, emails, CAD/BIM text, zip files and more. Everything is read on this PC.";
-        answerBox.Width = Math.Max(300, stack.ClientSize.Width - 52);
-        stack.FitAll();
-    }
-
-    void DrawKinds()
-    {
-        Th.SetChip(kindBtns["*"], kinds.Count == 0);
-        foreach (var (k, _) in KindChips) Th.SetChip(kindBtns[k], kinds.Contains(k));
-    }
-
-    void Browse()
-    {
-        using var d = new FolderBrowserDialog { Description = "Folder to search", UseDescriptionForTitle = true, SelectedPath = Directory.Exists(folder.Text) ? folder.Text : "" };
-        if (d.ShowDialog(this) == DialogResult.OK) folder.Text = d.SelectedPath;
     }
 
     ContextMenuStrip RecentMenu()
@@ -230,6 +529,38 @@ class FolderSearchForm : NovaForm
         return m;
     }
 
+    void SetMode(bool ask)
+    {
+        askMode = ask;
+        Th.SetChip(tabFind, !ask); Th.SetChip(tabAsk, ask);
+        optRow.Visible = !ask;
+        if (ask) morePanel.Visible = false; else morePanel.Visible = Store.Bool("win_fso_open", false);
+        micBtn.Visible = ask;
+        answerPanel.Visible = ask && answerBox.Text.Length > 0;
+        searchBtn.Text = ask ? "✦ Ask" : "🔍 Search";
+        query.PlaceholderText = ask ? "e.g. What is the fire rating required for the curtain wall?" : "e.g. A-201 Rev C · RFI-044 · fire rating of the curtain wall";
+        intro.Text = ask
+            ? "Ask in your own words: the AI answers from the files of this folder, with the file and page of every point. You are asked before any extract is sent."
+            : "Finds a code, a reference or a sentence inside PDF, Word, PowerPoint, Excel, emails, CAD/BIM text, zip files and more. Everything is read on this PC.";
+        answerBox.Width = Math.Max(300, top.ClientSize.Width - 40);
+        DrawMore();
+        top.FitAll();
+    }
+
+    // ================================================================ search
+
+    void ClearResults()
+    {
+        all.Clear(); byPath.Clear(); problems.Clear();
+        while (inbox.TryDequeue(out _)) { }
+        filesList.Items.Clear(); hitsList.Items.Clear(); problemsList.Items.Clear();
+        foreach (Control c in cardsPanel.Controls) c.Dispose();
+        cardsPanel.Controls.Clear();
+        tabFiles.Text = "Files (0)"; tabProblems.Text = "⚠ Problems (0)";
+        hitsTitle.Text = "HITS IN THIS FILE";
+        preview.ShowMessage("Results appear on the left — select one to see its page here.");
+    }
+
     void Start()
     {
         if (askMode) { AskAi(); return; }
@@ -237,173 +568,244 @@ class FolderSearchForm : NovaForm
         var q = query.Text.Trim();
         if (q.Length == 0) { status.Text = "Type what you're looking for"; query.Focus(); return; }
         if (!CheckRoot(root)) return;
+        try { matcher = new Matcher(q, MatchMode(), cCase.Checked, cWhole.Checked); }
+        catch (ArgumentException e) { status.Text = "⚠ " + e.Message; return; }
+        Stop();
         lastRoot = root;
         answerPanel.Visible = false;
-        Stop();
-        var mode = rAll.Checked ? "all" : rAny.Checked ? "any" : "phrase";
-        matcher = new Matcher(q, mode, cCase.Checked, cWhole.Checked);
-        foreach (var v in shown.Values) v.Card.Dispose();
-        shown.Clear(); all.Clear(); results.Controls.Clear();
-        while (inbox.TryDequeue(out _)) { }
+        ClearResults();
         pg = new FolderIndex.Progress();
         var my = cts = new CancellationTokenSource();
         var k = new HashSet<string>(kinds);
-        var m = matcher;
+        var m = matcher; var p = pg; var opt = Options();
         bar.Visible = true; bar.Value = 0;
-        stopBtn.Enabled = true;
+        stopBtn.Enabled = pauseBtn.Enabled = true; pauseBtn.Text = "⏸ Pause";
         status.Text = "Searching…";
-        summary.Text = "";
-        worker = new Thread(() =>
-        {
-            try { FolderIndex.Search(root, m, k, h => inbox.Enqueue((h, null)), p => inbox.Enqueue((null, p)), pg, my.Token); }
-            catch (Exception e) { pg.Phase = "⚠ " + e.Message; pg.Finished = true; Log.Error("folder search", e); }
-        }) { IsBackground = true, Name = "Nova folder search", Priority = ThreadPriority.BelowNormal };
+        worker = new Thread(() => FolderIndex.Search(root, m, k, h => inbox.Enqueue((h, null)), path => inbox.Enqueue((null, path)), p, my.Token, opt))
+        { IsBackground = true, Name = "Nova folder search", Priority = ThreadPriority.BelowNormal };
         worker.SetApartmentState(ApartmentState.STA);
         worker.Start();
+    }
+
+    void Pause()
+    {
+        if (pg == null || pg.Finished) return;
+        if (pg.Gate.IsSet) { pg.Gate.Reset(); pauseBtn.Text = "▶ Continue"; status.Text = "⏸ Paused — files being read now finish first"; }
+        else { pg.Gate.Set(); pauseBtn.Text = "⏸ Pause"; }
     }
 
     void Stop()
     {
         cts?.Cancel();
-        stopBtn.Enabled = false;
+        pg?.Gate.Set();
+        stopBtn.Enabled = false; pauseBtn.Enabled = false;
     }
 
     void Flush()
     {
         if (!Visible) return;
-        int added = 0;
-        results.SuspendLayout();
-        while (added < 40 && inbox.TryDequeue(out var item))
+        int n = 0;
+        while (n < 400 && inbox.TryDequeue(out var item))
         {
+            n++;
             if (item.Removed != null)
             {
-                if (shown.TryGetValue(item.Removed, out var old)) { old.Card.Dispose(); shown.Remove(item.Removed); all.Remove(old.Hit); }
+                if (byPath.Remove(item.Removed, out var old)) all.Remove(old);
+                dirty = true;
                 continue;
             }
             var h = item.Hit;
-            if (shown.TryGetValue(h.Path, out var prev)) { prev.Card.Dispose(); all.Remove(prev.Hit); shown.Remove(h.Path); }
+            if (byPath.Remove(h.Path, out var prev)) all.Remove(prev);
+            byPath[h.Path] = h;
             all.Add(h);
-            if (shown.Count < MaxCards)
-            {
-                var card = Card(h);
-                results.Controls.Add(card);
-                shown[h.Path] = (h, card);
-            }
-            added++;
+            dirty = true;
         }
-        results.ResumeLayout();
+        if (pg != null)
+        {
+            while (pg.Problems.TryDequeue(out var pr))
+            {
+                problems.Add(pr);
+                problemsList.Items.Add(new ListViewItem(new[] { pr.Name, pr.Reason, pr.Action ?? "" }) { Tag = pr, ForeColor = Th.Warn });
+            }
+            tabProblems.Text = $"⚠ Problems ({problems.Count:N0})";
+        }
+        if (dirty && (n > 0 || all.Count == 0)) RefreshList();
         if (pg == null) return;
-        int pieces = all.Sum(h => h.Pieces.Count);
+        var secs = pg.Clock.Elapsed.TotalSeconds;
+        var speed = secs > 1 ? pg.Done / secs : 0;
+        var hitsN = all.Sum(h => h.Hits);
+        stats.Text = $"Found {all.Count:N0} files   ·   Hits {hitsN:N0}   ·   Searched {pg.Done:N0} / {pg.Total:N0} files ({pg.Bytes / 1073741824.0:0.00} GB)   ·   " +
+                     $"Pending {Math.Max(0, pg.Total - pg.Done):N0}   ·   Speed {speed:0} files/s{(pg.Workers > 1 ? $" ({pg.Workers} at once)" : "")}   ·   Problems {problems.Count:N0}   ·   {TimeSpan.FromSeconds(secs):mm\\:ss}";
         if (!pg.Finished)
         {
             if (pg.Total > 0) { bar.Maximum = Math.Max(1, pg.Total); bar.Value = Math.Min(pg.Done, bar.Maximum); }
-            status.Text = pg.Total > 0
-                ? $"{pg.Phase} {pg.Done:N0} / {pg.Total:N0} files · {pg.Read:N0} read now · {all.Count:N0} files found" + (pg.Current.Length > 0 ? $" · {Short(pg.Current, 40)}" : "")
-                : pg.Phase;
+            if (pg.Gate.IsSet) status.Text = pg.Phase + (pg.Current.Length > 0 ? " " + Short(pg.Current, 70) : "");
         }
         else if (worker != null && !asking)
         {
             worker = null;
             bar.Visible = false;
-            stopBtn.Enabled = false;
+            stopBtn.Enabled = pauseBtn.Enabled = false;
             var cancelled = cts?.IsCancellationRequested == true;
-            status.Text = (cancelled ? "■ Stopped · " : "✓ ") + (all.Count == 0
-                ? $"Not found in {pg.Files:N0} files"
-                : $"Found in {all.Count:N0} file{(all.Count == 1 ? "" : "s")} ({pieces:N0} place{(pieces == 1 ? "" : "s")})") + $" · {pg.Seconds:0.0} s";
-            summary.Text = (pg.Read > 0 ? $"{pg.Read:N0} new or changed files read and remembered · " : "") +
-                           "next search in this folder is instant" + (all.Count > MaxCards ? $" · showing the first {MaxCards} files — ⇩ Export for all" : "");
-            if (pg.Phase.StartsWith("⚠")) status.Text = pg.Phase;
+            status.Text = pg.Phase.StartsWith("⚠") ? pg.Phase :
+                (cancelled ? "■ Stopped · " : "✓ ") + (all.Count == 0 ? $"Not found in {pg.Files:N0} files" : $"Found in {all.Count:N0} file{(all.Count == 1 ? "" : "s")} ({hitsN:N0} hits)") +
+                $" · {pg.Seconds:0.0} s" + (pg.Read > 0 ? $" · {pg.Read:N0} new or changed files read and remembered — next search here is instant" : "") +
+                (all.Count > MaxRows ? $" · showing {MaxRows:N0} files, ⇩ Export for all" : "");
             if (!cancelled) OfferVision(lastRoot, () => Start());
         }
     }
 
     static string Short(string s, int n) => s.Length > n ? s[..n] + "…" : s;
 
-    static string KindIcon(string kind) => kind switch { "A" => "📝", "B" => "📽", "C" => "📊", "D" => "📕", "E" => "🖼", "F" => "✉", "G" => "📄", "H" => "📐", "I" => "🗜", _ => "📁" };
+    static string KindIcon(string kind) => kind switch { "A" => "📝", "B" => "📽", "C" => "📊", "D" => "📕", "E" => "🖼", "F" => "✉", "G" => "📄", "H" => "📐", "I" => "🗜", "K" => "☁", _ => "📁" };
+
+    void ProblemAction()
+    {
+        if (problemsList.SelectedItems.Count == 0 || problemsList.SelectedItems[0].Tag is not FolderIndex.Problem pr) return;
+        var a = pr.Action ?? "";
+        if (a.StartsWith("read with OCR"))
+        {
+            if (MessageBox.Show(this, "Turn on text recognition (OCR) for scanned PDFs and images, and read this file again?", "Nova Enhance", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
+            FileKinds.Set("E", true);
+            try { FolderIndex.ForgetFile(pr.Path); } catch { }
+            Start();
+        }
+        else if (a.Contains("Settings")) Screens.Settings("Folder search");
+        else if (!GDrive.IsRoot(pr.Path)) Shell.Open(pr.Path);
+    }
+
+    // ================================================================ saved searches
+
+    ContextMenuStrip SavedMenu()
+    {
+        var m = new ContextMenuStrip { Font = Th.F(10) };
+        m.Items.Add("★ Save this search…", null, (_, _) => SaveSearch());
+        var list = SavedList();
+        if (list.Count > 0) m.Items.Add(new ToolStripSeparator());
+        foreach (var o in list)
+        {
+            var oo = o;
+            m.Items.Add($"{o["name"]}   ·  {Short(GDrive.Display(o["root"]?.ToString() ?? ""), 40)}", null, (_, _) => LoadSearch(oo, true));
+        }
+        if (list.Count > 0)
+        {
+            var del = new ToolStripMenuItem("Delete a saved search");
+            foreach (var o in list)
+            {
+                var name = o["name"]?.ToString();
+                del.DropDownItems.Add(name, null, (_, _) => { Store.Set("win_saved", new JsonArray(SavedList().Where(x => x["name"]?.ToString() != name).Select(x => (JsonNode)x.DeepClone()).ToArray()).ToJsonString()); });
+            }
+            m.Items.Add(del);
+        }
+        return m;
+    }
+
+    static List<JsonObject> SavedList()
+    {
+        try { return (JsonNode.Parse(Store.Str("win_saved", "[]")) as JsonArray)?.OfType<JsonObject>().ToList() ?? new(); } catch { return new(); }
+    }
+
+    void SaveSearch()
+    {
+        var name = Prompt.Ask(this, "★ Save this search", "Name:", Short(query.Text, 40));
+        if (string.IsNullOrWhiteSpace(name)) return;
+        var o = new JsonObject
+        {
+            ["name"] = name.Trim(), ["root"] = CurrentRoot(), ["query"] = query.Text, ["ask"] = askMode, ["mode"] = MatchMode(),
+            ["case"] = cCase.Checked, ["whole"] = cWhole.Checked, ["names"] = fNames.Text, ["skip"] = fSkip.Text, ["mod"] = cbModified.SelectedIndex,
+            ["size"] = cbSize.SelectedIndex, ["rx"] = cbMode.SelectedIndex, ["sub"] = cSub.Checked, ["speed"] = cbSpeed.SelectedIndex, ["kinds"] = string.Join("", kinds)
+        };
+        var list = SavedList().Where(x => x["name"]?.ToString() != name.Trim()).Select(x => (JsonNode)x.DeepClone()).ToList();
+        list.Insert(0, o);
+        Store.Set("win_saved", new JsonArray(list.Take(30).ToArray()).ToJsonString());
+        status.Text = "★ Saved: " + name.Trim();
+    }
+
+    void LoadSearch(JsonObject o, bool run)
+    {
+        SetRoot(o["root"]?.ToString() ?? "");
+        query.Text = o["query"]?.ToString() ?? "";
+        var mode = o["mode"]?.ToString() ?? "phrase";
+        rPhrase.Checked = mode == "phrase"; rAll.Checked = mode == "all"; rAny.Checked = mode == "any";
+        cCase.Checked = o["case"]?.GetValue<bool>() ?? false; cWhole.Checked = o["whole"]?.GetValue<bool>() ?? false;
+        fNames.Text = o["names"]?.ToString() ?? ""; fSkip.Text = o["skip"]?.ToString() ?? "";
+        cbModified.SelectedIndex = Math.Clamp(o["mod"]?.GetValue<int>() ?? 0, 0, cbModified.Items.Count - 1);
+        cbSize.SelectedIndex = Math.Clamp(o["size"]?.GetValue<int>() ?? 0, 0, cbSize.Items.Count - 1);
+        cbMode.SelectedIndex = Math.Clamp(o["rx"]?.GetValue<int>() ?? 0, 0, cbMode.Items.Count - 1);
+        cSub.Checked = o["sub"]?.GetValue<bool>() ?? true;
+        cbSpeed.SelectedIndex = Math.Clamp(o["speed"]?.GetValue<int>() ?? 0, 0, cbSpeed.Items.Count - 1);
+        kinds.Clear(); foreach (var ch in o["kinds"]?.ToString() ?? "") kinds.Add(ch.ToString());
+        DrawKinds();
+        SetMode(o["ask"]?.GetValue<bool>() ?? false);
+        if (run) Start();
+    }
+
+    // ================================================================ cards view (as before)
 
     Control Card(FileHit h)
     {
-        int width = Math.Max(400, stack.ClientSize.Width - 52);
+        int width = Math.Max(360, cardsPanel.ClientSize.Width - 30);
         var card = new FlowLayoutPanel
         {
             FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
             BackColor = Th.Card, Padding = new Padding(10, 8, 10, 6), Margin = new Padding(0, 0, 0, 6), MinimumSize = new Size(width, 0), MaximumSize = new Size(width, 0)
         };
-        var top = Th.Row(false);
-        var name = Th.L($"{KindIcon(h.Kind)} {h.Name}", 10.5f, Th.Text, true);
-        name.MaximumSize = new Size(width - 160, 0);
+        var name = Th.L($"{KindIcon(h.Kind)} {h.Name}  ·  {h.Hits:N0} hit{(h.Hits == 1 ? "" : "s")}", 10.5f, Th.Text, true);
+        name.MaximumSize = new Size(width - 24, 0);
         name.Cursor = Cursors.Hand;
-        name.Click += (_, _) => Opener.Open(h, h.Pieces.FirstOrDefault(), matcher?.Query);
-        top.Controls.Add(name);
-        top.Controls.Add(Th.L($"{h.Pieces.Count} place{(h.Pieces.Count == 1 ? "" : "s")}", 9, Th.AccentText));
-        card.Controls.Add(top);
+        name.Click += (_, _) => preview.Show(h, matcher, 0);
+        card.Controls.Add(name);
         var rel = h.Folder.StartsWith(h.Root, StringComparison.OrdinalIgnoreCase) ? "." + h.Folder[h.Root.Length..] : h.Folder;
-        var fl = Th.L(rel.Length <= 1 ? "(this folder)" : rel, 8.5f, Th.Muted);
-        fl.MaximumSize = new Size(width - 24, 0);
-        card.Controls.Add(fl);
-        var piecesBox = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, BackColor = Color.Transparent, Margin = new Padding(0) };
-        card.Controls.Add(piecesBox);
-        void ShowPieces(int n)
+        card.Controls.Add(Th.L(rel.Length <= 1 ? "(this folder)" : rel, 8.5f, Th.Muted));
+        int start = 0;
+        foreach (var p in h.Pieces.Take(3))
         {
-            piecesBox.SuspendLayout();
-            piecesBox.Controls.Clear();
-            foreach (var p in h.Pieces.Take(n)) piecesBox.Controls.Add(PieceRow(h, p, width - 24));
-            if (h.Pieces.Count > n)
+            var s = start;
+            var where = Th.L("↳ " + FolderIndex.Where(p) + "  · 👁 preview", 9, Th.AccentText, true);
+            where.Cursor = Cursors.Hand;
+            where.Click += (_, _) => preview.Show(h, matcher, s);
+            card.Controls.Add(where);
+            var (pre, mid, post) = FolderIndex.Preview(p, 90);
+            var rt = new RichTextBox
             {
-                var more = Th.B($"+ {h.Pieces.Count - n} more in this file", () => ShowPieces(h.Pieces.Count));
-                more.Font = Th.F(9);
-                piecesBox.Controls.Add(more);
-            }
-            piecesBox.ResumeLayout();
+                ReadOnly = true, BorderStyle = BorderStyle.None, BackColor = Color.FromArgb(0x1E, 0x23, 0x30), ForeColor = Color.FromArgb(0xC9, 0xCE, 0xD8),
+                Font = Th.F(9.5f), ScrollBars = RichTextBoxScrollBars.None, Width = width - 30, Height = 40, Margin = new Padding(14, 2, 0, 2), DetectUrls = false, TabStop = false
+            };
+            rt.Text = pre + mid + post;
+            if (mid.Length > 0) { rt.Select(pre.Length, mid.Length); rt.SelectionBackColor = Th.Yellow; rt.SelectionColor = Color.Black; rt.SelectionFont = Th.F(9.5f, true); rt.Select(0, 0); }
+            card.Controls.Add(rt);
+            start += Math.Max(1, p.Matches?.Count ?? 1);
         }
-        ShowPieces(3);
         var btns = Th.Row(false);
-        btns.Margin = new Padding(0, 4, 0, 0);
         btns.Controls.Add(Th.B("Open", () => Opener.Open(h, h.Pieces.FirstOrDefault(), matcher?.Query), true));
-        if (string.IsNullOrEmpty(h.Remote))
-        {
-            btns.Controls.Add(Th.B("📁 Show in folder", () => Shell.Select(h.Path)));
-            btns.Controls.Add(Th.B("⧉ Copy path", () => Clipboard.SetText(h.Path)));
-        }
-        else
-        {
-            var parts = h.Remote.Split('|');
-            btns.Controls.Add(Th.B("⧉ Copy link", () => Clipboard.SetText(GDrive.WebLink(parts[0], parts.Length > 1 ? parts[1] : ""))));
-        }
+        if (string.IsNullOrEmpty(h.Remote)) btns.Controls.Add(Th.B("📁 Show in folder", () => Shell.Select(h.Path)));
+        btns.Controls.Add(Th.B("⧉ Copy path", () => Clipboard.SetText(string.IsNullOrEmpty(h.Remote) ? h.Path : DriveLink(h))));
         card.Controls.Add(btns);
         return card;
     }
 
-    Control PieceRow(FileHit h, PieceHit p, int width)
+    // ================================================================ export
+
+    void Export()
     {
-        var box = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, BackColor = Color.Transparent, Margin = new Padding(0, 4, 0, 2) };
-        var where = Th.L("↳ " + FolderIndex.Where(p) + "  · open here", 9, Th.AccentText, true);
-        where.Cursor = Cursors.Hand;
-        where.Click += (_, _) => Opener.Open(h, p, matcher?.Query);
-        box.Controls.Add(where);
-        var (pre, mid, post) = FolderIndex.Preview(p, 110);
-        var rt = new RichTextBox
+        if (all.Count == 0) return;
+        try
         {
-            ReadOnly = true, BorderStyle = BorderStyle.None, BackColor = Color.FromArgb(0x1E, 0x23, 0x30), ForeColor = Color.FromArgb(0xC9, 0xCE, 0xD8),
-            Font = Th.F(9.5f), ScrollBars = RichTextBoxScrollBars.None, Width = width, Height = 44, Margin = new Padding(14, 2, 0, 2),
-            DetectUrls = false, TabStop = false, Cursor = Cursors.Default
-        };
-        rt.Text = pre + mid + post;
-        if (mid.Length > 0)
-        {
-            rt.Select(pre.Length, mid.Length);
-            rt.SelectionBackColor = Th.Yellow;
-            rt.SelectionColor = Color.Black;
-            rt.SelectionFont = Th.F(9.5f, true);
-            rt.Select(0, 0);
+            var f = FolderIndex.Export($"Search {query.Text}", all);
+            status.Text = "⇩ Saved for Excel and as a printable page in Documents\\Nova Enhance\\Search Results";
+            Shell.Select(f);
         }
-        var lines = rt.GetLineFromCharIndex(Math.Max(0, rt.TextLength - 1)) + 1;
-        rt.Height = Math.Min(4, Math.Max(1, lines)) * (rt.Font.Height + 2) + 6;
-        box.Controls.Add(rt);
-        return box;
+        catch (Exception e) { status.Text = "⚠ " + e.Message; }
     }
 
-    // ================================================================== ✦ Ask AI
+    void Report()
+    {
+        if (all.Count == 0) return;
+        try { Shell.Open(Path.ChangeExtension(FolderIndex.Export($"Search {query.Text}", all), ".html")); }
+        catch (Exception e) { status.Text = "⚠ " + e.Message; }
+    }
+
+    // ================================================================ ✦ Ask AI
 
     static Task RunSta(Action a)
     {
@@ -445,19 +847,20 @@ class FolderSearchForm : NovaForm
         asking = true;
         var my = cts = new CancellationTokenSource();
         stopBtn.Enabled = true;
-        foreach (var v in shown.Values) v.Card.Dispose();
-        shown.Clear(); all.Clear(); results.Controls.Clear();
-        summary.Text = ""; answerBox.Text = ""; answerPanel.Visible = false;
+        ClearResults();
+        answerBox.Text = ""; answerPanel.Visible = false;
         try
         {
+            using var doing = Log.Doing($"Ask AI “{q}” in {GDrive.Display(root)}");
             status.Text = Ai.Active() != null ? "✦ Understanding your question…" : "Searching with your words (no AI key)…";
             var terms = await FolderAsk.Expand(q, history.Length > 0 ? lastQuestion : null, my.Token);
             termsLbl.Text = "Searched for: " + string.Join(" · ", terms);
+            matcher = new Matcher(string.Join(" ", terms), "any", false, false);
 
             pg = new FolderIndex.Progress();
             bar.Visible = true; bar.Value = 0;
-            var p = pg;
-            await RunSta(() => FolderIndex.Search(root, null, null, _ => { }, null, p, my.Token));
+            var p = pg; var opt = Options();
+            await RunSta(() => FolderIndex.Search(root, null, null, _ => { }, null, p, my.Token, opt));
             bar.Visible = false;
             if (my.IsCancellationRequested) { status.Text = "■ Stopped"; return; }
             await OfferVisionAsync(root);
@@ -465,15 +868,16 @@ class FolderSearchForm : NovaForm
             var sw = System.Diagnostics.Stopwatch.StartNew();
             passages = await Task.Run(() => FolderIndex.Retrieve(root, terms, 14));
             answerPanel.Visible = true;
+            top.FitAll();
             if (passages.Count == 0)
             {
-                answerBox.Text = "Not found in this folder. Try other words, or check that the file types are switched on (⚙ File types).";
+                answerBox.Text = "Not found in this folder. Try other words, or check that the file types are switched on (⚙ File types & OCR).";
                 status.Text = $"✓ Folder read · {p.Files:N0} files · nothing matched";
                 return;
             }
             var nFiles = passages.Select(x => x.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count();
             status.Text = $"✓ {passages.Count} passages found in {nFiles} file{(nFiles == 1 ? "" : "s")} · {sw.Elapsed.TotalSeconds:0.0} s";
-            ShowSources(Enumerable.Range(0, passages.Count).ToList(), terms);
+            ShowSources(Enumerable.Range(0, passages.Count).ToList());
             lastQuestion = q;
 
             var sees = FolderAsk.Sees;
@@ -501,7 +905,7 @@ class FolderSearchForm : NovaForm
         }
         catch (Exception e)
         {
-            if (!my.IsCancellationRequested) { status.Text = "⚠ " + e.Message; Log.Error("ask folder", e); }
+            if (!my.IsCancellationRequested) { status.Text = "⚠ " + e.Message; Log.Error("Ask AI · folder", e); }
         }
         finally { asking = false; stopBtn.Enabled = false; bar.Visible = false; }
     }
@@ -520,9 +924,9 @@ class FolderSearchForm : NovaForm
             lastAnswer = a;
             ShowAnswer((detailed ? "✦ DETAILED ANSWER\n" : "✦ ANSWER\n") + FolderAsk.WithSources(a, passages));
             if (!detailed) history += $"Q: {lastQuestion}\nA: {a}\n";
-            ShowSources(FolderAsk.CitedOrder(a, passages.Count), FolderAsk.LocalTerms(lastQuestion));
+            ShowSources(FolderAsk.CitedOrder(a, passages.Count));
         }
-        catch (Exception e) { answerBox.Text = "⚠ " + e.Message; }
+        catch (Exception e) { answerBox.Text = "⚠ " + e.Message; Log.Error("Ask AI · answer", e); }
     }
 
     void ShowAnswer(string text)
@@ -546,28 +950,25 @@ class FolderSearchForm : NovaForm
         }
         answerBox.Select(0, 0);
         var lines = answerBox.GetLineFromCharIndex(Math.Max(0, answerBox.TextLength - 1)) + 1;
-        answerBox.Height = Math.Clamp(lines * (answerBox.Font.Height + 3) + 14, 60, 420);
-        answerBox.Width = Math.Max(300, stack.ClientSize.Width - 52);
-        stack.FitAll();
+        answerBox.Height = Math.Clamp(lines * (answerBox.Font.Height + 3) + 14, 60, 300);
+        answerBox.Width = Math.Max(300, top.ClientSize.Width - 40);
+        top.FitAll();
     }
 
-    void ShowSources(List<int> order, List<string> terms)
+    /// <summary>The passages the answer used, as files on the left (select one to see its page).</summary>
+    void ShowSources(List<int> order)
     {
-        foreach (var v in shown.Values) v.Card.Dispose();
-        shown.Clear(); all.Clear(); results.Controls.Clear();
-        var m = new Matcher(string.Join(" ", terms), "any", false, false);
-        results.SuspendLayout();
+        all.Clear(); byPath.Clear();
         foreach (var grp in order.Select(i => passages[i]).GroupBy(x => x.Path, StringComparer.OrdinalIgnoreCase))
         {
             var first = grp.First();
             var h = new FileHit { Path = first.Path, Root = first.Root, Kind = first.Kind, Remote = first.Remote };
-            foreach (var x in grp) h.Pieces.Add(new PieceHit { Loc = x.Loc, Goto = x.Goto, Text = x.Text, Matches = m.Find(x.Text) });
-            all.Add(h);
-            var card = Card(h);
-            results.Controls.Add(card);
-            shown[h.Path] = (h, card);
+            foreach (var x in grp) h.Pieces.Add(new PieceHit { Loc = x.Loc, Goto = x.Goto, Text = x.Text, Matches = matcher?.Find(x.Text) ?? new() });
+            all.Add(h); byPath[h.Path] = h;
         }
-        results.ResumeLayout();
+        dirty = true;
+        sortCol = -1;
+        RefreshList();
     }
 
     void SaveAnswer()
@@ -577,7 +978,7 @@ class FolderSearchForm : NovaForm
         catch (Exception e) { status.Text = "⚠ " + e.Message; }
     }
 
-    // ================================================================== Gemini vision for unclear scanned pages (always asked first)
+    // ================================================================ Gemini vision for unclear scanned pages (always asked first)
 
     async void OfferVision(string root, Action after)
     {
@@ -593,7 +994,7 @@ class FolderSearchForm : NovaForm
         List<(string Path, int Page)> pending;
         try { pending = await Task.Run(() => FolderIndex.VisionPending(root)); } catch { return false; }
         if (pending.Count == 0) return false;
-        if (!Ai.HasKey("gemini")) { summary.Text = $"{pending.Count} scanned page(s) could be read better with Gemini vision — add a Gemini key in Settings."; return false; }
+        if (!Ai.HasKey("gemini")) { status.Text += $" · {pending.Count} scanned page(s) could be read better with Gemini vision — add a Gemini key in Settings."; return false; }
         var files = pending.GroupBy(x => Path.GetFileName(x.Path)).Select(g => $"{g.Key} ({g.Count()} page{(g.Count() == 1 ? "" : "s")})").ToList();
         var why = Ocr.Mode == "gemini" ? "scanned page(s) to read with Gemini vision" : "scanned page(s) were unclear for the PC's text recognition";
         var choice = ConfirmSend.Ask(this, $"✦ Send {pending.Count} page image(s) to Gemini vision?",
@@ -611,17 +1012,5 @@ class FolderSearchForm : NovaForm
         }
         catch (Exception e) { status.Text = "⚠ " + e.Message; return false; }
         finally { visionBusy = false; }
-    }
-
-    void Export()
-    {
-        if (all.Count == 0) return;
-        try
-        {
-            var f = FolderIndex.Export($"Search {query.Text}", all);
-            status.Text = "⇩ Saved for Excel and as a printable page in Documents\\Nova Enhance\\Search Results";
-            Shell.Select(f);
-        }
-        catch (Exception e) { status.Text = "⚠ " + e.Message; }
     }
 }

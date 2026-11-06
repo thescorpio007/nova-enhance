@@ -142,6 +142,90 @@ static class Smoke
         Ok(k?.GetValue("")?.ToString()?.Contains("--search") == true, "Right-click menu registered: " + k?.GetValue(""));
         Ok(true, "OCR languages on the test PC: " + Ocr.Languages);
 
+        // Build 10: two searches of the same folder at once (the UNIQUE error), More options, wildcards, regex, preview marks
+        var r10 = Path.Combine(Path.GetTempPath(), "Nova b10 test");
+        if (Directory.Exists(r10)) Directory.Delete(r10, true);
+        foreach (var f in Directory.GetFiles(src, "*", SearchOption.AllDirectories))
+        {
+            var dst = Path.Combine(r10, Path.GetRelativePath(src, f));
+            Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
+            File.Copy(f, dst);
+        }
+        var pA = new FolderIndex.Progress(); var pB = new FolderIndex.Progress();
+        var hA = new System.Collections.Concurrent.ConcurrentBag<FileHit>(); var hB = new System.Collections.Concurrent.ConcurrentBag<FileHit>();
+        var tA = new Thread(() => FolderIndex.Search(r10, new Matcher("A-201 Rev C", "phrase", false, false), null, h => hA.Add(h), null, pA, CancellationToken.None));
+        var tB = new Thread(() => FolderIndex.Search(r10, new Matcher("A-201 Rev C", "phrase", false, false), null, h => hB.Add(h), null, pB, CancellationToken.None));
+        tA.SetApartmentState(ApartmentState.STA); tB.SetApartmentState(ApartmentState.STA);
+        tA.Start(); Thread.Sleep(30); tB.Start(); tA.Join(); tB.Join();
+        Ok(!pA.Phase.StartsWith("⚠") && !pB.Phase.StartsWith("⚠") && hA.Select(h => h.Path).Distinct().Count() == 9 && hB.Select(h => h.Path).Distinct().Count() == 9,
+            $"Two searches of the same folder at once: no error ({hA.Select(h => h.Path).Distinct().Count()} + {hB.Select(h => h.Path).Distinct().Count()} files, {pA.Workers} readers)");
+        List<FileHit> Q(string q, string mode, FolderIndex.Options o)
+        {
+            var l = new List<FileHit>();
+            FolderIndex.Search(r10, new Matcher(q, mode, false, false), null, h => { l.RemoveAll(x => x.Path == h.Path); l.Add(h); }, p => l.RemoveAll(x => x.Path == p), new FolderIndex.Progress(), CancellationToken.None, o);
+            return l;
+        }
+        var onlyPdf = Q("A-201 Rev C", "phrase", FolderIndex.Options.From("*.pdf", "", null, null, 0, 0, true, false));
+        Ok(onlyPdf.Count == 1 && onlyPdf[0].Name == "Specification.pdf", "More options · file names *.pdf: " + string.Join(", ", onlyPdf.Select(h => h.Name)));
+        var skipSub = Q("A-201 Rev C", "phrase", FolderIndex.Options.From("", "Sub", null, null, 0, 0, true, false));
+        Ok(skipSub.Count == 8 && skipSub.All(h => h.Name != "Specification.pdf"), "More options · skip folder Sub: " + skipSub.Count);
+        var noSub = Q("A-201 Rev C", "phrase", FolderIndex.Options.From("", "", null, null, 0, 0, false, true));
+        Ok(noSub.Count == 8, "More options · this folder only, gentle speed: " + noSub.Count);
+        var big = Q("A-201 Rev C", "phrase", FolderIndex.Options.From("", "", null, null, 10_000, 0, true, false));
+        Ok(big.Count == 1 && big[0].Name == "Facade report.docx", "More options · larger than 10 KB: " + string.Join(", ", big.Select(h => h.Name)));
+        var wild = Q("A-2?? Rev *", "wildcard", null);
+        Ok(wild.Count == 9, "Wildcards A-2?? Rev *: " + wild.Count);
+        var rx = Q(@"A-\d{3}\s+Rev\s+[A-Z]\b", "regex", null);
+        Ok(rx.Count == 9, "Regular expression: " + rx.Count);
+        try { new Matcher("A-(", "regex", false, false); Ok(false, "Bad regular expression refused"); } catch (ArgumentException) { Ok(true, "Bad regular expression refused with a clear message"); }
+
+        var spec = Path.Combine(r10, "Sub", "Specification.pdf");
+        using (var pv = new PdfPreview(spec))
+        {
+            var marks = pv.Marks(3, new Matcher("A-201 Rev C", "phrase", false, false));
+            using var bmp = pv.Render(3, 800);
+            Ok(pv.Pages == 3 && marks.Count >= 1 && bmp.Width == 800 && marks[0].Width > 0.05 && marks[0].Y > 0 && marks[0].Y < 0.3,
+                $"Preview: page 3 drawn ({bmp.Width}×{bmp.Height}), yellow mark at x {marks.FirstOrDefault().X:0.00} y {marks.FirstOrDefault().Y:0.00} w {marks.FirstOrDefault().Width:0.00}");
+        }
+        FolderIndex.Forget(r10);
+
+        // Error log and report (no secrets inside)
+        Store.SetKey("gemini", "SECRET-KEY-123");
+        using (Log.Doing("Smoke step")) Log.Error("Smoke", new InvalidOperationException("test error"));
+        var last = Log.ReadAll().FirstOrDefault();
+        Ok(last != null && last.Message.Contains("test error") && last.Step == "Smoke step" && last.Detail.Contains("InvalidOperationException"), "Error recorded with step and details");
+        var zip = Log.CreateReport();
+        string all;
+        using (var z = System.IO.Compression.ZipFile.OpenRead(zip))
+            all = string.Join("\n", z.Entries.Select(e => { using var r = new StreamReader(e.Open()); return e.FullName + "\n" + r.ReadToEnd(); }));
+        Ok(all.Contains("system.txt") && all.Contains("test error") && !all.Contains("SECRET-KEY-123"), "Error report created without secrets: " + Path.GetFileName(zip));
+        Store.SetKey("gemini", "");
+
+        // Office add-in: manifests and the panel server (certificate trusted only by this test)
+        var x1 = System.Xml.Linq.XDocument.Parse(OfficeAddin.OfficeXml());
+        var x2 = System.Xml.Linq.XDocument.Parse(OfficeAddin.OutlookXml());
+        Ok(x1.Root!.Name.LocalName == "OfficeApp" && x2.Root!.Name.LocalName == "OfficeApp", "Office and Outlook add-in files are valid XML");
+        Server.Start(47399);
+        Ok(Server.Running, "Office panel server starts" + (Server.LastError.Length > 0 ? ": " + Server.LastError : ""));
+        using (var http = new HttpClient(new HttpClientHandler { ServerCertificateCustomValidationCallback = (_, _, _, _) => true }) { Timeout = TimeSpan.FromSeconds(20) })
+        {
+            var page = http.GetAsync("https://localhost:47399/taskpane.html").Result;
+            var html = page.Content.ReadAsStringAsync().Result;
+            Ok(page.IsSuccessStatusCode && html.Contains("Nova Enhance"), "Office panel page served: " + (int)page.StatusCode);
+            var js = http.GetAsync("https://localhost:47399/taskpane.js").Result;
+            Ok(js.IsSuccessStatusCode, "Office panel script served");
+            var no = http.PostAsync("https://localhost:47399/api/ping", new StringContent("{}")).Result;
+            Ok((int)no.StatusCode == 403, "Panel API refuses calls without Nova's header: " + (int)no.StatusCode);
+            var req = new HttpRequestMessage(HttpMethod.Get, "https://localhost:47399/api/ping"); req.Headers.Add("X-Nova", "1");
+            var ping = http.SendAsync(req).Result.Content.ReadAsStringAsync().Result;
+            Ok(ping.Contains("\"ok\":true"), "Panel API answers Nova's panel: " + ping);
+            var req2 = new HttpRequestMessage(HttpMethod.Post, "https://localhost:47399/api/enhance") { Content = new StringContent("{\"mode\":\"grammar\",\"text\":\"hello\"}") };
+            req2.Headers.Add("X-Nova", "1");
+            var en = http.SendAsync(req2).Result.Content.ReadAsStringAsync().Result;
+            Ok(en.Contains("error") && en.Contains("AI key"), "Panel asks for an AI key when none is set");
+        }
+        Server.Stop();
+
         // ✦ Ask AI: best passages for a question (no AI on the test PC, so the words are given)
         var root2 = Path.Combine(Path.GetTempPath(), "Nova ask test");
         if (Directory.Exists(root2)) Directory.Delete(root2, true);
@@ -187,6 +271,8 @@ static class Smoke
             Ok(vt.Any(h => h.Name == "vertical label.png"), "OCR: vertical text (90° pass)");
             var pend = FolderIndex.VisionPending(root3);
             Ok(pend.Any(x => x.Path.EndsWith("blank.png")), $"Unclear page offered to Gemini vision: {pend.Count} page(s)");
+            var probs = pgo.Problems.ToList();
+            Ok(probs.Any(p => p.Name == "blank.png" && p.Reason.StartsWith("Scanned")), "⚠ Problems tab: " + string.Join(" · ", probs.Select(p => p.Name + " — " + p.Reason)));
             Ocr.Mode = "pc";
             FolderIndex.VisionClear(root3);
             FolderIndex.Forget(root3);
@@ -204,7 +290,7 @@ static class Smoke
     {
         var e = new EnhanceForm(); e.Start(IntPtr.Zero, ""); Pump(400); Ok(e.Visible, "Enhance window opens"); e.Dispose();
         var s = new SettingsForm(); s.Show();
-        foreach (var sec in new[] { "AI & API keys", "About me", "Enhancement", "Email & AI", "Folder search", "Google Drive", "Shortcuts", "Backup & restore", "Updates", "Error log", "About" })
+        foreach (var sec in new[] { "AI & API keys", "About me", "Enhancement", "Email & AI", "Folder search", "Google Drive", "Office tab", "Shortcuts", "Backup & restore", "Updates", "Error log", "About" })
         {
             s.Go(sec); Pump(250);
         }

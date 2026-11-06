@@ -105,6 +105,7 @@ class NovaContext : ApplicationContext
         }, null, -1, false);
 
         MailIndex.Start();
+        if (Store.Bool("win_addin", false) || Store.Bool("win_addin_it", false)) Server.Start();
 
         timer = new System.Windows.Forms.Timer { Interval = 60_000 };
         timer.Tick += (_, _) => Tick();
@@ -145,6 +146,7 @@ class NovaContext : ApplicationContext
     {
         tray.Visible = false;
         MailIndex.Stop();
+        Server.Stop();
         hot.DestroyHandle();
         ExitThread();
     }

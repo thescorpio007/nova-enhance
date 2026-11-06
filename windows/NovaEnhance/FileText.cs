@@ -65,6 +65,10 @@ static class FileKinds
 static class FileText
 {
     public static int MaxSegChars = 1200;
+    /// <summary>Error of the last Extract on this thread (null = fine).</summary>
+    [ThreadStatic] public static string LastError;
+    /// <summary>Long PDFs report "page i of n" (per reader thread).</summary>
+    [ThreadStatic] public static Action<int, int> PageProgress;
 
     public static List<Seg> Extract(string path, int depth = 0)
     {
@@ -98,7 +102,7 @@ static class FileText
                 case ".gdoc": case ".gsheet": case ".gslides": segs.AddRange(GoogleShortcut(path, ext)); break;
             }
         }
-        catch (Exception e) { Log.Write($"read {Path.GetFileName(path)}: {e.GetType().Name}: {e.Message}"); }
+        catch (Exception e) { LastError = e.Message; Log.Warn("Read file", $"{Path.GetFileName(path)}: {e.GetType().Name}: {e.Message}"); }
         return segs;
     }
 
@@ -419,6 +423,7 @@ static class FileText
             {
                 string t;
                 try { t = string.Join(" ", doc.GetPage(i).GetWords().Select(w => w.Text)); } catch { t = ""; }
+                if (i % 25 == 0) PageProgress?.Invoke(i, pages);
                 if (t.Trim().Length < 20) noText.Add(i);
                 else res.Add(new Seg($"page {i}", Clean(t), $"page:{i}"));
             }
@@ -676,7 +681,8 @@ static class OfficeConvert
     [DllImport("ole32.dll")] static extern int CLSIDFromProgID([MarshalAs(UnmanagedType.LPWStr)] string progId, out Guid clsid);
     [DllImport("oleaut32.dll")] static extern int GetActiveObject(ref Guid clsid, IntPtr reserved, [MarshalAs(UnmanagedType.IUnknown)] out object obj);
 
-    static readonly Dictionary<string, (object App, bool Ours)> apps = new();
+    [ThreadStatic] static Dictionary<string, (object App, bool Ours)> appsT;
+    static Dictionary<string, (object App, bool Ours)> apps => appsT ??= new();
     public static bool Missing(string app) => Type.GetTypeFromProgID(ProgId(app)) == null;
     static string ProgId(string app) => app switch { "word" => "Word.Application", "powerpoint" => "PowerPoint.Application", _ => "Excel.Application" };
 
@@ -744,7 +750,7 @@ static class OfficeConvert
 /// <summary>Title, author, tags and comments Windows knows for any file (used for .dwg, .rvt and other files Nova can't open).</summary>
 static class ShellProps
 {
-    static dynamic shell;
+    [ThreadStatic] static dynamic shell;
 
     public static string Get(string path)
     {

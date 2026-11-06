@@ -40,6 +40,8 @@
 
   <ItemGroup>
     <None Remove="TestData\**" />
+    <None Remove="Addin\**" />
+    <EmbeddedResource Include="Addin\**" />
   </ItemGroup>
 
 </Project>

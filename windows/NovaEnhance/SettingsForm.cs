@@ -3,7 +3,7 @@ namespace NovaEnhance;
 /// <summary>Settings, split into sections like the phone app.</summary>
 class SettingsForm : NovaForm
 {
-    static readonly string[] Sections = { "AI & API keys", "About me", "Enhancement", "Email & AI", "Folder search", "Google Drive", "Shortcuts", "Backup & restore", "Updates", "Error log", "About" };
+    static readonly string[] Sections = { "AI & API keys", "About me", "Enhancement", "Email & AI", "Folder search", "Google Drive", "Office tab", "Shortcuts", "Backup & restore", "Updates", "Error log", "About" };
     readonly ListBox nav;
     readonly Panel host;
     Stack page;
@@ -73,6 +73,7 @@ class SettingsForm : NovaForm
                 case "Backup & restore": BackupPage(); break;
                 case "Updates": Updates(); break;
                 case "Error log": ErrorLog(); break;
+                case "Office tab": OfficeTab(); break;
                 default: About(); break;
             }
         }
@@ -457,18 +458,136 @@ class SettingsForm : NovaForm
     }
 
     // ------------------------------------------------------------------ Error log
+    string logFilter = "today";
+    bool logErrorsOnly;
+
     void ErrorLog()
     {
-        var box = page.Add(Th.Box(true, 18), true);
-        box.ReadOnly = true;
-        box.Font = new Font("Consolas", 9);
-        box.Text = Log.Read();
-        box.SelectionStart = box.Text.Length;
-        box.ScrollToCaret();
-        var row = page.Add(Th.Row(false));
-        row.Controls.Add(Th.B("⧉ Copy", () => { if (box.Text.Length > 0) Clipboard.SetText(box.Text); }));
+        var entries = Log.ReadAll();
+        var today = entries.Where(e => e.Time.Date == DateTime.Today).ToList();
+        var stats = page.Add(Th.Row(false));
+        Label Stat(string big, string small, Color c)
+        {
+            var l = Th.L(big + "\n" + small, 9.5f, c, true);
+            l.BackColor = Th.Card; l.Padding = new Padding(12, 6, 12, 6); l.Margin = new Padding(0, 0, 8, 0);
+            return l;
+        }
+        stats.Controls.Add(Stat(today.Count(e => e.Level == "error").ToString(), "errors today", Th.Bad));
+        stats.Controls.Add(Stat(entries.Count(e => e.Level == "error" && e.Time > DateTime.Now.AddDays(-7)).ToString(), "last 7 days", Th.Warn));
+        var env = Log.Environment().Split('\n');
+        stats.Controls.Add(Stat("build " + Program.Build, env.Length > 1 ? env[1].Trim() : "", Th.Text));
+
+        page.Add(Th.Section("Recording"));
+        page.Add(Th.Check("Record every error with full technical details (what failed, where, the step you were doing, the technical trace)", Log.Detailed, v => Log.Detailed = v));
+        page.Add(Th.Check("Also record warnings (slow or skipped files, OCR problems, AI retries)", Log.Warnings, v => Log.Warnings = v));
+        page.Add(Th.Check("Include a short text sample of the file or email that failed (first 100 characters) — off keeps your content out", Log.Samples, v => Log.Samples = v));
+        var keep = page.Add(Th.Row(false));
+        keep.Controls.Add(Th.L("Keep errors for", 10, Th.Text));
+        var days = new NumericUpDown { Minimum = 1, Maximum = 365, Value = Log.KeepDays, Width = 60, BackColor = Th.Card, ForeColor = Th.Text, Font = Th.F(10) };
+        days.ValueChanged += (_, _) => Log.KeepDays = (int)days.Value;
+        keep.Controls.Add(days);
+        keep.Controls.Add(Th.L("days", 10, Th.Text));
+
+        page.Add(Th.Section("Errors"));
+        var filters = page.Add(Th.Row(false));
+        foreach (var (k, l) in new[] { ("today", "Today"), ("7", "7 days"), ("all", "All") })
+        {
+            var kk = k;
+            filters.Controls.Add(Th.Chip(l, logFilter == k, () => { logFilter = kk; Draw("Error log"); }));
+        }
+        filters.Controls.Add(Th.Chip("⚠ Errors only", logErrorsOnly, () => { logErrorsOnly = !logErrorsOnly; Draw("Error log"); }));
+        var search = Th.Box(false); search.Width = 200; search.PlaceholderText = "🔍 filter…"; search.Margin = new Padding(8, 0, 0, 0);
+        filters.Controls.Add(search);
+        IEnumerable<LogEntry> shown = logFilter switch { "today" => today, "7" => entries.Where(e => e.Time > DateTime.Now.AddDays(-7)), _ => entries };
+        if (logErrorsOnly) shown = shown.Where(e => e.Level == "error");
+        var list = shown.Take(500).ToList();
+        var lv = page.Add(new ListView { View = View.Details, FullRowSelect = true, HideSelection = false, MultiSelect = false, Height = 230, BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.None, Font = Th.F(9.5f) }, true);
+        lv.Columns.Add("Time", 120); lv.Columns.Add("Level", 60); lv.Columns.Add("Where", 170); lv.Columns.Add("What happened", 520);
+        void Fill(string f)
+        {
+            lv.BeginUpdate(); lv.Items.Clear();
+            foreach (var e in list.Where(e => f.Length == 0 || (e.Message + e.Area + e.Step).Contains(f, StringComparison.OrdinalIgnoreCase)))
+                lv.Items.Add(new ListViewItem(new[] { e.Time.ToString(logFilter == "today" ? "HH:mm:ss" : "dd MMM HH:mm"), e.Level.ToUpperInvariant(), e.Area, e.Message }) { Tag = e, ForeColor = e.Level == "error" ? Th.Bad : Th.Warn });
+            lv.EndUpdate();
+        }
+        Fill("");
+        search.TextChanged += (_, _) => Fill(search.Text.Trim());
+        var det = page.Add(Th.Box(true, 8), true);
+        det.ReadOnly = true; det.Font = new Font("Consolas", 9);
+        det.Text = list.Count == 0 ? "No errors — all good." : "Select an error to see its details.";
+        lv.SelectedIndexChanged += (_, _) => { if (lv.SelectedItems.Count > 0) det.Text = Log.Format((LogEntry)lv.SelectedItems[0].Tag); };
+
+        page.Add(Th.Section("Share"));
+        var st = Th.L("", 9.5f, Th.Good);
+        var row = page.Add(Th.Row());
+        row.Controls.Add(Th.B("📦 Create error report", () =>
+        {
+            try { var f = Log.CreateReport(); st.Text = "✓ " + Path.GetFileName(f) + " — send it to me in the chat"; Shell.Select(f); }
+            catch (Exception e) { st.Text = "⚠ " + e.Message; st.ForeColor = Th.Bad; }
+        }, true));
+        row.Controls.Add(Th.B("⧉ Copy last error", () =>
+        {
+            var e = entries.FirstOrDefault(x => x.Level == "error") ?? entries.FirstOrDefault();
+            if (e != null) { Clipboard.SetText(Log.Format(e) + "\r\n\r\n" + Log.Environment()); st.Text = "⧉ Copied"; }
+        }));
+        row.Controls.Add(Th.B("✉ Email the report", () =>
+        {
+            try { var f = Log.CreateReport(); st.Text = Log.EmailReport(f) ? "✉ A new Outlook email is open with the report attached" : "Outlook could not open — the report is in the Logs folder"; if (!st.Text.StartsWith("✉")) Shell.Select(f); }
+            catch (Exception e) { st.Text = "⚠ " + e.Message; }
+        }));
         row.Controls.Add(Th.B("📁 Logs folder", () => Shell.Open(Paths.Logs)));
-        row.Controls.Add(Th.B("Clear", () => { Log.Clear(); box.Text = ""; }));
+        row.Controls.Add(Th.B("Clear", () => { if (MessageBox.Show("Delete all recorded errors?", "Nova Enhance", MessageBoxButtons.YesNo) == DialogResult.Yes) { Log.Clear(); Draw("Error log"); } }));
+        page.Add(st);
+        Note("The report is one .zip in Documents\\Nova Enhance\\Logs: errors with details, Nova build, Windows / Office / Outlook versions and your settings — never your API keys, passwords, emails or file contents.");
+    }
+
+    // ------------------------------------------------------------------ Office tab
+    void OfficeTab()
+    {
+        Note("A ✦ Nova Enhance button inside Word, Excel, PowerPoint and Outlook: fix grammar, shorten, rewrite, translate, keep the original — and in Outlook summarise and draft replies. The panel runs from Nova on this PC, so keep Nova running (it starts with Windows).");
+        page.Add(Th.Section("Status"));
+        var reg = OfficeAddin.RegisteredForOffice();
+        var trusted = OfficeAddin.Trusted();
+        Note((reg ? "✓ Installed for Word, Excel and PowerPoint" : "Not installed for Word, Excel and PowerPoint") +
+             " · " + (trusted ? "✓ panel trusted on this PC" : "panel not trusted yet") +
+             " · " + (Server.Running ? "✓ panel running" : "panel not running") + (Server.LastError.Length > 0 ? " (" + Server.LastError + ")" : ""), reg && trusted && Server.Running ? Th.Good : Th.Warn);
+        Note("Office: " + Log.OfficeVersion());
+        var st = Th.L("", 9.5f, Th.Good);
+
+        page.Add(Th.Section("A · Install it myself (this PC)"));
+        Note("1 · Click Install for me. Windows asks once \"Do you want to install this certificate?\" → Yes (it lets Office show Nova's panel; it only works on this PC).", Th.Text);
+        Note("2 · Restart Word / Excel / PowerPoint → Home tab → ✦ Nova Enhance. (If you don't see it: Insert → My Add-ins → Developer Add-ins.)", Th.Text);
+        Note("3 · Outlook: Get Add-ins (Home tab) → My add-ins → Custom add-ins → + Add a custom add-in → Add from file → choose NovaEnhance-Outlook.xml.", Th.Text);
+        var ra = page.Add(Th.Row());
+        ra.Controls.Add(Th.B("Install for me", () =>
+        {
+            try { OfficeAddin.InstallForMe(); st.Text = "✓ Installed — restart Word, Excel and PowerPoint. For Outlook, follow step 3."; st.ForeColor = Th.Good; }
+            catch (Exception e) { st.Text = "⚠ " + e.Message; st.ForeColor = Th.Bad; Log.Error("Office add-in · install", e); }
+            Draw("Office tab");
+        }, true));
+        ra.Controls.Add(Th.B("📁 Add-in files", () => { OfficeAddin.WriteManifests(); Shell.Select(OfficeAddin.OutlookManifest); }));
+        ra.Controls.Add(Th.B("Open Outlook add-ins page", () => Shell.Open("https://aka.ms/olksideload")));
+        ra.Controls.Add(Th.B("Uninstall", () =>
+        {
+            if (MessageBox.Show("Remove the Nova tab from Word, Excel and PowerPoint, and stop trusting the panel? (For Outlook: Get Add-ins → My add-ins → Nova Enhance → Remove.)", "Nova Enhance", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
+            OfficeAddin.Uninstall(); Draw("Office tab");
+        }));
+        page.Add(st);
+
+        page.Add(Th.Section("B · Through company IT (Microsoft 365)"));
+        Note("Nova saves the two add-in files and a one-page note for IT. IT uploads them once in the Microsoft 365 admin center → Integrated apps; the Nova tab then appears by itself in Outlook, Word, Excel and PowerPoint. Each PC still needs Nova Enhance installed and the panel trusted (button below).", Th.Text);
+        var rb = page.Add(Th.Row());
+        rb.Controls.Add(Th.B("Prepare for IT", () =>
+        {
+            try { var d = OfficeAddin.PrepareForIt(); Store.SetBool("win_addin_it", true); Shell.Open(d); st.Text = "✓ Files and note saved in Documents\\Nova Enhance\\Office Add-in\\For IT"; }
+            catch (Exception e) { st.Text = "⚠ " + e.Message; }
+        }, true));
+        rb.Controls.Add(Th.B("Trust the panel on this PC", () =>
+        {
+            try { OfficeAddin.Trust(); Server.Start(); Store.SetBool("win_addin_it", true); st.Text = "✓ Panel trusted and running"; }
+            catch (Exception e) { st.Text = "⚠ " + e.Message; }
+            Draw("Office tab");
+        }));
     }
 
     void About()
