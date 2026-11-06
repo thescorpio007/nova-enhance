@@ -1,0 +1,18 @@
+body{font-family:"Segoe UI",Arial,sans-serif;background:#12151C;color:#ECEEF3;margin:0;padding:12px;font-size:13px;min-width:300px}
+.head{font-size:15px;margin-bottom:6px}.logo{color:#B9B0FF}
+.pill{background:#232A3A;border-radius:10px;padding:2px 8px;font-size:11px;color:#C9CED8;margin-left:4px}
+.status{font-size:12px;color:#B9B0FF;margin:4px 0 8px;min-height:16px}
+.status.bad{color:#FF6B6B}.status.good{color:#5ED68A}
+.sec{font-size:10.5px;letter-spacing:1px;color:#9AA3B5;font-weight:bold;margin:14px 0 6px;text-transform:uppercase}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+button{background:#232A3A;color:#ECEEF3;border:0;border-radius:7px;padding:8px;font-size:12.5px;font-weight:bold;cursor:pointer;font-family:inherit}
+button:hover{background:#2E364A}button.primary{background:#7C6CFF;color:#fff}button:disabled{opacity:.5}
+select,textarea{background:#181C24;color:#ECEEF3;border:1px solid #2E3546;border-radius:6px;padding:6px;font-family:inherit;font-size:12.5px;box-sizing:border-box}
+textarea{width:100%;resize:vertical;margin-top:6px}
+.row{margin:6px 0}.row button{margin-right:4px}
+.small{font-size:11.5px}.muted{color:#9AA3B5}
+.answer{background:#181C24;border:1px solid #2E3546;border-radius:8px;padding:9px;line-height:1.5;white-space:pre-wrap;max-height:340px;overflow:auto}
+.cite{color:#B9B0FF}
+.orig{background:#181C24;border:1px solid #3A3320;border-radius:8px;padding:8px;color:#FFD27A;max-height:110px;overflow:auto;white-space:pre-wrap}
+.hide{display:none}
+.foot{margin-top:14px;font-size:11px;color:#6B7385;line-height:1.5}

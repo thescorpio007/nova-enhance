@@ -166,6 +166,8 @@ static class Backup
         var done = new List<string>();
         try { Startup.Apply(); done.Add("start with Windows"); } catch (Exception e) { Log.Error("restore startup", e); }
         try { ExplorerMenu.Apply(); done.Add("Explorer menu"); } catch (Exception e) { Log.Error("restore explorer", e); }
+        if (BrowserAddon.On)
+            try { BrowserAddon.Enable(); done.Add("browser add-on (files in Documents\\Nova Enhance\\Browser Add-on)"); } catch (Exception e) { Log.Error("restore browser add-on", e); }
         if (Store.Bool("win_addin", false))
             try { if (OfficeReinstall()) done.Add("Office add-in"); } catch (Exception e) { Log.Error("restore office", e); done.Add("⚠ Office add-in (open Settings → Office)"); }
         return done.Count > 0 ? "\nSet up again on this PC: " + string.Join(", ", done) : "";

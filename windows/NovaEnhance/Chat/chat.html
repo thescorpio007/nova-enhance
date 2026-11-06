@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Nova Chat</title>
+<link rel="stylesheet" href="chat.css">
+</head>
+<body>
+<div id="app">
+  <aside id="side">
+    <button id="newchat" class="primary wide">＋ New chat</button>
+    <input id="find" placeholder="🔍 Search chats…">
+    <div id="list"></div>
+    <div class="sign" id="sign">Designed by A.HAMROUNI</div>
+  </aside>
+  <main>
+    <div id="msgs">
+      <div id="empty" class="empty">
+        <div class="big">✦ Nova Chat</div>
+        <div>Ask anything. Add <b>About me</b>, a <b>folder</b>, <b>files</b> or <b>emails</b> below and Nova answers from them, with sources you can open.</div>
+        <div class="ex" id="examples"></div>
+      </div>
+    </div>
+    <div id="composer">
+      <div id="chips"></div>
+      <textarea id="input" rows="3" placeholder="Ask anything about your files, emails or a topic…  (Enter to send · Shift+Enter new line)"></textarea>
+      <div class="row">
+        <span class="seg"><button id="short" class="on">Short</button><button id="detail">Detailed</button></span>
+        <span class="muted small" id="ai"></span>
+        <span class="grow"></span>
+        <button id="mic" title="Speak your question">🎤</button>
+        <button id="send" class="primary">Send ➤</button>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div id="picker" class="hide">
+  <div class="card">
+    <div class="ph"><b>✉ Add an email</b><span class="x" id="pclose">✕</span></div>
+    <input id="pq" placeholder="Search your email index: name, subject, words…">
+    <div id="presults" class="presults"><div class="muted small">Type and press Enter.</div></div>
+  </div>
+</div>
+<script src="chat.js"></script>
+</body>
+</html>

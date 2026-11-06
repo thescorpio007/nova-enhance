@@ -3,7 +3,7 @@ namespace NovaEnhance;
 /// <summary>Settings, split into sections like the phone app.</summary>
 class SettingsForm : NovaForm
 {
-    static readonly string[] Sections = { "AI & API keys", "About me", "Enhancement", "Email & AI", "Folder search", "Google Drive", "Office tab", "Shortcuts", "Backup & restore", "Updates", "Error log", "About" };
+    static readonly string[] Sections = { "AI & API keys", "About me", "Enhancement", "Email & AI", "Folder search", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "About" };
     readonly ListBox nav;
     readonly Panel host;
     Stack page;
@@ -70,6 +70,8 @@ class SettingsForm : NovaForm
                 case "Folder search": FolderSearch(); break;
                 case "Google Drive": GoogleDrive(); break;
                 case "Shortcuts": Shortcuts(); break;
+                case "Browser add-on": BrowserPage(); break;
+                case "AI window": AiWindowPage(); break;
                 case "Backup & restore": BackupPage(); break;
                 case "Updates": Updates(); break;
                 case "Error log": ErrorLog(); break;
@@ -374,10 +376,54 @@ class SettingsForm : NovaForm
         page.Add(Th.Section("Everywhere in Windows"));
         Note("Ctrl + Shift + E — enhance the selected text in any program (Word, Outlook, browser, AutoCAD/Revit text boxes…), then ⇄ Replace.", Th.Text);
         Note("Ctrl + Shift + F — Ask Nova about your email (with a button to search inside a folder).", Th.Text);
+        Note("Ctrl + Shift + A — send the selected text to the AI window (Nova Chat or the AI website you used last).", Th.Text);
+        Note("In the browser (with the Nova add-on): Alt + G fix grammar · Alt + T translate · right-click selected text → ✦ Nova Enhance.", Th.Text);
         Note("Right-click a folder → Search inside with Nova — find codes, references and sentences inside its files.", Th.Text);
         Note("Left-click the ✦ icon near the clock = Ask Nova · right-click = menu.", Th.Text);
         page.Add(Th.Section("Start"));
         page.Add(Th.Check("Start Nova Enhance with Windows", Store.Autostart, v => { Store.Autostart = v; Startup.Apply(); }));
+    }
+
+    // ------------------------------------------------------------------ Browser add-on
+    void BrowserPage()
+    {
+        Note("A ✦ Nova Enhance add-on for Firefox Developer Edition, Chrome and Edge: right-click selected text → fix grammar, rewrite or translate in place (Gmail, Outlook web, WhatsApp Web, forms); Alt+G and Alt+T; and a ✦ panel to summarise the page or ask about it. It uses Nova on this PC (keep Nova running), so your AI key stays here.");
+        page.Add(Th.Section("Status"));
+        Note(BrowserAddon.On ? $"✓ Prepared (version {Store.Str("win_browser_written", BrowserAddon.Version)}) · " + (Server.BrowserRunning ? "✓ Nova is listening for the add-on" : "⚠ not listening — restart Nova") : "Not prepared yet", BrowserAddon.On && Server.BrowserRunning ? Th.Good : Th.Warn);
+        var st = Th.L("", 9.5f, Th.Good);
+        var r = page.Add(Th.Row());
+        r.Controls.Add(Th.B(BrowserAddon.On ? "Prepare again" : "Prepare the add-on", () =>
+        {
+            try { BrowserAddon.Enable(); st.Text = "✓ Ready — follow the steps below"; Shell.Open(BrowserAddon.Folder); }
+            catch (Exception e) { st.Text = "⚠ " + e.Message; st.ForeColor = Th.Bad; Log.Error("Browser add-on · prepare", e); }
+            Draw("Browser add-on");
+        }, true));
+        r.Controls.Add(Th.B("📁 Add-on folder", () => Shell.Open(BrowserAddon.Folder)));
+        r.Controls.Add(Th.B("⧉ Copy Chrome/Edge folder path", () => { Clipboard.SetText(BrowserAddon.ChromeFolder); st.Text = "⧉ Copied — paste it in the Load unpacked window"; }));
+        if (BrowserAddon.On) r.Controls.Add(Th.B("Turn off", () => { BrowserAddon.On = false; Draw("Browser add-on"); }));
+        page.Add(st);
+        page.Add(Th.Section("Chrome or Edge (once)"));
+        Note("1 · Open chrome://extensions (Edge: edge://extensions) → turn on Developer mode.", Th.Text);
+        Note("2 · Load unpacked → choose Documents\\Nova Enhance\\Browser Add-on\\Chrome and Edge (use the Copy button above).", Th.Text);
+        Note("3 · Puzzle icon → pin ✦ Nova Enhance. Click it to open the side panel. Updates arrive by themselves with Nova.");
+        page.Add(Th.Section("Firefox Developer Edition (once)"));
+        Note("1 · about:config → xpinstall.signatures.required = false, and extensions.checkUpdateSecurity = false.", Th.Text);
+        Note("2 · about:addons → ⚙ → Install Add-on From File → NovaEnhance-Firefox.xpi (in the add-on folder).", Th.Text);
+        Note("3 · Click ✦ on the toolbar to open the Nova sidebar. Shortcuts: Alt+G, Alt+T (change them in about:addons → ⚙ → Manage Extension Shortcuts).");
+    }
+
+    // ------------------------------------------------------------------ AI window
+    void AiWindowPage()
+    {
+        Note("💬 One window with ✦ Nova Chat (your AI key in Nova, with About me, files, folders and emails, answers with sources) and your AI websites — Gemini, ChatGPT, Claude, DeepSeek, Copilot, plus any site you add. Sign in once in each tab; you stay signed in (kept in this Windows account only).");
+        var r = page.Add(Th.Row());
+        r.Controls.Add(Th.B("💬 Open the AI window", () => Screens.Hub(null), true));
+        r.Controls.Add(Th.B("Reset the website list", () => { Store.Set("win_hub_sites", ""); Note("✓ Default sites back — reopen the AI window.", Th.Good); }));
+        page.Add(Th.Section("Tips"));
+        Note("Ctrl + Shift + A in any program puts the selected text into the AI window, ready for your instruction.", Th.Text);
+        Note("◫ Side by side shows two tabs at once; type in \"Same question to both\" to compare two AIs (or Nova Chat and a website).", Th.Text);
+        Note("Right-click a website tab to rename, reload, open it in your browser or remove it. ＋ Add a site for any other AI.", Th.Text);
+        Note("Nova Chat keeps your chats in Documents\\Nova Enhance\\Nova Chat. Your privacy choices still apply: Folder search (Never / Ask / Send) and Email & AI (first lines or full email).");
     }
 
     // ------------------------------------------------------------------ Backup

@@ -36,12 +36,17 @@
     <PackageReference Include="PdfPig" Version="0.1.9" />
     <PackageReference Include="NAudio.WinMM" Version="2.2.1" />
     <PackageReference Include="MimeKit" Version="4.8.0" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2792.45" />
   </ItemGroup>
 
   <ItemGroup>
     <None Remove="TestData\**" />
     <None Remove="Addin\**" />
     <EmbeddedResource Include="Addin\**" />
+    <None Remove="Browser\**" />
+    <EmbeddedResource Include="Browser\**" />
+    <None Remove="Chat\**" />
+    <EmbeddedResource Include="Chat\**" />
   </ItemGroup>
 
 </Project>

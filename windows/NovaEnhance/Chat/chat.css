@@ -1,0 +1,54 @@
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{font-family:"Segoe UI",Arial,sans-serif;background:#12151C;color:#ECEEF3;font-size:14px}
+#app{display:flex;height:100%}
+#side{width:250px;background:#0E1117;border-right:1px solid #2A3040;padding:12px;display:flex;flex-direction:column;gap:8px}
+#list{flex:1;overflow:auto}
+.grp{font-size:10.5px;letter-spacing:1px;color:#9AA3B5;font-weight:bold;margin:12px 4px 6px;text-transform:uppercase}
+.it{padding:7px 9px;border-radius:7px;color:#C9CED8;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px;position:relative}
+.it:hover{background:#1A1F2A}.it.on{background:#232A3A;color:#fff}
+.it .del{position:absolute;right:6px;top:6px;color:#6B7385;display:none}.it:hover .del{display:inline}
+.sign{font-size:11px;color:#6B7385}
+main{flex:1;display:flex;flex-direction:column;min-width:0}
+#msgs{flex:1;overflow:auto;padding:22px 34px}
+.empty{max-width:640px;margin:60px auto;color:#9AA3B5;line-height:1.6}
+.empty .big{font-size:24px;color:#ECEEF3;font-weight:600;margin-bottom:8px}
+.ex{margin-top:16px;display:flex;flex-direction:column;gap:6px}
+.ex div{background:#181C24;border:1px solid #2A3040;border-radius:10px;padding:9px 12px;cursor:pointer;color:#C9CED8}
+.ex div:hover{border-color:#7C6CFF}
+.mu{background:#232A3A;border-radius:14px;padding:10px 14px;margin:0 0 16px auto;max-width:72%;width:fit-content;white-space:pre-wrap}
+.mctx{font-size:11.5px;color:#9AA3B5;text-align:right;margin:-12px 0 14px}
+.ma{background:#181C24;border:1px solid #2A3040;border-radius:14px;padding:12px 16px;max-width:88%;margin-bottom:18px;line-height:1.6}
+.ma .txt{white-space:pre-wrap}
+.ma .lab{font-size:11px;color:#9AA3B5;margin-bottom:4px}
+.cite{color:#B9B0FF;cursor:pointer;font-weight:600}.cite:hover{text-decoration:underline}
+.srcs{margin-top:10px;font-size:12.5px;color:#B9B0FF;display:flex;flex-direction:column;gap:2px}
+.srcs span{cursor:pointer}.srcs span:hover{text-decoration:underline}
+.acts{margin-top:10px;display:flex;gap:6px;flex-wrap:wrap}
+.thinking{color:#B9B0FF;font-size:13px;margin:0 0 16px}
+.err{color:#FF6B6B}
+#composer{margin:0 34px 18px;background:#181C24;border:1px solid #2E3546;border-radius:14px;padding:10px 12px}
+#chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}
+.chip{background:#232A3A;border:1px solid #2E3546;border-radius:12px;padding:3px 10px;font-size:12px;color:#C9CED8;cursor:pointer;user-select:none}
+.chip.on{border-color:#7C6CFF;color:#fff}
+.chip .x{margin-left:6px;color:#9AA3B5}
+.chip.add{color:#9AA3B5}
+textarea{width:100%;background:transparent;border:0;color:#ECEEF3;font-family:inherit;font-size:14px;resize:none;outline:none;padding:6px 2px}
+.row{display:flex;gap:8px;align-items:center}
+.grow{flex:1}
+button{background:#232A3A;color:#ECEEF3;border:0;border-radius:7px;padding:7px 12px;font-size:12.5px;font-weight:bold;cursor:pointer;font-family:inherit}
+button:hover{background:#2E364A}button.primary{background:#7C6CFF;color:#fff}button:disabled{opacity:.5}
+button.wide{width:100%}
+button.rec{background:#FF6B6B;color:#fff}
+.seg button{border-radius:0;padding:5px 10px;font-size:12px}.seg button:first-child{border-radius:7px 0 0 7px}.seg button:last-child{border-radius:0 7px 7px 0}
+.seg button.on{background:#7C6CFF;color:#fff}
+input{background:#181C24;color:#ECEEF3;border:1px solid #2E3546;border-radius:8px;padding:7px 10px;font-family:inherit;font-size:13px;width:100%}
+.muted{color:#9AA3B5}.small{font-size:12px}
+.hide{display:none!important}
+#picker{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:flex-start;justify-content:center;padding-top:80px}
+.card{background:#12151C;border:1px solid #2E3546;border-radius:12px;width:620px;padding:14px;display:flex;flex-direction:column;gap:8px;max-height:70vh}
+.ph{display:flex;justify-content:space-between}.x{cursor:pointer;color:#9AA3B5}
+.presults{overflow:auto;display:flex;flex-direction:column;gap:4px}
+.pr{padding:8px 10px;border-radius:8px;background:#181C24;cursor:pointer}.pr:hover{background:#232A3A}
+.pr .s{font-weight:600}.pr .m{font-size:12px;color:#9AA3B5}
+b,strong{color:#fff}

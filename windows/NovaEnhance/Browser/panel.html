@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nova Enhance</title>
+<link rel="stylesheet" href="panel.css">
+</head>
+<body>
+<div class="head"><span class="logo">✦</span> <b>Nova Enhance</b> <span id="ai" class="pill"></span></div>
+<div id="status" class="status">Connecting to Nova Enhance on this PC…</div>
+
+<div class="sec">This page</div>
+<div class="grid">
+  <button id="sum" class="primary">✦ Summarise page</button>
+  <button id="ask">🔍 Ask about page</button>
+</div>
+<textarea id="q" rows="2" placeholder="Your question about this page, e.g. fire rating for compartment walls in a 35 m tower?"></textarea>
+
+<div id="ansbox" class="hide">
+  <div class="sec" id="anslabel">Answer</div>
+  <div id="answer" class="answer"></div>
+  <div class="row"><button id="copyans">⧉ Copy</button> <button id="more">More detail</button></div>
+</div>
+
+<div class="sec">Selected text</div>
+<div class="grid">
+  <button data-mode="grammar" class="primary">✦ Fix grammar</button>
+  <button data-mode="shorten">Shorten</button>
+  <button data-mode="professional">Professional</button>
+  <button data-mode="informal">Informal</button>
+  <button data-mode="expand">Expand</button>
+  <button data-mode="translate" id="tr">🌐 → English</button>
+</div>
+<div class="row"><span class="small muted">Translate to</span> <select id="lang"></select></div>
+
+<div id="out" class="hide">
+  <div class="sec" id="outlabel">Result</div>
+  <textarea id="result" rows="7"></textarea>
+  <div class="row"><button id="replace" class="primary">⇄ Replace in page</button> <button id="copy">⧉ Copy</button></div>
+</div>
+
+<div class="sec">📄 Original</div>
+<div id="orig" class="orig small">The text before each enhancement is kept here and in Documents\Nova Enhance\Originals.</div>
+<div class="row"><button id="putback">↩ Put back original</button></div>
+
+<div class="foot">Alt+G fix grammar · Alt+T translate · right-click selected text → ✦ Nova Enhance<br><span id="sign">Designed by A.HAMROUNI</span></div>
+<script src="config.js"></script>
+<script src="panel.js"></script>
+</body>
+</html>

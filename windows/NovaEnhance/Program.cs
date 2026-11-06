@@ -79,6 +79,7 @@ class NovaContext : ApplicationContext
         var m = new ContextMenuStrip { Font = Th.F(10) };
         m.Items.Add("✦  Enhance selected text      Ctrl+Shift+E", null, (_, _) => Screens.Enhance());
         m.Items.Add("🔍  Ask Nova about my email   Ctrl+Shift+F", null, (_, _) => Screens.Ask());
+        m.Items.Add("💬  Nova Chat & AI Hub        Ctrl+Shift+A", null, (_, _) => Screens.Hub(null));
         m.Items.Add("📁  Search inside a folder…", null, (_, _) => Screens.FolderSearch(null));
         m.Items.Add("☀  Morning brief", null, (_, _) => Screens.Brief());
         m.Items.Add(new ToolStripSeparator());
@@ -93,6 +94,7 @@ class NovaContext : ApplicationContext
         hot = new HotkeyWindow();
         hot.Register(1, Keys.E, Screens.Enhance, "Ctrl+Shift+E");
         hot.Register(2, Keys.F, Screens.Ask, "Ctrl+Shift+F");
+        hot.Register(3, Keys.A, Screens.HubSelection, "Ctrl+Shift+A");
 
         showEvt = new EventWaitHandle(false, EventResetMode.AutoReset, "NovaEnhanceWindows-show");
         ThreadPool.RegisterWaitForSingleObject(showEvt, (_, _) => Program.UiContext.Post(_ => Screens.Settings(), null), null, -1, false);
@@ -106,6 +108,7 @@ class NovaContext : ApplicationContext
 
         MailIndex.Start();
         if (Store.Bool("win_addin", false) || Store.Bool("win_addin_it", false)) Server.Start();
+        if (BrowserAddon.On) { BrowserAddon.Refresh(); Server.StartBrowser(); }
 
         timer = new System.Windows.Forms.Timer { Interval = 60_000 };
         timer.Tick += (_, _) => Tick();
@@ -188,6 +191,29 @@ static class Screens
     static SettingsForm set;
     static BriefForm brief;
     static FolderSearchForm folder;
+    static HubForm hub;
+
+    public static void Hub(string text)
+    {
+        try
+        {
+            if (hub == null || hub.IsDisposed) hub = new HubForm();
+            Show(hub);
+            if (text != null) hub.SendText(text);
+        }
+        catch (Exception e) { Log.Error("AI window", e); }
+    }
+
+    /// <summary>Ctrl+Shift+A: copies the selected text from the program in front and puts it into the AI window.</summary>
+    public static async void HubSelection()
+    {
+        try
+        {
+            var (_, text) = await Selection.Grab();
+            Hub(string.IsNullOrWhiteSpace(text) ? null : text);
+        }
+        catch (Exception e) { Log.Error("AI window · selection", e); }
+    }
 
     public static void FolderSearch(string path)
     {
@@ -286,7 +312,7 @@ static class Selection
         var h = GetForegroundWindow();
         if (IsOwn(h)) return (IntPtr.Zero, "");
         // Wait until Ctrl, Shift and E are released, or the copy would become Ctrl+Shift+C.
-        for (int i = 0; i < 40 && (Down(0x10) || Down(0x11) || Down(0x45)); i++) await Task.Delay(15);
+        for (int i = 0; i < 40 && (Down(0x10) || Down(0x11) || Down(0x45) || Down(0x41)); i++) await Task.Delay(15);
         string old = null;
         try { if (Clipboard.ContainsText()) old = Clipboard.GetText(); } catch { }
         try { Clipboard.Clear(); } catch { }

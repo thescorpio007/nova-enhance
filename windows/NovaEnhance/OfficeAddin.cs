@@ -318,52 +318,69 @@ Uninstall: remove the two apps in Integrated apps.
 /// <summary>The little web server for the Office panel: https://localhost:47320, this PC only.</summary>
 static class Server
 {
-    static TcpListener v4, v6;
+    static TcpListener v4, v6, web;
     static X509Certificate2 cert;
     public static bool Running => v4 != null;
+    public static bool BrowserRunning => web != null;
     public static string LastError = "";
 
+    /// <summary>Office panel (HTTPS, port 47320) when the Office add-in is on; browser add-on (HTTP on 127.0.0.1:47321, with its own key) when that is on.</summary>
     public static void Start(int port = OfficeAddin.Port)
     {
-        if (v4 != null) return;
-        try
-        {
-            cert = OfficeAddin.Cert();
-            v4 = new TcpListener(IPAddress.Loopback, port); v4.Start(); _ = Accept(v4);
-            try { v6 = new TcpListener(IPAddress.IPv6Loopback, port); v6.Start(); _ = Accept(v6); } catch { v6 = null; }
-            LastError = "";
-        }
-        catch (Exception e) { LastError = e.Message; v4 = null; Log.Error("Office add-in · panel server", e); }
+        if (v4 == null)
+            try
+            {
+                cert = OfficeAddin.Cert();
+                v4 = new TcpListener(IPAddress.Loopback, port); v4.Start(); _ = Accept(v4, true);
+                try { v6 = new TcpListener(IPAddress.IPv6Loopback, port); v6.Start(); _ = Accept(v6, true); } catch { v6 = null; }
+                LastError = "";
+            }
+            catch (Exception e) { LastError = e.Message; v4 = null; Log.Error("Office add-in · panel server", e); }
+        StartBrowser();
     }
 
-    public static void Stop() { try { v4?.Stop(); v6?.Stop(); } catch { } v4 = v6 = null; }
+    public static void StartBrowser()
+    {
+        if (web != null || !BrowserAddon.On) return;
+        try { web = new TcpListener(IPAddress.Loopback, BrowserAddon.Port); web.Start(); _ = Accept(web, false); }
+        catch (Exception e) { web = null; LastError = e.Message; Log.Error("Browser add-on · server", e); }
+    }
 
-    static async Task Accept(TcpListener l)
+    public static void Stop() { try { v4?.Stop(); v6?.Stop(); web?.Stop(); } catch { } v4 = v6 = web = null; }
+
+    static async Task Accept(TcpListener l, bool tls)
     {
         while (true)
         {
             TcpClient c;
             try { c = await l.AcceptTcpClientAsync(); } catch { return; }
-            _ = Handle(c);
+            _ = Handle(c, tls);
         }
     }
 
-    static async Task Handle(TcpClient client)
+    static async Task Handle(TcpClient client, bool tls)
     {
         using var _c = client;
         try
         {
             client.ReceiveTimeout = 30000;
-            using var ssl = new SslStream(client.GetStream(), false);
-            await ssl.AuthenticateAsServerAsync(cert, false, System.Security.Authentication.SslProtocols.None, false);
-            var (method, path, headers, body) = await Read(ssl);
+            Stream stream = client.GetStream();
+            SslStream ssl = null;
+            if (tls)
+            {
+                ssl = new SslStream(stream, false);
+                await ssl.AuthenticateAsServerAsync(cert, false, System.Security.Authentication.SslProtocols.None, false);
+                stream = ssl;
+            }
+            using var _s = ssl;
+            var (method, path, headers, body) = await Read(stream);
             if (method == null) return;
-            var (code, type, bytes) = await Route(method, path, headers, body);
+            var (code, type, bytes) = tls ? await Route(method, path, headers, body) : await RouteBrowser(method, path, headers, body);
             var head = $"HTTP/1.1 {code} {(code == 200 ? "OK" : code == 403 ? "Forbidden" : code == 404 ? "Not Found" : "Error")}\r\n" +
                        $"Content-Type: {type}\r\nContent-Length: {bytes.Length}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n";
-            await ssl.WriteAsync(Encoding.ASCII.GetBytes(head));
-            await ssl.WriteAsync(bytes);
-            await ssl.FlushAsync();
+            await stream.WriteAsync(Encoding.ASCII.GetBytes(head));
+            await stream.WriteAsync(bytes);
+            await stream.FlushAsync();
         }
         catch { }
     }
@@ -440,6 +457,28 @@ static class Server
         catch (Exception e) { Log.Error("Office add-in · " + p, e); return Json(new JsonObject { ["error"] = e.Message }); }
     }
 
+    /// <summary>The browser add-on: only extension pages that carry this PC's key (written into the add-on by Nova).</summary>
+    static async Task<(int, string, byte[])> RouteBrowser(string method, string path, Dictionary<string, string> h, string body)
+    {
+        var p = path.Split('?')[0];
+        if (method == "GET" && p == "/firefox/updates.json") return (200, "application/json", Encoding.UTF8.GetBytes(BrowserAddon.UpdatesJson()));
+        if (method == "GET" && p == "/firefox/nova-enhance.xpi" && File.Exists(BrowserAddon.Xpi)) return (200, "application/x-xpinstall", File.ReadAllBytes(BrowserAddon.Xpi));
+        if (!p.StartsWith("/api/") || !h.TryGetValue("X-Nova-Key", out var key) || key != BrowserAddon.Key) return Json(new JsonObject { ["error"] = "forbidden" }, 403);
+        if (h.TryGetValue("Origin", out var origin) && origin != "null" &&
+            !origin.StartsWith("chrome-extension://", StringComparison.OrdinalIgnoreCase) && !origin.StartsWith("moz-extension://", StringComparison.OrdinalIgnoreCase) &&
+            !origin.StartsWith("extension://", StringComparison.OrdinalIgnoreCase))
+            return Json(new JsonObject { ["error"] = "forbidden" }, 403);
+        JsonObject req;
+        try { req = string.IsNullOrWhiteSpace(body) ? new JsonObject() : JsonNode.Parse(body)?.AsObject() ?? new JsonObject(); } catch { req = new JsonObject(); }
+        try
+        {
+            var r = await Api(p, req);
+            if (p == "/api/ping") r["addon"] = BrowserAddon.Version;
+            return Json(r);
+        }
+        catch (Exception e) { Log.Error("Browser add-on · " + p, e); return Json(new JsonObject { ["error"] = e.Message }); }
+    }
+
     static string S(JsonObject o, string k) => o[k]?.ToString() ?? "";
 
     static async Task<JsonObject> Api(string p, JsonObject r)
@@ -495,6 +534,42 @@ static class Server
                     if (it is JsonObject jo) { sb.Append(S(jo, "addr")).Append(": ").AppendLine(S(jo, "before")); after.Append(S(jo, "addr")).Append(": ").AppendLine(S(jo, "after")); }
                 if (sb.Length > 0) History.SaveOriginal(mode, sb.ToString().TrimEnd(), after.ToString().TrimEnd());
                 return new JsonObject { ["ok"] = true };
+            }
+            case "/api/page":
+            {
+                // Browser add-on: summarise the page, or answer a question from it (the page text goes to the AI only when the user clicks).
+                var text = S(r, "text"); if (text.Length > 40000) text = text[..40000];
+                if (text.Trim().Length < 20) return new JsonObject { ["error"] = "This page has no readable text" };
+                var prov = Ai.Active() ?? throw new AiException("Add an AI key in Nova Enhance → Settings → AI & API keys");
+                bool detailed = r["detailed"]?.GetValue<bool>() == true;
+                using var _ = Log.Doing("Browser add-on · " + (S(r, "mode") == "ask" ? "ask about page" : "summarise page"));
+                string sys, user;
+                if (S(r, "mode") == "ask")
+                {
+                    sys = "You answer the user's question using ONLY the web page text given. Reply in the language of the question. " +
+                          (detailed ? "Give a detailed answer with every relevant requirement, value and condition. " : "Answer in 2 to 5 short lines, starting with the direct answer in bold-free plain text. ") +
+                          "Give exact values (dimensions, ratings, clause and table numbers). After each fact put the clause, table or heading it comes from in square brackets, e.g. [D.4.2] or [Table D.6]. " +
+                          "If the page does not answer it, say so and suggest what to look for. Never invent facts." + Modes.ProfileNote();
+                    user = $"Page: {S(r, "title")}
+{S(r, "url")}
+
+Page text:
+{text}
+
+Question: {S(r, "question")}";
+                }
+                else
+                {
+                    sys = "Summarise this web page for a busy professional. " + (detailed ? "Give a structured, detailed summary with the key requirements, numbers and conclusions. " : "Use 4 to 8 short bullet points: what it is, the key points, numbers, dates and anything to act on. ") +
+                          "Reply in English unless the page is in Arabic or French. Put clause/section numbers in square brackets where useful." + Modes.ProfileNote();
+                    user = $"Page: {S(r, "title")}
+{S(r, "url")}
+
+{text}";
+                }
+                var a = await Ai.Chat(sys, user, !detailed, false, prov, CancellationToken.None);
+                History.Add("ask", prov.Id, Store.Model(prov.Id), "page-" + S(r, "mode"), S(r, "title") + " · " + S(r, "question"), a);
+                return new JsonObject { ["result"] = a, ["ai"] = prov.Label };
             }
             case "/api/originals":
             {
