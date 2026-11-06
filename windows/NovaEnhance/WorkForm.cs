@@ -142,24 +142,31 @@ class WorkForm : NovaForm
                 tx.BackColor = Th.Card; tx.Padding = new Padding(10);
                 continue;
             }
-            var row = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, BackColor = Color.Transparent, Margin = new Padding(0, 2, 0, 2) };
-            var cb = Th.Check((i.Kind == "mail" ? $"{i.Subject} — {i.From} · {i.Date:dd MMM HH:mm}" : $"📄 {i.Subject}  {i.Loc}") + (i.IsNew ? "   ➕ new" : ""),
-                i.State != "open", v =>
-                {
-                    i.State = v ? "done" : "open";
-                    i.Why = v ? $"ticked by you {DateTime.Now:ddd HH:mm}" : "";
-                    t.Add((v ? "☑ " : "☐ ") + i.Subject);
-                    Work.Save(t); Work.SyncOutlook(t);
-                });
-            cb.ForeColor = i.State == "open" ? Th.Text : Th.Muted;
-            cb.MaximumSize = new Size(Math.Max(400, detail.ClientSize.Width - 80), 0);
-            row.Controls.Add(cb);
-            var sub = i.Why.Length > 0 ? "✓ " + i.Why : (i.Summary.Length > 0 ? "✦ " + i.Summary : "") + (i.Att.Length > 0 ? "  📎 " + i.Att.Split(';')[0] : "");
-            if (sub.Length > 0)
+            // One line: ☐ | subject — sender · date (wraps) | 👁 Preview | Open
+            var width = Math.Max(500, detail.ClientSize.Width - 60);
+            var row = new TableLayoutPanel { ColumnCount = 4, RowCount = 2, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = Color.Transparent, Margin = new Padding(0, 2, 0, 2), Width = width };
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, width - 230));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            var cb = new CheckBox { Checked = i.State != "open", AutoSize = true, Margin = new Padding(0, 4, 6, 0), BackColor = Color.Transparent };
+            cb.CheckedChanged += (_, _) =>
             {
-                var sl = Th.L(sub, 8.5f, i.Why.Length > 0 ? Th.Good : Th.Muted);
-                sl.Margin = new Padding(20, 0, 0, 0); sl.MaximumSize = new Size(Math.Max(400, detail.ClientSize.Width - 100), 0);
-                row.Controls.Add(sl);
+                var v = cb.Checked;
+                i.State = v ? "done" : "open";
+                i.Why = v ? $"ticked by you {DateTime.Now:ddd HH:mm}" : "";
+                t.Add((v ? "☑ " : "☐ ") + i.Subject);
+                Work.Save(t); Work.SyncOutlook(t);
+            };
+            row.Controls.Add(cb, 0, 0);
+            var text = Th.L((i.Kind == "mail" ? $"{i.Subject} — {i.From} · {i.Date:dd MMM HH:mm}" : $"📄 {i.Subject}  {i.Loc}") + (i.IsNew ? "   ➕ new" : ""), 10, i.State == "open" ? Th.Text : Th.Muted);
+            text.MaximumSize = new Size(width - 240, 0); text.Margin = new Padding(0, 4, 0, 0);
+            row.Controls.Add(text, 1, 0);
+            if (i.Kind == "mail")
+            {
+                var pv = Th.B("👁 Preview", () => OpenPreview(t, i));
+                pv.Font = Th.F(9); pv.Margin = new Padding(6, 0, 0, 0);
+                row.Controls.Add(pv, 2, 0);
             }
             var open = Th.B(i.Kind == "mail" ? "Open" : "Open file", () =>
             {
@@ -170,8 +177,15 @@ class WorkForm : NovaForm
                 }
                 catch (Exception e) { MessageBox.Show(this, e.Message, "Nova Enhance"); }
             });
-            open.Font = Th.F(8.5f); open.Margin = new Padding(20, 2, 0, 4);
-            row.Controls.Add(open);
+            open.Font = Th.F(9); open.Margin = new Padding(6, 0, 0, 0);
+            row.Controls.Add(open, 3, 0);
+            var sub = i.Why.Length > 0 ? "✓ " + i.Why : (i.Summary.Length > 0 ? "✦ " + i.Summary : "") + (i.Att.Length > 0 ? "  📎 " + i.Att.Split(';')[0] : "");
+            if (sub.Length > 0)
+            {
+                var sl = Th.L(sub, 8.5f, i.Why.Length > 0 ? Th.Good : Th.Muted);
+                sl.MaximumSize = new Size(width - 240, 0);
+                row.Controls.Add(sl, 1, 1);
+            }
             detail.Add(row);
         }
 
@@ -214,6 +228,19 @@ class WorkForm : NovaForm
         detail.ResumeLayout();
     }
 
+    MailPreviewForm preview;
+
+    void OpenPreview(WorkTask t, WorkItem i)
+    {
+        if (preview == null || preview.IsDisposed)
+        {
+            preview = new MailPreviewForm();
+            preview.Changed = () => { if (!IsDisposed) Reload(currentId); };
+        }
+        Screens.Show(preview);
+        preview.ShowTask(t, i);
+    }
+
     void ShowDiff(string text)
     {
         foreach (Control c in detail.Controls)
@@ -233,5 +260,115 @@ class WorkForm : NovaForm
         r.Controls.Add(Th.B("Cancel", f.Close));
         f.ShowDialog(this);
         return res;
+    }
+}
+
+/// <summary>👁 The emails of a My Work task, one at a time: formatted preview, attachments, buttons, ◀ ▶.</summary>
+class MailPreviewForm : NovaForm
+{
+    readonly ReadPane pane;
+    readonly Label pos;
+    List<WorkItem> items = new();
+    int index;
+    string taskId = "", taskTitle = "";
+    public Action Changed;
+
+    public MailPreviewForm()
+    {
+        Width = Math.Max(900, Store.Int("win_mprev_w", 1000)); Height = Math.Max(640, Store.Int("win_mprev_h", 820));
+        KeyPreview = true;
+        pane = new ReadPane { Dock = DockStyle.Fill };
+        var nav = new Panel { Dock = DockStyle.Bottom, Height = 46, BackColor = Color.FromArgb(0x0E, 0x11, 0x17), Padding = new Padding(12, 7, 12, 7) };
+        var prev = Th.B("◀ Previous", () => Go(-1)); prev.Dock = DockStyle.Left;
+        var next = Th.B("Next ▶", () => Go(1)); next.Dock = DockStyle.Right;
+        pos = new Label { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, ForeColor = Th.Muted, Font = Th.F(9.5f) };
+        nav.Controls.Add(pos); nav.Controls.Add(prev); nav.Controls.Add(next);
+        Controls.Add(pane);
+        Controls.Add(nav);
+        pane.OnSummary = Summary;
+        pane.OnDraft = Draft;
+        pane.OnHandled = Handled;
+        KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.Escape) Close();
+            else if (e.KeyCode is Keys.Down or Keys.PageDown) { Go(1); e.Handled = true; }
+            else if (e.KeyCode is Keys.Up or Keys.PageUp) { Go(-1); e.Handled = true; }
+        };
+        ResizeEnd += (_, _) => { if (WindowState == FormWindowState.Normal) { Store.SetInt("win_mprev_w", Width); Store.SetInt("win_mprev_h", Height); } };
+    }
+
+    public void ShowTask(WorkTask t, WorkItem start)
+    {
+        taskId = t.Id; taskTitle = t.Title;
+        items = t.Items.Where(i => i.Kind == "mail").OrderBy(i => i.State == "open" ? (i.IsNew ? 1 : 0) : 2).ThenByDescending(i => i.Date).ToList();
+        index = Math.Max(0, items.FindIndex(i => i.Entry == start.Entry));
+        Draw();
+    }
+
+    MailHit Current()
+    {
+        if (items.Count == 0) return null;
+        var i = items[index];
+        return MailIndex.ByEntry(i.Entry) ?? new MailHit
+        {
+            Entry = i.Entry, StoreId = i.Store, Subject = i.Subject, FromName = i.From, Date = i.Date, Summary = i.Summary, AttNames = i.Att ?? "",
+            To = "", Cc = "", Body = "", FromAddr = "", ToAddr = "", CcAddr = "", Conv = "", Folder = ""
+        };
+    }
+
+    void Draw()
+    {
+        var h = Current();
+        if (h == null) { pane.Show(null); pos.Text = ""; return; }
+        if (h.Summary.Length == 0) h.Summary = items[index].Summary ?? "";
+        h.Status = items[index].State == "open" ? (h.DaysWaiting > 3 ? "needs" : "week") : "";
+        Text = $"Nova Enhance · 👁 Preview · {taskTitle} · email {index + 1} of {items.Count}";
+        pos.Text = $"{index + 1} of {items.Count}" + (items[index].State != "open" ? "  ·  ✓ " + (items[index].Why.Length > 0 ? items[index].Why : "done") : "") + "  ·  ↑ ↓ keys work too";
+        pane.Show(h);
+    }
+
+    void Go(int d)
+    {
+        if (items.Count == 0) return;
+        index = Math.Clamp(index + d, 0, items.Count - 1);
+        Draw();
+    }
+
+    async void Summary(MailHit h)
+    {
+        if (!Store.AiSeesFull) { pane.ShowAi("An AI summary of the full email needs Settings → Email & AI → C or D."); return; }
+        pane.ShowAi("✦ Summarising…");
+        try { pane.ShowAi("✦ Summary\n\n" + await Assistant.Summarize(h, CancellationToken.None)); }
+        catch (Exception e) { pane.ShowAi("⚠ " + e.Message); }
+    }
+
+    async void Draft(MailHit h)
+    {
+        if (!Store.AiSeesFull) { pane.ShowAi("✦ Draft reply needs Settings → Email & AI → C or D: the full email goes to the AI only when you tap Draft."); return; }
+        var instr = Prompt.Ask(this, "✦ Draft reply", "Anything to include? (optional — e.g. \"agree, send revised drawings by Thursday\")");
+        if (instr == null) return;
+        pane.ShowAi($"✦ Writing a reply to “{h.Subject}”…");
+        try
+        {
+            var draft = await Assistant.Draft(h, (h.Sent ? "This is a polite follow-up to my own email that got no answer. " : "") + instr, CancellationToken.None);
+            Outlook.Reply(h.Entry, h.StoreId, draft, false);
+            Work.LogMail(h, "✦ Draft reply opened");
+            pane.ShowAi("✓ The draft is open in Outlook — check it, then press Send.");
+        }
+        catch (Exception e) { pane.ShowAi("⚠ " + e.Message); }
+    }
+
+    void Handled(MailHit h)
+    {
+        Outstanding.MarkHandled(h, true);
+        Work.LogMail(h, "✓ Handled");
+        var t = Work.Get(taskId);
+        if (t != null)
+        {
+            items = items.Select(i => t.Items.FirstOrDefault(x => x.Entry == i.Entry) ?? i).ToList();
+            Work.SyncOutlook(t);
+        }
+        Changed?.Invoke();
+        if (index < items.Count - 1) Go(1); else Draw();
     }
 }

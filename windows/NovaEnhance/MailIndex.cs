@@ -868,6 +868,29 @@ static class MailIndex
     }
 
     /// <summary>Emails I sent after a date (subject, people, start of the text) — to find answers given outside the conversation.</summary>
+    /// <summary>One email from the index by its Outlook id (null when it is not indexed).</summary>
+    public static MailHit ByEntry(string entry)
+    {
+        try
+        {
+            using var c = Open();
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "SELECT id,entry,store,conv,folder,sent,date,from_name,from_addr,to_list,cc_list,to_addr,cc_addr,subject,body,att_names,unread,importance FROM mail WHERE entry=$e LIMIT 1";
+            cmd.Parameters.AddWithValue("$e", entry ?? "");
+            using var r = cmd.ExecuteReader();
+            if (!r.Read()) return null;
+            string Str(int i) => r.IsDBNull(i) ? "" : r.GetString(i);
+            return new MailHit
+            {
+                Id = r.GetInt64(0), Entry = Str(1), StoreId = Str(2), Conv = Str(3), Folder = Str(4), Sent = r.GetInt64(5) == 1,
+                Date = DateTimeOffset.FromUnixTimeMilliseconds(r.GetInt64(6)).LocalDateTime,
+                FromName = Str(7), FromAddr = Str(8), To = Str(9), Cc = Str(10), ToAddr = Str(11), CcAddr = Str(12),
+                Subject = Str(13), Body = Str(14), AttNames = Str(15), Unread = r.GetInt64(16) == 1, Importance = (int)r.GetInt64(17)
+            };
+        }
+        catch { return null; }
+    }
+
     public static List<MailHit> SentAfter(DateTime after, int limit = 5000)
     {
         var list = new List<MailHit>();
