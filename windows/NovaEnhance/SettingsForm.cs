@@ -197,21 +197,21 @@ class SettingsForm : NovaForm
     void EmailAi()
     {
         page.Add(Th.Section("Email source"));
-        Opt("Outlook on this PC", "Uses the classic Outlook installed and signed in here — no extra login. Keep Outlook open; the index updates every 10 minutes.", Store.EmailSource == "pc", () => { Store.EmailSource = "pc"; MailIndex.Now(); });
+        Opt("Outlook on this PC  (default)", "Uses the classic Outlook installed and signed in here — no extra login. Keep Outlook open; the index updates every 10 minutes.", Store.EmailSource == "pc", () => { Store.EmailSource = "pc"; MailIndex.Now(); });
         Opt("Microsoft 365 (company server)", "All mail, any age — your IT admin approves the app once. Coming in build 2.", Store.EmailSource == "m365", () => Store.EmailSource = "m365");
         Opt("Both", "Mail on this PC now; older mail from the Microsoft 365 server once IT approves (build 2).", Store.EmailSource == "both", () => { Store.EmailSource = "both"; MailIndex.Now(); });
         Note((Outlook.Installed ? "✓ Outlook is installed" : "⚠ Outlook (classic) isn't installed on this PC") + " · Microsoft 365: not connected yet (build 2)", Outlook.Installed ? Th.Good : Th.Warn);
 
         page.Add(Th.Section("What the AI may see"));
-        Opt("A · Only my question  (default · safest)", "The search runs on this PC; email content never leaves it.", Store.AiSees == "A", () => Store.AiSees = "A");
+        Opt("A · Only my question  (safest)", "The search runs on this PC; email content never leaves it.", Store.AiSees == "A", () => Store.AiSees = "A");
         Opt("B · Question + subject and first lines of found emails", "About 300 characters per email, for one-line summaries and better \"needs reply\" sorting.", Store.AiSees == "B", () => Store.AiSees = "B");
-        Opt("C · Question + the full email when I tap it", "Only the emails you open with Summary or ✦ Draft reply are sent.", Store.AiSees == "C", () => Store.AiSees = "C");
+        Opt("C · Question + the full email when I tap it  (default)", "Only the emails you open with Summary or ✦ Draft reply are sent.", Store.AiSees == "C", () => Store.AiSees = "C");
         Opt("D · B and C together", "", Store.AiSees == "D", () => Store.AiSees = "D");
         Note("Check your company's IT / data policy before letting an outside AI read work email.", Th.Warn);
 
         page.Add(Th.Section("Search range"));
         var rr = page.Add(Th.Row());
-        foreach (var (v, l) in new[] { ("3m", "3 months"), ("12m", "12 months"), ("pc", "All on this PC"), ("all365", "All + Microsoft 365") })
+        foreach (var (v, l) in new[] { ("3m", "3 months"), ("12m", "12 months"), ("pc", "All on this PC  (default)"), ("all365", "All + Microsoft 365") })
         {
             var vv = v;
             rr.Controls.Add(Th.Radio(l, Store.Range == v, () => { Store.Range = vv; MailIndex.Now(); }));

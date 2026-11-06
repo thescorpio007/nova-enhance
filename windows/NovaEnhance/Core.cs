@@ -165,13 +165,13 @@ static class Store
 
     // ---------------------------------------------------------------- Windows only
     /// <summary>pc · m365 · both</summary>
-    public static string EmailSource { get => Str("win_email_source", "both"); set => Set("win_email_source", value); }
+    public static string EmailSource { get => Str("win_email_source", "pc"); set => Set("win_email_source", value); }
     /// <summary>What the AI may see: A only the question · B + subject and first lines · C + full email when tapped · D = B and C.</summary>
-    public static string AiSees { get => Str("win_ai_sees", "A"); set => Set("win_ai_sees", value); }
+    public static string AiSees { get => Str("win_ai_sees", "C"); set => Set("win_ai_sees", value); }
     public static bool AiSeesLines => AiSees is "B" or "D";
     public static bool AiSeesFull => AiSees is "C" or "D";
     /// <summary>3m · 12m · pc · all365</summary>
-    public static string Range { get => Str("win_range", "all365"); set => Set("win_range", value); }
+    public static string Range { get => Str("win_range", "pc"); set => Set("win_range", value); }
     public static bool NeedTo { get => Bool("win_need_to", true); set => SetBool("win_need_to", value); }
     public static bool NeedCcNamed { get => Bool("win_need_cc", false); set => SetBool("win_need_cc", value); }
     public static bool NeedAi { get => Bool("win_need_ai", false); set => SetBool("win_need_ai", value); }
