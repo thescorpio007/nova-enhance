@@ -212,7 +212,12 @@ static class MailFile
 /// <summary>The email on the right of a wide Ask Nova window: who, attachments, ✦ summary, full text, and the buttons.</summary>
 class ReadPane : Panel
 {
-    readonly Stack s;
+    readonly Stack s, textView;
+    readonly Panel body;
+    Microsoft.Web.WebView2.WinForms.WebView2 web;
+    Button tabText, tabPreview, pics;
+    Label previewNote;
+    bool preview = true, allowRemote;
     public Action<MailHit> OnSummary, OnDraft, OnHandled;
     public MailHit Mail { get; private set; }
     Label aiBox;
@@ -220,7 +225,11 @@ class ReadPane : Panel
     public ReadPane()
     {
         BackColor = Th.Card; Padding = new Padding(4);
-        s = new Stack { BackColor = Th.Card, Padding = new Padding(16, 12, 16, 12) };
+        body = new Panel { Dock = DockStyle.Fill, BackColor = Th.Card };
+        textView = new Stack { BackColor = Th.Card, Padding = new Padding(16, 6, 16, 12) };
+        body.Controls.Add(textView);
+        s = new Stack { Dock = DockStyle.Top, AutoScroll = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = Th.Card, Padding = new Padding(16, 12, 16, 0) };
+        Controls.Add(body);
         Controls.Add(s);
         Empty();
     }
@@ -228,6 +237,9 @@ class ReadPane : Panel
     void Empty()
     {
         s.Controls.Clear();
+        textView.Controls.Clear();
+        if (web != null) web.Visible = false;
+        textView.Visible = true;
         s.Add(Th.Wrap("Click an email on the left to read it here. ↑ ↓ move through the list.", 10, Th.Muted));
     }
 
@@ -241,9 +253,12 @@ class ReadPane : Panel
     public void Show(MailHit h)
     {
         Mail = h;
+        allowRemote = false;
         s.SuspendLayout();
         foreach (Control c in s.Controls) c.Dispose();
         s.Controls.Clear();
+        foreach (Control c in textView.Controls) c.Dispose();
+        textView.Controls.Clear();
         if (h == null) { Empty(); s.ResumeLayout(); return; }
         var top = s.Add(Th.Row());
         top.Controls.Add(Th.L(string.IsNullOrWhiteSpace(h.Subject) ? "(no subject)" : h.Subject, 13, Th.Text, true));
@@ -258,9 +273,15 @@ class ReadPane : Panel
             var at = s.Add(Th.Row());
             foreach (var a in h.AttNames.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             {
-                var chip = Th.Chip("📎 " + a, false, () => { try { Outlook.Open(h.Entry, h.StoreId); } catch { } });
+                var name = a;
+                var chip = Th.Chip("📎 " + name + "   👁", false, () => MailPreview.PreviewAttachment(h, name, FindForm()));
                 chip.Font = Th.F(9);
+                new ToolTip().SetToolTip(chip, "👁 Preview in Nova");
                 at.Controls.Add(chip);
+                var sv = Th.Chip("💾", false, () => MailPreview.SaveAttachmentAs(h, name, FindForm()));
+                sv.Font = Th.F(9); sv.Margin = new Padding(0, 0, 10, 0);
+                new ToolTip().SetToolTip(sv, "💾 Save this attachment");
+                at.Controls.Add(sv);
             }
         }
         aiBox = s.Add(Th.Wrap(h.Summary.Length > 0 ? "✦ " + h.Summary : "", 10, Th.Text));
@@ -273,12 +294,75 @@ class ReadPane : Panel
         if (!h.Sent) btns.Controls.Add(Th.B("✓ Mark as handled", () => OnHandled?.Invoke(h)));
         btns.Controls.Add(Th.B("💾 Save as…", () => MailFile.SaveAs(h, FindForm())));
         btns.Controls.Add(Th.B("⧉ Copy as file", () => MailFile.Copy(h, FindForm())));
-        var body = (h.Body ?? "").Replace("\r\n", "\n").Trim();
-        if (body.Length > 20000) body = body[..20000] + "\n…";
-        var bl = s.Add(Th.Wrap(body.Length > 0 ? body : "(no text)", 10.5f, Th.Text));
-        bl.Margin = new Padding(0, 6, 0, 0);
+
+        // Text | 👁 Preview (Preview first).
+        var tabs = s.Add(Th.Row(false));
+        tabs.Margin = new Padding(0, 6, 0, 0);
+        tabText = Th.Chip("Text", !preview, () => { preview = false; Switch(); });
+        tabPreview = Th.Chip("👁 Preview", preview, () => { preview = true; Switch(); });
+        tabs.Controls.Add(tabText); tabs.Controls.Add(tabPreview);
+        pics = Th.Chip("🖼 Load pictures from the internet", false, () => { allowRemote = true; pics.Visible = false; web?.CoreWebView2?.Reload(); });
+        pics.Font = Th.F(9); pics.Visible = false;
+        tabs.Controls.Add(pics);
+        previewNote = Th.L("", 9, Th.Muted); previewNote.Margin = new Padding(8, 6, 0, 0);
+        tabs.Controls.Add(previewNote);
+
+        var text = (h.Body ?? "").Replace("\r\n", "\n").Trim();
+        if (text.Length > 20000) text = text[..20000] + "\n…";
+        textView.Add(Th.Wrap(text.Length > 0 ? text : "(no text)", 10.5f, Th.Text));
         s.ResumeLayout();
-        s.AutoScrollPosition = new Point(0, 0);
+        textView.AutoScrollPosition = new Point(0, 0);
+        Switch();
+    }
+
+    async void Switch()
+    {
+        Th.SetChip(tabText, !preview); Th.SetChip(tabPreview, preview);
+        var h = Mail;
+        if (!preview || h == null) { if (web != null) web.Visible = false; textView.Visible = true; return; }
+        try
+        {
+            previewNote.Text = "Opening the formatted email…";
+            var file = await MailPreview.Render(h);
+            if (h != Mail || !preview) return;
+            if (file == null) { if (web != null) web.Visible = false; previewNote.Text = "Open Outlook to see the formatted email — here is the text."; preview = false; Th.SetChip(tabText, true); Th.SetChip(tabPreview, false); textView.Visible = true; return; }
+            await EnsureWeb();
+            if (web == null) { textView.Visible = true; return; }
+            web.Visible = true; textView.Visible = false; web.BringToFront();
+            web.CoreWebView2.Navigate(new Uri(file).AbsoluteUri);
+            previewNote.Text = "";
+        }
+        catch (Exception e) { previewNote.Text = "⚠ " + e.Message; textView.Visible = true; Log.Error("mail preview", e); }
+    }
+
+    async Task EnsureWeb()
+    {
+        if (web != null) return;
+        var w = new Microsoft.Web.WebView2.WinForms.WebView2 { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.White, Visible = false };
+        body.Controls.Add(w);
+        try { await w.EnsureCoreWebView2Async(await HubForm.Env()); }
+        catch (Exception e) { body.Controls.Remove(w); w.Dispose(); previewNote.Text = "⚠ Preview needs Microsoft Edge WebView2: " + e.Message; return; }
+        var core = w.CoreWebView2;
+        core.Settings.IsScriptEnabled = false;
+        core.Settings.AreDefaultContextMenusEnabled = true;
+        core.Settings.IsStatusBarEnabled = false;
+        // Like Outlook: pictures from the internet stay blocked until you allow them for this email.
+        core.AddWebResourceRequestedFilter("*", Microsoft.Web.WebView2.Core.CoreWebView2WebResourceContext.Image);
+        core.WebResourceRequested += (_, e) =>
+        {
+            if (allowRemote || !e.Request.Uri.StartsWith("http", StringComparison.OrdinalIgnoreCase)) return;
+            e.Response = HubForm.Current.CreateWebResourceResponse(null, 403, "Blocked", "");
+            BeginInvoke(new Action(() => { if (pics != null && !pics.IsDisposed) pics.Visible = true; }));
+        };
+        // Links open in your normal browser.
+        core.NavigationStarting += (_, e) =>
+        {
+            if (e.Uri.StartsWith("file:", StringComparison.OrdinalIgnoreCase) || e.Uri.StartsWith("about:", StringComparison.OrdinalIgnoreCase)) return;
+            e.Cancel = true;
+            if (e.Uri.StartsWith("http", StringComparison.OrdinalIgnoreCase) || e.Uri.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase)) Shell.Open(e.Uri);
+        };
+        core.NewWindowRequested += (_, e) => { e.Handled = true; if ((e.Uri ?? "").StartsWith("http", StringComparison.OrdinalIgnoreCase)) Shell.Open(e.Uri); };
+        web = w;
     }
 }
 
@@ -413,7 +497,7 @@ class AskForm : NovaForm
         pane.OnDraft = Draft;
         pane.OnHandled = MarkHandled;
 
-        bottom = listHost.Add(Th.Row(false));
+        bottom = listHost.Add(Th.Row());
         follow = Th.Box(false);
         follow.Width = 360;
         follow.PlaceholderText = "Ask a follow-up… e.g. only with attachments";

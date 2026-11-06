@@ -151,7 +151,9 @@ class HubForm : NovaForm
 
     // ================================================================ web views
 
-    static async Task<CoreWebView2Environment> Env()
+    public static CoreWebView2Environment Current => env;
+
+    public static async Task<CoreWebView2Environment> Env()
     {
         if (env != null) return env;
         var data = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Nova Enhance", "WebView");
