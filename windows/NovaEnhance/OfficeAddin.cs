@@ -550,22 +550,13 @@ static class Server
                           (detailed ? "Give a detailed answer with every relevant requirement, value and condition. " : "Answer in 2 to 5 short lines, starting with the direct answer in bold-free plain text. ") +
                           "Give exact values (dimensions, ratings, clause and table numbers). After each fact put the clause, table or heading it comes from in square brackets, e.g. [D.4.2] or [Table D.6]. " +
                           "If the page does not answer it, say so and suggest what to look for. Never invent facts." + Modes.ProfileNote();
-                    user = $"Page: {S(r, "title")}
-{S(r, "url")}
-
-Page text:
-{text}
-
-Question: {S(r, "question")}";
+                    user = $"Page: {S(r, "title")}\n{S(r, "url")}\n\nPage text:\n{text}\n\nQuestion: {S(r, "question")}";
                 }
                 else
                 {
                     sys = "Summarise this web page for a busy professional. " + (detailed ? "Give a structured, detailed summary with the key requirements, numbers and conclusions. " : "Use 4 to 8 short bullet points: what it is, the key points, numbers, dates and anything to act on. ") +
                           "Reply in English unless the page is in Arabic or French. Put clause/section numbers in square brackets where useful." + Modes.ProfileNote();
-                    user = $"Page: {S(r, "title")}
-{S(r, "url")}
-
-{text}";
+                    user = $"Page: {S(r, "title")}\n{S(r, "url")}\n\n{text}";
                 }
                 var a = await Ai.Chat(sys, user, !detailed, false, prov, CancellationToken.None);
                 History.Add("ask", prov.Id, Store.Model(prov.Id), "page-" + S(r, "mode"), S(r, "title") + " · " + S(r, "question"), a);
