@@ -4,10 +4,19 @@ using NAudio.Wave;
 
 namespace NovaEnhance;
 
-/// <summary>A list of emails with Open, Summary and ✦ Draft reply on each row.</summary>
+/// <summary>
+/// A list of emails. Cards mode: Open, Summary, ✦ Draft reply and ✓ Handled on each card (wider window = longer lines and the
+/// first lines of the email). Compact mode (next to the reading pane): click a card to read it on the right.
+/// Emails Nova thinks were probably answered already go in a grey "Probably answered" section at the bottom.
+/// </summary>
 class MailList : FlowLayoutPanel
 {
-    public Action<MailHit> OnSummary, OnDraft;
+    public Action<MailHit> OnSummary, OnDraft, OnSelect, OnHandled;
+    public bool Compact;
+    readonly Dictionary<MailHit, Control> cards = new();
+    public MailHit Selected { get; private set; }
+    public List<MailHit> Order { get; } = new();
+    static readonly Color SelColor = Color.FromArgb(0x26, 0x2A, 0x40), GreyCard = Color.FromArgb(0x15, 0x18, 0x1F);
 
     public MailList()
     {
@@ -20,60 +29,205 @@ class MailList : FlowLayoutPanel
         SuspendLayout();
         foreach (Control c in Controls) c.Dispose();
         Controls.Clear();
-        foreach (var h in hits) Controls.Add(RowFor(h, width));
+        cards.Clear();
+        Order.Clear();
+        var all = hits.ToList();
+        var main = all.Where(h => h.MaybeAnswered.Length == 0).ToList();
+        var maybe = all.Where(h => h.MaybeAnswered.Length > 0).ToList();
+        foreach (var h in main) Add(h, width, false);
+        if (maybe.Count > 0)
+        {
+            var t = Th.Section($"Probably answered ({maybe.Count}) — check before replying");
+            t.Margin = new Padding(0, 14, 0, 6);
+            Controls.Add(t);
+            foreach (var h in maybe) Add(h, width, true);
+        }
         ResumeLayout();
+        if (Selected != null && !cards.ContainsKey(Selected)) Selected = null;
+        if (Selected != null) PaintCard(Selected);
+    }
+
+    void Add(MailHit h, int width, bool grey)
+    {
+        var c = RowFor(h, width, grey);
+        cards[h] = c;
+        Order.Add(h);
+        Controls.Add(c);
+    }
+
+    public void Select(MailHit h)
+    {
+        if (h == null || !cards.ContainsKey(h)) return;
+        var old = Selected;
+        Selected = h;
+        if (old != null && cards.ContainsKey(old)) PaintCard(old);
+        PaintCard(h);
+        OnSelect?.Invoke(h);
+        if (Parent is ScrollableControl sc) try { sc.ScrollControlIntoView(cards[h]); } catch { }
+    }
+
+    public void MoveBy(int d)
+    {
+        if (Order.Count == 0) return;
+        var i = Selected == null ? -1 : Order.IndexOf(Selected);
+        Select(Order[Math.Clamp(i + d, 0, Order.Count - 1)]);
+    }
+
+    void PaintCard(MailHit h)
+    {
+        if (!cards.TryGetValue(h, out var c)) return;
+        var back = h == Selected && Compact ? SelColor : h.MaybeAnswered.Length > 0 ? GreyCard : Th.Card;
+        c.BackColor = back;
     }
 
     static Color DotColor(string s) => s switch { "needs" => Th.Bad, "week" => Th.Warn, "follow" => Th.AccentText, "fyi" => Color.FromArgb(0x6B, 0x73, 0x85), _ => Th.Accent };
 
-    Control RowFor(MailHit h, int width)
+    Control RowFor(MailHit h, int width, bool grey)
     {
         var card = new FlowLayoutPanel
         {
             FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            BackColor = Th.Card, Padding = new Padding(10, 8, 10, 6), Margin = new Padding(0, 0, 0, 6), MinimumSize = new Size(width, 0), MaximumSize = new Size(width, 0)
+            BackColor = grey ? GreyCard : Th.Card, Padding = new Padding(10, 8, 10, 6), Margin = new Padding(0, 0, 0, 6),
+            MinimumSize = new Size(width, 0), MaximumSize = new Size(width, 0)
         };
+        var textColor = grey ? Th.Muted : Th.Text;
         var top = Th.Row(false);
-        var dot = Th.L("●", 11, DotColor(h.Status), true);
-        top.Controls.Add(dot);
-        var subj = Th.L(string.IsNullOrWhiteSpace(h.Subject) ? "(no subject)" : h.Subject, 10.5f, Th.Text, true);
-        subj.MaximumSize = new Size(width - 60, 0);
+        top.Controls.Add(Th.L("●", 11, grey ? Th.Muted : DotColor(h.Status), true));
+        var subjText = string.IsNullOrWhiteSpace(h.Subject) ? "(no subject)" : h.Subject;
+        var subj = Th.L(subjText, Compact ? 10 : 10.5f, textColor, true);
+        if (Compact) { subj.AutoSize = false; subj.AutoEllipsis = true; subj.Width = width - 60; subj.Height = 22; }
+        else subj.MaximumSize = new Size(width - 60, 0);
         top.Controls.Add(subj);
         card.Controls.Add(top);
-        var meta = h.Sent
-            ? $"You → {Short(h.To)}{(h.Cc.Length > 0 ? " · Cc: " + Short(h.Cc) : "")} · {h.Date:ddd dd MMM HH:mm}"
-            : $"{h.FromName} → {Short(h.To)}{(h.Cc.Length > 0 ? " · Cc: " + Short(h.Cc) : "")} · {h.Date:ddd dd MMM HH:mm}";
+
+        var who = h.Sent ? "You → " + Short(h.To, 4) : Compact ? h.FromName : $"{h.FromName} → {Short(h.To, width > 900 ? 4 : 2)}";
+        var meta = who + (!Compact && h.Cc.Length > 0 ? " · Cc: " + Short(h.Cc, width > 900 ? 4 : 2) : "") + $" · {h.Date:ddd dd MMM HH:mm}";
         if (h.AttNames.Length > 0) meta += " · 📎 " + h.AttNames.Split(';').Length;
-        if (h.Status is "needs" or "week") meta += $" · waiting {h.DaysWaiting} day{(h.DaysWaiting == 1 ? "" : "s")}";
+        if (!grey && h.Status is "needs" or "week") meta += $" · waiting {h.DaysWaiting} day{(h.DaysWaiting == 1 ? "" : "s")}";
         if (h.Status == "follow") meta += $" · no answer for {h.DaysWaiting} days";
-        if (h.Status == "fyi") meta += " · FYI";
-        var ml = Th.L(meta, 9, h.Status == "needs" ? Th.Warn : Th.Muted);
+        if (h.Status == "fyi" && !grey) meta += " · FYI";
+        if (h.Earlier > 0) meta += $" · +{h.Earlier} earlier in this topic";
+        var ml = Th.L(meta, 9, grey ? Th.Muted : h.Status == "needs" ? Th.Warn : Th.Muted);
         ml.MaximumSize = new Size(width - 24, 0);
         card.Controls.Add(ml);
+        if (grey)
+        {
+            var why = Th.L("↩ " + h.MaybeAnswered, 9, Th.AccentText);
+            why.MaximumSize = new Size(width - 24, 0);
+            card.Controls.Add(why);
+        }
         if (h.Summary.Length > 0)
         {
-            var sl = Th.L("✦ " + h.Summary, 9.5f, Th.Text);
+            var sl = Th.L("✦ " + h.Summary, 9.5f, textColor);
             sl.MaximumSize = new Size(width - 24, 0);
             card.Controls.Add(sl);
         }
-        var btns = Th.Row(false);
-        btns.Margin = new Padding(0, 4, 0, 0);
-        btns.Controls.Add(Th.B("Open", () =>
+        // Wider window: the first lines of the email, read on this PC only.
+        if (!Compact && width >= 900)
         {
-            try { Outlook.Open(h.Entry, h.StoreId); }
-            catch (Exception e) { MessageBox.Show("Could not open it in Outlook: " + e.Message, "Nova Enhance"); }
-        }));
-        btns.Controls.Add(Th.B("Summary", () => OnSummary?.Invoke(h)));
-        btns.Controls.Add(Th.B(h.Sent ? "✦ Draft follow-up" : "✦ Draft reply", () => OnDraft?.Invoke(h), true));
-        card.Controls.Add(btns);
+            var n = Math.Clamp((width - 300) / 4, 150, 420);
+            var fl = Th.L("“" + h.FirstLines(n) + "”", 8.5f, Color.FromArgb(0x8A, 0x93, 0xA5));
+            fl.MaximumSize = new Size(width - 24, 0);
+            card.Controls.Add(fl);
+        }
+        if (!Compact)
+        {
+            var btns = Th.Row(false);
+            btns.Margin = new Padding(0, 4, 0, 0);
+            btns.Controls.Add(Th.B("Open", () =>
+            {
+                try { Outlook.Open(h.Entry, h.StoreId); }
+                catch (Exception e) { MessageBox.Show("Could not open it in Outlook: " + e.Message, "Nova Enhance"); }
+            }));
+            btns.Controls.Add(Th.B("Summary", () => OnSummary?.Invoke(h)));
+            btns.Controls.Add(Th.B(h.Sent ? "✦ Draft follow-up" : "✦ Draft reply", () => OnDraft?.Invoke(h), true));
+            if (!h.Sent && OnHandled != null) btns.Controls.Add(Th.B("✓ Handled", () => OnHandled(h)));
+            card.Controls.Add(btns);
+        }
+        else
+        {
+            void Hook(Control c) { c.Cursor = Cursors.Hand; c.Click += (_, _) => Select(h); foreach (Control k in c.Controls) Hook(k); }
+            Hook(card);
+        }
         return card;
     }
 
-    static string Short(string s)
+    static string Short(string s, int max = 2)
     {
         s ??= "";
         var parts = s.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        return parts.Length <= 2 ? string.Join(", ", parts) : $"{parts[0]}, {parts[1]} +{parts.Length - 2}";
+        return parts.Length <= max ? string.Join(", ", parts) : string.Join(", ", parts.Take(max)) + $" +{parts.Length - max}";
+    }
+}
+
+/// <summary>The email on the right of a wide Ask Nova window: who, attachments, ✦ summary, full text, and the buttons.</summary>
+class ReadPane : Panel
+{
+    readonly Stack s;
+    public Action<MailHit> OnSummary, OnDraft, OnHandled;
+    public MailHit Mail { get; private set; }
+    Label aiBox;
+
+    public ReadPane()
+    {
+        BackColor = Th.Card; Padding = new Padding(4);
+        s = new Stack { BackColor = Th.Card, Padding = new Padding(16, 12, 16, 12) };
+        Controls.Add(s);
+        Empty();
+    }
+
+    void Empty()
+    {
+        s.Controls.Clear();
+        s.Add(Th.Wrap("Click an email on the left to read it here. ↑ ↓ move through the list.", 10, Th.Muted));
+    }
+
+    public void ShowAi(string text)
+    {
+        if (aiBox == null || aiBox.IsDisposed) return;
+        aiBox.Text = text;
+        aiBox.Visible = true;
+    }
+
+    public void Show(MailHit h)
+    {
+        Mail = h;
+        s.SuspendLayout();
+        foreach (Control c in s.Controls) c.Dispose();
+        s.Controls.Clear();
+        if (h == null) { Empty(); s.ResumeLayout(); return; }
+        var top = s.Add(Th.Row());
+        top.Controls.Add(Th.L(string.IsNullOrWhiteSpace(h.Subject) ? "(no subject)" : h.Subject, 13, Th.Text, true));
+        if (h.MaybeAnswered.Length > 0) s.Add(Th.Wrap("↩ Probably answered: " + h.MaybeAnswered, 9.5f, Th.AccentText));
+        else if (!h.Sent && h.Status is "needs" or "week") top.Controls.Add(Th.L($"  waiting {h.DaysWaiting} day{(h.DaysWaiting == 1 ? "" : "s")}", 9.5f, Th.Warn, true));
+        var hdr = h.Sent ? $"From: you\nTo: {h.To}" : $"From: {h.FromName}  <{h.FromAddr}>\nTo: {h.To}";
+        if (h.Cc.Length > 0) hdr += "\nCc: " + h.Cc;
+        hdr += $"\n{h.Date:dddd dd MMM yyyy HH:mm}" + (h.Earlier > 0 ? $"   ·   +{h.Earlier} earlier email{(h.Earlier == 1 ? "" : "s")} in this topic" : "");
+        s.Add(Th.Wrap(hdr, 9.5f, Color.FromArgb(0xC9, 0xCE, 0xD8)));
+        if (h.AttNames.Length > 0)
+        {
+            var at = s.Add(Th.Row());
+            foreach (var a in h.AttNames.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                var chip = Th.Chip("📎 " + a, false, () => { try { Outlook.Open(h.Entry, h.StoreId); } catch { } });
+                chip.Font = Th.F(9);
+                at.Controls.Add(chip);
+            }
+        }
+        aiBox = s.Add(Th.Wrap(h.Summary.Length > 0 ? "✦ " + h.Summary : "", 10, Th.Text));
+        aiBox.BackColor = Th.Bg; aiBox.Padding = new Padding(10); aiBox.Margin = new Padding(0, 8, 0, 8);
+        aiBox.Visible = h.Summary.Length > 0;
+        var btns = s.Add(Th.Row());
+        btns.Controls.Add(Th.B("Open in Outlook", () => { try { Outlook.Open(h.Entry, h.StoreId); } catch (Exception e) { MessageBox.Show("Could not open it in Outlook: " + e.Message, "Nova Enhance"); } }));
+        btns.Controls.Add(Th.B("Summary", () => OnSummary?.Invoke(h)));
+        btns.Controls.Add(Th.B(h.Sent ? "✦ Draft follow-up" : "✦ Draft reply", () => OnDraft?.Invoke(h), true));
+        if (!h.Sent) btns.Controls.Add(Th.B("✓ Mark as handled", () => OnHandled?.Invoke(h)));
+        var body = (h.Body ?? "").Replace("\r\n", "\n").Trim();
+        if (body.Length > 20000) body = body[..20000] + "\n…";
+        var bl = s.Add(Th.Wrap(body.Length > 0 ? body : "(no text)", 10.5f, Th.Text));
+        bl.Margin = new Padding(0, 6, 0, 0);
+        s.ResumeLayout();
+        s.AutoScrollPosition = new Point(0, 0);
     }
 }
 
@@ -110,7 +264,14 @@ class Voice
 /// <summary>Ctrl+Shift+F: ask about your email in your own words.</summary>
 class AskForm : NovaForm
 {
-    readonly Stack stack;
+    readonly Stack stack, listHost;
+    readonly SplitContainer split;
+    readonly ReadPane pane;
+    readonly System.Windows.Forms.Timer layoutTimer;
+    bool wide;
+    int lastWidth;
+    MailHit lastHandled;
+    Button undoBtn;
     readonly TextBox question, follow;
     readonly Label understood, info, message, idx;
     readonly FlowLayoutPanel examples, chips, bottom;
@@ -126,10 +287,19 @@ class AskForm : NovaForm
     public AskForm()
     {
         Text = "Ask Nova · your email";
-        Width = 820; Height = 760;
+        Width = Math.Max(820, Store.Int("win_ask_w", 820)); Height = Math.Max(600, Store.Int("win_ask_h", 760));
         MinimumSize = new Size(620, 500);
         KeyPreview = true;
-        stack = new Stack();
+        // Top: question and status. Below: the list — and, in a wide window, the reading pane on the right.
+        stack = new Stack { Dock = DockStyle.Top, AutoScroll = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(16, 12, 16, 4) };
+        split = new SplitContainer { Dock = DockStyle.Fill, BackColor = Th.Bg, Panel2Collapsed = true, SplitterWidth = 6, FixedPanel = FixedPanel.Panel1 };
+        split.Panel1.BackColor = split.Panel2.BackColor = Th.Bg;
+        listHost = new Stack { Padding = new Padding(16, 4, 8, 8) };
+        split.Panel1.Controls.Add(listHost);
+        pane = new ReadPane { Dock = DockStyle.Fill, Margin = new Padding(0) };
+        split.Panel2.Padding = new Padding(0, 4, 12, 12);
+        split.Panel2.Controls.Add(pane);
+        Controls.Add(split);
         Controls.Add(stack);
 
         var head = stack.Add(Th.Row(false));
@@ -184,11 +354,16 @@ class AskForm : NovaForm
         message.BackColor = Th.Card;
         message.Padding = new Padding(8);
         message.Visible = false;
-        list = stack.Add(new MailList());
+        list = listHost.Add(new MailList());
         list.OnSummary = Summary;
         list.OnDraft = Draft;
+        list.OnHandled = MarkHandled;
+        list.OnSelect = h => pane.Show(h);
+        pane.OnSummary = Summary;
+        pane.OnDraft = Draft;
+        pane.OnHandled = MarkHandled;
 
-        bottom = stack.Add(Th.Row(false));
+        bottom = listHost.Add(Th.Row(false));
         follow = Th.Box(false);
         follow.Width = 360;
         follow.PlaceholderText = "Ask a follow-up… e.g. only with attachments";
@@ -198,14 +373,29 @@ class AskForm : NovaForm
         bottom.Controls.Add(Th.B("☀ Brief", Screens.Brief));
         bottom.Controls.Add(Th.B("📁 Search a folder", () => Screens.FolderSearch(null)));
         bottom.Controls.Add(Th.B("⚙", () => Screens.Settings("Email & AI")));
+        undoBtn = Th.B("↩ Undo handled", UndoHandled);
+        undoBtn.Visible = false;
+        bottom.Controls.Add(undoBtn);
         bottom.Visible = false;
-        stack.Add(Th.Signature());
+        listHost.Add(Th.Signature());
+
+        layoutTimer = new System.Windows.Forms.Timer { Interval = 150 };
+        layoutTimer.Tick += (_, _) => { layoutTimer.Stop(); Relayout(false); };
+        Resize += (_, _) => { layoutTimer.Stop(); layoutTimer.Start(); };
+        ResizeEnd += (_, _) => { if (WindowState == FormWindowState.Normal) { Store.SetInt("win_ask_w", Width); Store.SetInt("win_ask_h", Height); } };
+        split.SplitterMoved += (_, _) => { if (wide) { Store.SetInt("win_ask_split", split.SplitterDistance); Relayout(true); } };
 
         question.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; Run(question.Text, false); } };
         follow.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; Run(follow.Text, true); } };
-        KeyDown += (_, e) => { if (e.KeyCode == Keys.Escape) Hide(); };
+        KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.Escape) Hide();
+            else if (wide && (e.KeyCode == Keys.Down || e.KeyCode == Keys.Up) && !question.Focused && !follow.Focused)
+            { list.MoveBy(e.KeyCode == Keys.Down ? 1 : -1); e.Handled = true; }
+        };
         FormClosing += (_, e) => { if (e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Hide(); } };
         VisibleChanged += (_, _) => { if (Visible) DrawChips(); };
+        Shown += (_, _) => Relayout(true);
         idxTimer = new System.Windows.Forms.Timer { Interval = 3000 };
         idxTimer.Tick += (_, _) => { if (Visible) idx.Text = "Index: " + MailIndex.Status; };
         idxTimer.Start();
@@ -283,9 +473,11 @@ class AskForm : NovaForm
             lastQuestion = q;
             hits = ans.Hits;
             understood.Text = "Understood as: " + ans.Explain;
-            var count = hits.Count == 0 ? "No emails found" : $"{hits.Count} email{(hits.Count == 1 ? "" : "s")} found";
+            var mainCount = hits.Count(h => h.MaybeAnswered.Length == 0);
+            var maybeCount = hits.Count - mainCount;
+            var count = hits.Count == 0 ? "No emails found" : $"{mainCount} email{(mainCount == 1 ? "" : "s")} found" + (maybeCount > 0 ? $" · {maybeCount} probably answered (grey, at the bottom)" : "");
             info.Text = $"{count} in {ans.Seconds:0.0} s" + (MailIndex.Count() == 0 ? " · the index is still empty — open Outlook and wait a few minutes" : "");
-            list.Show(hits, Math.Max(300, stack.ClientSize.Width - 50));
+            ShowList();
             bottom.Visible = true;
             follow.Text = "";
             History.Add("ask", Ai.Active()?.Id ?? "", "", "ask-mail", q, $"{hits.Count} results · {ans.Explain}");
@@ -304,16 +496,84 @@ class AskForm : NovaForm
         message.Visible = true;
     }
 
+    /// <summary>Medium window: cards stretch. Wide (≥ 1300 px) or maximised: list on the left, the email on the right.</summary>
+    void Relayout(bool force)
+    {
+        bool w = ClientSize.Width >= 1300;
+        if (w != wide)
+        {
+            wide = w;
+            split.Panel2Collapsed = !wide;
+            if (wide)
+            {
+                var d = Store.Int("win_ask_split", 560);
+                try { split.SplitterDistance = Math.Clamp(d, 380, Math.Max(400, split.Width - 500)); } catch { }
+            }
+            force = true;
+        }
+        var width = ListWidth();
+        if (!force && Math.Abs(width - lastWidth) < 24) return;
+        ShowList();
+    }
+
+    int ListWidth() => Math.Max(300, (wide ? split.Panel1.ClientSize.Width : listHost.ClientSize.Width) - listHost.Padding.Horizontal - 24);
+
+    void ShowList()
+    {
+        list.Compact = wide;
+        lastWidth = ListWidth();
+        var sel = list.Selected;
+        list.Show(hits, lastWidth);
+        listHost.FitAll();
+        if (wide)
+        {
+            if (sel != null && hits.Contains(sel)) list.Select(sel);
+            else if (list.Order.Count > 0) list.Select(list.Order[0]);
+            else pane.Show(null);
+        }
+    }
+
+    /// <summary>Shows an AI result next to the email when the reading pane shows it, otherwise above the list.</summary>
+    void Say(MailHit h, string text)
+    {
+        if (wide && pane.Mail == h) pane.ShowAi(text);
+        else ShowMessage(text);
+    }
+
+    void MarkHandled(MailHit h)
+    {
+        Outstanding.MarkHandled(h, true);
+        lastHandled = h;
+        var i = list.Order.IndexOf(h);
+        hits.Remove(h);
+        ShowList();
+        if (wide && list.Order.Count > 0) list.Select(list.Order[Math.Clamp(i, 0, list.Order.Count - 1)]);
+        info.Text = $"✓ “{h.Subject}” marked as handled — it won't show as waiting again (↩ Undo handled at the bottom).";
+        undoBtn.Visible = true;
+    }
+
+    void UndoHandled()
+    {
+        if (lastHandled == null) return;
+        Outstanding.MarkHandled(lastHandled, false);
+        hits.Insert(0, lastHandled);
+        info.Text = $"↩ “{lastHandled.Subject}” is back in the list.";
+        lastHandled = null;
+        undoBtn.Visible = false;
+        ShowList();
+    }
+
     async void Summary(MailHit h)
     {
         if (!Store.AiSeesFull)
         {
-            ShowMessage($"“{h.Subject}”\n\n{h.FirstLines(600)}\n\n(An AI summary needs Settings → Email & AI → C or D. This is the start of the email, read on this PC only.)");
+            Say(h, wide && pane.Mail == h ? "An AI summary of the full email needs Settings → Email & AI → C or D. The full text is below, read on this PC only."
+                                         : $"“{h.Subject}”\n\n{h.FirstLines(600)}\n\n(An AI summary needs Settings → Email & AI → C or D. This is the start of the email, read on this PC only.)");
             return;
         }
-        ShowMessage($"✦ Summarising “{h.Subject}”…");
-        try { ShowMessage($"✦ {h.Subject}\n\n" + await Assistant.Summarize(h, CancellationToken.None)); }
-        catch (Exception e) { ShowMessage("⚠ " + e.Message); }
+        Say(h, $"✦ Summarising “{h.Subject}”…");
+        try { Say(h, (wide && pane.Mail == h ? "✦ Summary\n\n" : $"✦ {h.Subject}\n\n") + await Assistant.Summarize(h, CancellationToken.None)); }
+        catch (Exception e) { Say(h, "⚠ " + e.Message); }
     }
 
     async void Draft(MailHit h)

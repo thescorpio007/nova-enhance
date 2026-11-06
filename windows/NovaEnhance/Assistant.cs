@@ -82,7 +82,8 @@ Rules:
             if (q.MeIn == null && Store.NeedTo && !Store.NeedCcNamed) q.MeIn = "to";
             if (q.MeIn == null) q.MeIn = "any";
             ans.Hits = await Task.Run(() => MailIndex.Search(q), ct);
-            ans.Hits = BriefLogic.Classify(ans.Hits.Where(h => !BriefLogic.IsAuto(h) && !Me.IsMe(h.FromAddr)).ToList());
+            var raw = ans.Hits.Where(h => !BriefLogic.IsAuto(h) && !Me.IsMe(h.FromAddr)).ToList();
+            ans.Hits = BriefLogic.Classify(await Task.Run(() => Outstanding.Check(raw), ct));
             await BriefLogic.AiCheck(ans.Hits, ct);
         }
         else if (ans.Intent == "followup")
@@ -282,8 +283,10 @@ static class BriefLogic
                 if (inTo && Store.NeedTo) { needs.Add(h); continue; }
                 if (!inTo && Store.NeedCcNamed && first.Length > 1 && h.NewPart.Contains(first, StringComparison.OrdinalIgnoreCase)) needs.Add(h);
             }
-            needs = Classify(needs);
+            var checkedNeeds = await Task.Run(() => Outstanding.Check(needs), ct);
+            needs = Classify(checkedNeeds.Where(h => h.MaybeAnswered.Length == 0).ToList());
             await AiCheck(needs, ct);
+            needs.AddRange(checkedNeeds.Where(h => h.MaybeAnswered.Length > 0));
         }
         var follow = new List<MailHit>();
         if (Store.FollowUps)

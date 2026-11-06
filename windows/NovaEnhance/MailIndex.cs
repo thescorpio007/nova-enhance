@@ -64,6 +64,24 @@ static class Outlook
         try { return Convert.ToString(f()) ?? ""; } catch { return ""; }
     }
 
+    /// <summary>Outlook's own mark on a received email: 102 replied · 103 replied to all · 104 forwarded, with when. (0, null) when unknown.</summary>
+    public static (int Verb, DateTime? When) LastVerb(dynamic ns, string entry, string store)
+    {
+        dynamic item = null;
+        try
+        {
+            item = ns.GetItemFromID(entry, store);
+            dynamic pa = item.PropertyAccessor;
+            int verb = 0; DateTime? when = null;
+            try { verb = Convert.ToInt32(pa.GetProperty("http://schemas.microsoft.com/mapi/proptag/0x10810003")); } catch { }
+            try { when = ((DateTime)pa.UTCToLocalTime(pa.GetProperty("http://schemas.microsoft.com/mapi/proptag/0x10820040"))); } catch { }
+            Release(pa);
+            return (verb, when);
+        }
+        catch { return (0, null); }
+        finally { Release(item); }
+    }
+
     public static void Open(string entry, string store)
     {
         dynamic app = Get();
@@ -119,6 +137,10 @@ class MailHit
     public string Status = "";
     public string Summary = "";
     public bool? NeedsReply;
+    /// <summary>Outstanding lists: why Nova thinks it was probably answered already (shown in the grey section), or "".</summary>
+    public string MaybeAnswered = "";
+    /// <summary>Outstanding lists: how many earlier emails of the same conversation/topic are folded into this card.</summary>
+    public int Earlier;
 
     public string NewPart => MailIndex.NewPart(Body ?? "");
     public string FirstLines(int n = 300) { var t = Regex.Replace(NewPart, @"\s+", " ").Trim(); return t.Length > n ? t[..n] + "…" : t; }
@@ -720,6 +742,28 @@ static class MailIndex
         }
         // The same email can sit in two folders (e.g. moved copies): keep one per subject+date+sender.
         return list.GroupBy(h => (h.Subject, h.Date, h.FromAddr)).Select(g => g.First()).ToList();
+    }
+
+    /// <summary>Emails I sent after a date (subject, people, start of the text) — to find answers given outside the conversation.</summary>
+    public static List<MailHit> SentAfter(DateTime after, int limit = 5000)
+    {
+        var list = new List<MailHit>();
+        using var c = Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT conv,date,subject,to_addr,cc_addr,to_list,cc_list,substr(body,1,4000) FROM mail WHERE sent=1 AND date >= $d ORDER BY date DESC LIMIT $n";
+        cmd.Parameters.AddWithValue("$d", Ms(after));
+        cmd.Parameters.AddWithValue("$n", limit);
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+        {
+            string Str(int i) => r.IsDBNull(i) ? "" : r.GetString(i);
+            list.Add(new MailHit
+            {
+                Sent = true, Conv = Str(0), Date = DateTimeOffset.FromUnixTimeMilliseconds(r.GetInt64(1)).LocalDateTime, Subject = Str(2),
+                ToAddr = Str(3), CcAddr = Str(4), To = Str(5), Cc = Str(6), Body = Str(7)
+            });
+        }
+        return list;
     }
 }
 
