@@ -127,6 +127,22 @@ static class FolderIndex
         return Convert.ToHexString(key);
     }
 
+    /// <summary>A file the folder index has seen, found by its name (newest first) — e.g. the PDF open in a viewer.</summary>
+    public static string FindByName(string fileName)
+    {
+        using var c = Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT path FROM files WHERE (remote IS NULL OR remote='') AND path LIKE $p ORDER BY mtime DESC LIMIT 10";
+        cmd.Parameters.AddWithValue("$p", "%\\" + fileName);
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+        {
+            var p = r.GetString(0);
+            if (Path.GetFileName(p).Equals(fileName, StringComparison.OrdinalIgnoreCase) && File.Exists(p)) return p;
+        }
+        return null;
+    }
+
     public static SqliteConnection Open()
     {
         lock (InitLock) { if (!batteries) { SQLitePCL.Batteries_V2.Init(); batteries = true; } }
@@ -963,6 +979,8 @@ static class Opener
         }
         if (low.Contains("sumatra")) { Process.Start(exe, $"-page {page} \"{path}\""); return; }
         if (low.Contains("foxit")) { Process.Start(exe, $"\"{path}\" /A page={page}"); return; }
+        if (low.Contains("pdfxedit") || low.Contains("pdfxcview")) { Process.Start(exe, $"/A \"page={page}\" \"{path}\""); return; }
+        if (low.Contains("revu")) { Process.Start(exe, $"\"{path}\""); return; }
         Shell.Open(path);
     }
 

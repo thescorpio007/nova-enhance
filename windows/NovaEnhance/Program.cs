@@ -80,6 +80,7 @@ class NovaContext : ApplicationContext
         m.Items.Add("✦  Enhance selected text      Ctrl+Shift+E", null, (_, _) => Screens.Enhance());
         m.Items.Add("🔍  Ask Nova about my email   Ctrl+Shift+F", null, (_, _) => Screens.Ask());
         m.Items.Add("💬  Nova Chat & AI Hub        Ctrl+Shift+A", null, (_, _) => Screens.Hub(null));
+        m.Items.Add("📄  Nova for this PDF                Ctrl+Shift+D", null, (_, _) => PdfCompanion.Open());
         m.Items.Add("📁  Search inside a folder…", null, (_, _) => Screens.FolderSearch(null));
         m.Items.Add("☀  Morning brief", null, (_, _) => Screens.Brief());
         m.Items.Add(new ToolStripSeparator());
@@ -95,6 +96,8 @@ class NovaContext : ApplicationContext
         hot.Register(1, Keys.E, Screens.Enhance, "Ctrl+Shift+E");
         hot.Register(2, Keys.F, Screens.Ask, "Ctrl+Shift+F");
         hot.Register(3, Keys.A, Screens.HubSelection, "Ctrl+Shift+A");
+        hot.Register(4, Keys.D, () => PdfCompanion.Open(), "Ctrl+Shift+D");
+        PdfCompanion.Watch();
 
         showEvt = new EventWaitHandle(false, EventResetMode.AutoReset, "NovaEnhanceWindows-show");
         ThreadPool.RegisterWaitForSingleObject(showEvt, (_, _) => Program.UiContext.Post(_ => Screens.Settings(), null), null, -1, false);
@@ -107,7 +110,12 @@ class NovaContext : ApplicationContext
         }, null, -1, false);
 
         MailIndex.Start();
-        if (Store.Bool("win_addin", false) || Store.Bool("win_addin_it", false)) Server.Start();
+        if (Store.Bool("win_addin", false) || Store.Bool("win_addin_it", false))
+        {
+            Server.Start();
+            // After an update: the add-in files carry the new version (Word/Excel/PowerPoint pick it up at their next start).
+            try { if (Store.Str("win_manifest_build") != Program.Build.ToString()) { OfficeAddin.WriteManifests(); Store.Set("win_manifest_build", Program.Build.ToString()); } } catch (Exception e) { Log.Error("Office add-in · manifests", e); }
+        }
         if (BrowserAddon.On) { BrowserAddon.Refresh(); Server.StartBrowser(); }
 
         timer = new System.Windows.Forms.Timer { Interval = 60_000 };
@@ -140,6 +148,7 @@ class NovaContext : ApplicationContext
         {
             AutoBackup.MaybeRun();
             BriefLogic.MaybeShow();
+            Calendar.Tick();
             if (ticks++ % 60 == 0 && Updater.Due) { await Updater.Check(); Updater.Offer(false); }
         }
         catch (Exception e) { Log.Error("tick", e); }
@@ -192,6 +201,17 @@ static class Screens
     static BriefForm brief;
     static FolderSearchForm folder;
     static HubForm hub;
+
+    public static void HubAttach(string path)
+    {
+        try
+        {
+            if (hub == null || hub.IsDisposed) hub = new HubForm();
+            Show(hub);
+            hub.AttachFile(path);
+        }
+        catch (Exception e) { Log.Error("AI window · attach", e); }
+    }
 
     public static void Hub(string text)
     {
@@ -312,7 +332,7 @@ static class Selection
         var h = GetForegroundWindow();
         if (IsOwn(h)) return (IntPtr.Zero, "");
         // Wait until Ctrl, Shift and E are released, or the copy would become Ctrl+Shift+C.
-        for (int i = 0; i < 40 && (Down(0x10) || Down(0x11) || Down(0x45) || Down(0x41)); i++) await Task.Delay(15);
+        for (int i = 0; i < 40 && (Down(0x10) || Down(0x11) || Down(0x45) || Down(0x41) || Down(0x44)); i++) await Task.Delay(15);
         string old = null;
         try { if (Clipboard.ContainsText()) old = Clipboard.GetText(); } catch { }
         try { Clipboard.Clear(); } catch { }

@@ -342,6 +342,9 @@
       $("draft").onclick = function () { status("✦ Writing the reply…"); mailInfo(function (m) { m.instruction = $("instr").value; api("draft", m, function (r) { if (r.error) { status("⚠ " + r.error, "bad"); return; } $("result").value = r.result; $("outlabel").innerHTML = "Draft reply — check it"; show("out", true); $("replace").style.display = ""; status("✓ Draft ready — ↩ Reply with this opens the reply", "good"); }); }); };
       $("trmail").onclick = function () { status("🌐 Translating…"); mailInfo(function (m) { api("enhance", { mode: "translate", text: m.text, lang: $("lang") ? $("lang").value : "", host: "read" }, function (r) { if (r.error) { status("⚠ " + r.error, "bad"); return; } $("result").value = r.result; $("outlabel").innerHTML = ""; $("outlabel").appendChild(document.createTextNode(r.label)); show("out", true); $("replace").style.display = "none"; status("✓ Translated", "good"); }); }); };
       $("asknova").onclick = function () { api("open", { what: "ask" }, function () { status("🔍 Ask Nova opened on your desktop"); }); };
+      // Opened from the ✦ Nova tab: ✦ Summary / ✦ Draft reply start by themselves.
+      var want = /[?&]do=(summary|draft)/.exec(location.search || "");
+      if (want) setTimeout(function () { $(want[1] === "summary" ? "sum" : "draft").click(); }, 300);
     }
   }
 

@@ -477,6 +477,10 @@ class AskForm : NovaForm
             var maybeCount = hits.Count - mainCount;
             var count = hits.Count == 0 ? "No emails found" : $"{mainCount} email{(mainCount == 1 ? "" : "s")} found" + (maybeCount > 0 ? $" · {maybeCount} probably answered (grey, at the bottom)" : "");
             info.Text = $"{count} in {ans.Seconds:0.0} s" + (MailIndex.Count() == 0 ? " · the index is still empty — open Outlook and wait a few minutes" : "");
+            if (ans.Intent == "outstanding" && !MailIndex.Complete)
+                info.Text += Outstanding.LiveChecked
+                    ? " · Index still building — your replies were checked live in Outlook"
+                    : " · ⚠ Index still building and Outlook is closed — some of these may already be answered";
             ShowList();
             bottom.Visible = true;
             follow.Text = "";
@@ -620,7 +624,8 @@ class AskForm : NovaForm
 class BriefForm : NovaForm
 {
     readonly Stack stack;
-    readonly Label head, info, needsTitle, followTitle, message;
+    readonly Label head, info, needsTitle, followTitle, message, calTitle;
+    readonly FlowLayoutPanel calBox;
     readonly MailList needs, follow;
     List<MailHit> lastNeeds = new(), lastFollow = new();
     bool busy;
@@ -642,6 +647,8 @@ class BriefForm : NovaForm
         row.Controls.Add(Th.B("⚙ Rules", () => Screens.Settings("Email & AI")));
         message = stack.Add(Th.Wrap("", 10, Th.Text));
         message.BackColor = Th.Card; message.Padding = new Padding(8); message.Visible = false;
+        calTitle = stack.Add(Th.Section("📅 Today and tomorrow"));
+        calBox = stack.Add(new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = Color.Transparent, Margin = new Padding(0) });
         needsTitle = stack.Add(Th.Section("Waiting for your reply"));
         needs = stack.Add(new MailList());
         followTitle = stack.Add(Th.Section("Your emails with no answer"));
@@ -687,6 +694,7 @@ class BriefForm : NovaForm
         {
             var (n, f) = await BriefLogic.Build(CancellationToken.None);
             lastNeeds = n; lastFollow = f;
+            await DrawCalendar(n);
             int red = n.Count(h => h.Status == "needs"), orange = n.Count(h => h.Status == "week"), fyi = n.Count(h => h.Status == "fyi");
             info.Text = $"{DateTime.Now:dddd dd MMMM} · 🔴 {red} overdue · 🟠 {orange} this week · ⚪ {fyi} FYI · ↩ {f.Count} follow-ups · last {Store.BriefDays} days · Index: {MailIndex.Status}";
             needsTitle.Text = $"WAITING FOR YOUR REPLY ({n.Count})";
@@ -705,6 +713,84 @@ class BriefForm : NovaForm
         }
         catch (Exception e) { info.Text = "⚠ " + e.Message; Log.Error("brief", e); }
         finally { busy = false; }
+    }
+
+    /// <summary>Meetings today and tomorrow (with clashes, open emails, last file, advice), invitations waiting, your reminders.</summary>
+    async Task DrawCalendar(List<MailHit> waiting)
+    {
+        calBox.SuspendLayout();
+        foreach (Control c in calBox.Controls) c.Dispose();
+        calBox.Controls.Clear();
+        calTitle.Visible = calBox.Visible = Calendar.InBrief;
+        if (!Calendar.InBrief) { calBox.ResumeLayout(); return; }
+        var w = Math.Max(300, stack.ClientSize.Width - 50);
+        void Line(string text, Color color, float size = 9.5f, bool bold = false, int indent = 0)
+        {
+            var l = Th.L(text, size, color, bold); l.MaximumSize = new Size(w - indent, 0); l.Margin = new Padding(indent, 2, 0, 1); calBox.Controls.Add(l);
+        }
+        try
+        {
+            var today = DateTime.Today;
+            var all = await Task.Run(() => Calendar.Read(today, today.AddDays(14)));
+            if (Outlook.Running() == null) { Line("Open Outlook to see your calendar here.", Th.Muted); return; }
+            var two = all.Where(x => x.Start < today.AddDays(2)).ToList();
+            Calendar.Prepare(two, waiting);
+            foreach (var day in new[] { today, today.AddDays(1) })
+            {
+                var list = two.Where(x => x.Start.Date <= day && x.End > day && x.IsMeeting && !x.Cancelled && !x.Declined).OrderBy(x => x.Start).ToList();
+                Line(day == today ? $"Today · {day:dddd dd MMM}" : $"Tomorrow · {day:dddd dd MMM}", Th.AccentText, 10, true);
+                if (list.Count == 0) Line("No meetings", Th.Muted, 9.5f, false, 14);
+                foreach (var m in list)
+                {
+                    var b = Th.B($"{m.Time}  ·  {m.Subject}" + (m.Location.Length > 0 ? "  ·  📍 " + m.Location : "") + (m.NeedsAnswer ? "  ·  ❔ not answered" : ""), () => Calendar.Open(m));
+                    b.Font = Th.F(9.5f, true); b.TextAlign = ContentAlignment.MiddleLeft; b.AutoSize = false; b.AutoEllipsis = true; b.Width = w - 14; b.Height = 30; b.Margin = new Padding(14, 2, 0, 0);
+                    calBox.Controls.Add(b);
+                    foreach (var a in m.Advice) Line((a.StartsWith("⚠") ? "" : "⚠ ") + a, Th.Warn, 9, false, 30);
+                    foreach (var h in m.Related)
+                    {
+                        var hb = Th.B($"✉ open: {h.FromName} · {h.Subject}", () => { try { Outlook.Open(h.Entry, h.StoreId); } catch { } });
+                        hb.Font = Th.F(9); hb.TextAlign = ContentAlignment.MiddleLeft; hb.AutoSize = false; hb.AutoEllipsis = true; hb.Width = w - 30; hb.Height = 26; hb.Margin = new Padding(30, 1, 0, 0);
+                        hb.BackColor = Th.Bg;
+                        calBox.Controls.Add(hb);
+                    }
+                    if (m.LastFile.Length > 0) Line("📎 Last file: " + m.LastFile, Th.Muted, 9, false, 30);
+                }
+                var load = Calendar.DayLoad(two, day);
+                if (load.Length > 0) Line("⚠ " + load, Th.Warn, 9, false, 14);
+            }
+            var invites = all.Where(x => x.NeedsAnswer && !x.Cancelled).OrderBy(x => x.Start).ToList();
+            if (invites.Count > 0)
+            {
+                Line($"Invitations waiting for your answer ({invites.Count})", Th.AccentText, 10, true);
+                foreach (var m in invites.Take(10))
+                {
+                    var b = Th.B($"❔ {m.Start:ddd dd MMM HH:mm}  ·  {m.Subject}  ·  {m.Organizer}", () => Calendar.Open(m));
+                    b.Font = Th.F(9.5f); b.TextAlign = ContentAlignment.MiddleLeft; b.AutoSize = false; b.AutoEllipsis = true; b.Width = w - 14; b.Height = 28; b.Margin = new Padding(14, 2, 0, 0);
+                    calBox.Controls.Add(b);
+                }
+            }
+            var rem = Calendar.Reminders(all, today);
+            if (rem.Count > 0)
+            {
+                Line("Your reminders today", Th.AccentText, 10, true);
+                var doneKey = "win_rem_" + today.ToString("yyyyMMdd");
+                var done = Store.Str(doneKey, "").Split('|', StringSplitOptions.RemoveEmptyEntries).ToHashSet();
+                foreach (var m in rem)
+                {
+                    var key = m.Entry + m.Start.ToString("HHmm");
+                    var cb = Th.Check($"{m.Time}  {m.Subject}", done.Contains(key), v =>
+                    {
+                        var d = Store.Str(doneKey, "").Split('|', StringSplitOptions.RemoveEmptyEntries).ToHashSet();
+                        if (v) d.Add(key); else d.Remove(key);
+                        Store.Set(doneKey, string.Join("|", d));
+                    });
+                    cb.Margin = new Padding(14, 2, 0, 0);
+                    calBox.Controls.Add(cb);
+                }
+            }
+        }
+        catch (Exception e) { Line("⚠ Calendar: " + e.Message, Th.Warn); Log.Error("brief calendar", e); }
+        finally { calBox.ResumeLayout(); }
     }
 
     void Export()

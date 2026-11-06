@@ -111,37 +111,18 @@ static class Outstanding
             kept.Add(top);
         }
 
-        // 2 · Outlook's own "You replied / forwarded" mark (set even when you answered from your phone or Outlook web).
-        try
-        {
-            object app = Outlook.Running();
-            if (app != null)
-            {
-                dynamic ns = ((dynamic)app).GetNamespace("MAPI");
-                foreach (var h in kept.OrderByDescending(x => x.Date).Take(150).ToList())
-                {
-                    (int verb, DateTime? when) = Outlook.LastVerb((object)ns, h.Entry, h.StoreId);
-                    if (when != null && when < h.Date.AddMinutes(-1)) continue;
-                    if (verb is 102 or 103) { kept.Remove(h); continue; }
-                    if (verb == 104 && h.MaybeAnswered.Length == 0) h.MaybeAnswered = $"you forwarded it{(when != null ? " on " + when.Value.ToString("dd MMM") : "")}";
-                }
-                Outlook.Release((object)ns);
-            }
-        }
-        catch (Exception e) when (!Outlook.Gone(e)) { Log.Warn("outstanding", "Outlook replied-mark check skipped: " + e.Message); }
-        catch { }
-
-        // 3 · An email you sent later with the same subject, or quoting the same reference — probably your answer.
+        // 2 · Your sent emails in the index: same subject (RE:/FW: removed) after it = answered; similar subject or same reference = probably.
         try
         {
             var since = kept.Count == 0 ? DateTime.Now : kept.Min(h => h.Date);
             var sent = MailIndex.SentAfter(since);
             foreach (var s in sent) s.Summary = NormSubject(s.Subject);   // reuse a spare field for the cleaned subject
-            foreach (var h in kept.Where(x => x.MaybeAnswered.Length == 0))
+            foreach (var h in kept.ToList())
             {
                 var ns = NormSubject(h.Subject);
-                var refs = Refs(h.Subject);
                 var later = sent.Where(s => s.Date > h.Date).ToList();
+                if (ns.Length >= 6 && later.Any(s => s.Summary == ns)) { kept.Remove(h); continue; }
+                if (h.MaybeAnswered.Length > 0) continue;
                 var bySubject = later.Where(s => SameSubject(ns, s.Summary)).OrderBy(s => s.Date).FirstOrDefault();
                 if (bySubject != null)
                 {
@@ -149,7 +130,7 @@ static class Outstanding
                     h.MaybeAnswered = $"you sent “{Cut(bySubject.Subject, 70)}” on {bySubject.Date:dd MMM}" + (samePeople ? $" to {First(h.FromName)}" : "");
                     continue;
                 }
-                foreach (var rf in refs)
+                foreach (var rf in Refs(h.Subject))
                 {
                     var byRef = later.Where(s => s.Subject.Contains(rf, StringComparison.OrdinalIgnoreCase) || s.Body.Contains(rf, StringComparison.OrdinalIgnoreCase)).OrderBy(s => s.Date).FirstOrDefault();
                     if (byRef != null) { h.MaybeAnswered = $"you mentioned {rf} in “{Cut(byRef.Subject, 60)}” on {byRef.Date:dd MMM}"; break; }
@@ -159,7 +140,123 @@ static class Outstanding
         }
         catch (Exception e) { Log.Warn("outstanding", "sent-mail check skipped: " + e.Message); }
 
+        // 3 · Live in Outlook (works even while the index is still being built):
+        //     your Sent Items by subject · Outlook's "You replied" mark · the whole conversation in every folder.
+        LiveChecked = false;
+        try
+        {
+            object app = Outlook.Running();
+            if (app != null && kept.Count > 0)
+            {
+                dynamic ns = ((dynamic)app).GetNamespace("MAPI");
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+
+                var sentLive = LiveSent((object)ns, kept.Min(h => h.Date));
+                foreach (var h in kept.ToList())
+                {
+                    var n = NormSubject(h.Subject);
+                    if (n.Length >= 6 && sentLive.Any(x => x.When > h.Date && x.Subject == n)) kept.Remove(h);
+                }
+
+                foreach (var h in kept.OrderByDescending(x => x.Date).Take(120).ToList())
+                {
+                    if (clock.Elapsed > TimeSpan.FromSeconds(20)) break;
+                    (int verb, DateTime? when) = Outlook.LastVerb((object)ns, h.Entry, h.StoreId);
+                    bool fresh = when == null || when >= h.Date.AddMinutes(-1);
+                    if (fresh && verb is 102 or 103) { kept.Remove(h); continue; }
+                    if (AnsweredInConversation((object)ns, h)) { kept.Remove(h); continue; }
+                    if (fresh && verb == 104 && h.MaybeAnswered.Length == 0) h.MaybeAnswered = $"you forwarded it{(when != null ? " on " + when.Value.ToString("dd MMM") : "")}";
+                }
+                Outlook.Release((object)ns);
+                LiveChecked = true;
+            }
+        }
+        catch (Exception e) when (!Outlook.Gone(e)) { Log.Warn("outstanding", "live Outlook check skipped: " + e.Message); }
+        catch { }
+
         return kept.OrderBy(h => h.MaybeAnswered.Length > 0 ? 1 : 0).ThenByDescending(h => h.Date).ToList();
+    }
+
+    /// <summary>True when the last check could ask Outlook directly (Outlook open).</summary>
+    public static bool LiveChecked;
+
+    static bool IsMeSender(string name, string addr, string smtp) =>
+        Me.IsMe(smtp) || Me.IsMe(addr) || (Me.Name.Length > 0 && (name ?? "").Equals(Me.Name, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Your Sent Items (every mailbox's default Sent folder) since a date, straight from Outlook: cleaned subject + time.</summary>
+    static List<(string Subject, DateTime When)> LiveSent(dynamic ns, DateTime since)
+    {
+        var res = new List<(string, DateTime)>();
+        dynamic stores = null;
+        try
+        {
+            stores = ns.Stores;
+            int n = (int)stores.Count;
+            for (int i = 1; i <= n; i++)
+            {
+                dynamic st = stores.Item(i);
+                dynamic f = null, items = null;
+                try
+                {
+                    try { f = st.GetDefaultFolder(5); } catch { }
+                    if (f == null) continue;
+                    var utc = since.ToUniversalTime().ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+                    items = f.Items.Restrict($"@SQL=\"http://schemas.microsoft.com/mapi/proptag/0x00390040\" > '{utc}'");
+                    int k = 0;
+                    dynamic it = items.GetFirst();
+                    while (it != null && k++ < 3000)
+                    {
+                        try
+                        {
+                            DateTime when = (DateTime)it.SentOn;
+                            res.Add((NormSubject(Outlook.S(() => it.Subject)), when));
+                        }
+                        catch { }
+                        Outlook.Release(it);
+                        it = items.GetNext();
+                    }
+                }
+                catch { }
+                finally { Outlook.Release(items); Outlook.Release(f); Outlook.Release(st); }
+            }
+        }
+        catch { }
+        finally { Outlook.Release(stores); }
+        return res;
+    }
+
+    /// <summary>Any later email from you in the same conversation, in any folder (Outlook's conversation view).</summary>
+    static bool AnsweredInConversation(dynamic ns, MailHit h)
+    {
+        dynamic item = null, conv = null, table = null;
+        try
+        {
+            item = ns.GetItemFromID(h.Entry, h.StoreId);
+            conv = item.GetConversation();
+            if (conv == null) return false;
+            table = conv.GetTable();
+            foreach (var col in new[] { "SenderName", "SenderEmailAddress", "SentOn", "http://schemas.microsoft.com/mapi/proptag/0x5D01001F" })
+                try { table.Columns.Add(col); } catch { }
+            int rows = 0;
+            while (!(bool)table.EndOfTable && rows++ < 200)
+            {
+                dynamic row = table.GetNextRow();
+                try
+                {
+                    string name = Outlook.S(() => row.Item("SenderName"));
+                    string addr = Outlook.S(() => row.Item("SenderEmailAddress"));
+                    string smtp = Outlook.S(() => row.Item("http://schemas.microsoft.com/mapi/proptag/0x5D01001F"));
+                    if (!IsMeSender(name, addr, smtp)) continue;
+                    DateTime when;
+                    try { when = (DateTime)row.Item("SentOn"); } catch { continue; }
+                    if (when > h.Date.AddMinutes(1)) return true;
+                }
+                finally { Outlook.Release(row); }
+            }
+        }
+        catch { }
+        finally { Outlook.Release(table); Outlook.Release(conv); Outlook.Release(item); }
+        return false;
     }
 
     static string First(string name) { var n = (name ?? "").Trim(); var i = n.IndexOfAny(new[] { ' ', ',' }); return i > 0 ? n[..i] : n; }

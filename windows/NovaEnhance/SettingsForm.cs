@@ -253,6 +253,61 @@ class SettingsForm : NovaForm
             if (MessageBox.Show("Delete the email index and build it again from Outlook?", "Nova Enhance", MessageBoxButtons.YesNo) == DialogResult.Yes) MailIndex.Rebuild();
         }));
         ir.Controls.Add(Th.B("📁 Index folder", () => Shell.Open(Store.IndexLocal ? Paths.MailIndexLocal : Paths.MailIndexDocs)));
+
+        page.Add(Th.Section("Gentle indexing"));
+        Note("Outlook stays smooth: in working hours only new mail (and the last 14 days) is indexed, gently; the big first index and \"Rebuild index\" run outside working hours — full speed when the PC is idle, slower while you work, slowest on battery. Nova pauses whenever Outlook is busy.");
+        page.Add(Th.Check("Gentle indexing with working hours", Gentle.On, v => Gentle.On = v));
+        var wh = page.Add(Th.Row(false));
+        wh.Controls.Add(Th.L("Working hours from", 10, Th.Text));
+        var ws = new NumericUpDown { Minimum = 0, Maximum = 23, Value = Gentle.StartHour, Width = 56, BackColor = Th.Card, ForeColor = Th.Text, Font = Th.F(10) };
+        ws.ValueChanged += (_, _) => Gentle.StartHour = (int)ws.Value;
+        wh.Controls.Add(ws);
+        wh.Controls.Add(Th.L(":00  to", 10, Th.Text));
+        var we = new NumericUpDown { Minimum = 1, Maximum = 24, Value = Gentle.EndHour, Width = 56, BackColor = Th.Card, ForeColor = Th.Text, Font = Th.F(10) };
+        we.ValueChanged += (_, _) => Gentle.EndHour = (int)we.Value;
+        wh.Controls.Add(we);
+        wh.Controls.Add(Th.L(":00", 10, Th.Text));
+        var wd = page.Add(Th.Row());
+        var names = new[] { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+        for (int d = 0; d < 7; d++)
+        {
+            var dd = d;
+            wd.Controls.Add(Th.Check(names[d], Gentle.Days.Split(',').Contains(d.ToString()), v =>
+            {
+                var set = Gentle.Days.Split(',', StringSplitOptions.RemoveEmptyEntries).ToHashSet();
+                if (v) set.Add(dd.ToString()); else set.Remove(dd.ToString());
+                Gentle.Days = string.Join(",", set.OrderBy(x => x));
+            }));
+        }
+
+        page.Add(Th.Section("Calendar"));
+        Note("Read from Outlook on this PC only — nothing from your calendar goes to the AI.");
+        page.Add(Th.Check("Today and tomorrow in the morning brief: meetings, clashes, invitations waiting, your reminders, what is still open for each meeting", Calendar.InBrief, v => Calendar.InBrief = v));
+        var pp = page.Add(Th.Row(false));
+        pp.Controls.Add(Th.Check("Pop-up before each meeting:", Calendar.Popup, v => Calendar.Popup = v));
+        var lead = new NumericUpDown { Minimum = 5, Maximum = 60, Increment = 5, Value = Calendar.Lead, Width = 56, BackColor = Th.Card, ForeColor = Th.Text, Font = Th.F(10) };
+        lead.ValueChanged += (_, _) => Calendar.Lead = (int)lead.Value;
+        pp.Controls.Add(lead);
+        pp.Controls.Add(Th.L("minutes before", 10, Th.Text));
+
+        page.Add(Th.Section("Mailboxes and folders"));
+        Note("Everything is indexed: your mailbox, shared mailboxes, Online Archive, Groups and .pst archives (public folders and Search Folders are skipped). Untick a folder to leave it out of the index and of the answers.");
+        var folders = MailIndex.Folders();
+        if (folders.Count == 0) Note("The list fills in while Nova reads Outlook — open this page again in a few minutes.", Th.Muted);
+        var left = MailIndex.LeftOut();
+        foreach (var g in folders.GroupBy(f => f.StoreName))
+        {
+            var t = Th.L(g.Key.Length > 0 ? g.Key : "Mailbox", 10, Th.AccentText, true);
+            t.Margin = new Padding(0, 8, 0, 2);
+            page.Add(t);
+            foreach (var f in g)
+            {
+                var fid = f.Fid;
+                var cb = Th.Check($"{f.Path}    {f.Indexed:N0} / {f.Total:N0}", !left.Contains(fid), v => { MailIndex.SetLeftOut(fid, !v); });
+                cb.Margin = new Padding(16, 1, 0, 1);
+                page.Add(cb);
+            }
+        }
     }
 
     // Options on one page share one parent, and Windows would treat them all as ONE group (picking an email source
@@ -394,6 +449,8 @@ class SettingsForm : NovaForm
         Note("Ctrl + Shift + E — enhance the selected text in any program (Word, Outlook, browser, AutoCAD/Revit text boxes…), then ⇄ Replace.", Th.Text);
         Note("Ctrl + Shift + F — Ask Nova about your email (with a button to search inside a folder).", Th.Text);
         Note("Ctrl + Shift + A — send the selected text to the AI window (Nova Chat or the AI website you used last).", Th.Text);
+        Note("Ctrl + Shift + D — Nova for the PDF in front (PDF-XChange, Acrobat, Bluebeam, Foxit, Edge): ask, summary / check drawing, OCR, search, translate.", Th.Text);
+        page.Add(Th.Check("Show the small ✦ button on PDF viewers (click it to open Nova for that PDF)", PdfCompanion.Button, v => PdfCompanion.Button = v));
         Note("In the browser (with the Nova add-on): Alt + G fix grammar · Alt + T translate · right-click selected text → ✦ Nova Enhance.", Th.Text);
         Note("Right-click a folder → Search inside with Nova — find codes, references and sentences inside its files.", Th.Text);
         Note("Left-click the ✦ icon near the clock = Ask Nova · right-click = menu.", Th.Text);

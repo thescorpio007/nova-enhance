@@ -34,6 +34,7 @@ class NovaChat
 
     public void Insert(string text) => Post(new JsonObject { ["t"] = "insert", ["text"] = text });
     public void AskNow(string text) => Post(new JsonObject { ["t"] = "askNow", ["text"] = text });
+    public void Attach(string path) => Post(new JsonObject { ["t"] = "files", ["paths"] = new JsonArray(path) });
 
     // ================================================================ chat files
 

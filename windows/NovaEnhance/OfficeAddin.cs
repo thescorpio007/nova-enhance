@@ -155,6 +155,83 @@ Uninstall: remove the two apps in Integrated apps.
     static string Icons(string indent) =>
         $"{indent}<Icon>\n{indent}  <bt:Image size=\"16\" resid=\"Icon.16\"/>\n{indent}  <bt:Image size=\"32\" resid=\"Icon.32\"/>\n{indent}  <bt:Image size=\"80\" resid=\"Icon.80\"/>\n{indent}</Icon>";
 
+    // ---------------------------------------------------------------- ✦ Nova ribbon tab
+
+    static string Btn(string id, string label, string tip, string action, string ind = "                ") =>
+        $"{ind}<Control xsi:type=\"Button\" id=\"{id}\">\n{ind}  <Label resid=\"{label}\"/>\n{ind}  <Supertip>\n{ind}    <Title resid=\"{label}\"/>\n{ind}    <Description resid=\"{tip}\"/>\n{ind}  </Supertip>\n{Icons(ind + "  ")}\n{ind}  {action}\n{ind}</Control>";
+
+    static string Fn(string name) => $"<Action xsi:type=\"ExecuteFunction\"><FunctionName>{name}</FunctionName></Action>";
+    static string Pane(string resid, bool taskpaneId) => $"<Action xsi:type=\"ShowTaskpane\">{(taskpaneId ? "<TaskpaneId>NovaPane</TaskpaneId>" : "")}<SourceLocation resid=\"{resid}\"/></Action>";
+
+    static string TrMenu(string id, string ind = "                ") =>
+        $"{ind}<Control xsi:type=\"Menu\" id=\"{id}\">\n{ind}  <Label resid=\"S.Tr\"/>\n{ind}  <Supertip>\n{ind}    <Title resid=\"S.Tr\"/>\n{ind}    <Description resid=\"L.Tr\"/>\n{ind}  </Supertip>\n{Icons(ind + "  ")}\n{ind}  <Items>\n" +
+        string.Join("\n", new[] { ("En", "trEnglish"), ("Ar", "trArabic"), ("Fr", "trFrench"), ("De", "trGerman") }.Select(x =>
+            $"{ind}    <Item id=\"{id}.{x.Item1}\">\n{ind}      <Label resid=\"S.Tr.{x.Item1}\"/>\n{ind}      <Supertip>\n{ind}        <Title resid=\"S.Tr.{x.Item1}\"/>\n{ind}        <Description resid=\"L.Tr\"/>\n{ind}      </Supertip>\n{Icons(ind + "      ")}\n{ind}      {Fn(x.Item2)}\n{ind}    </Item>")) +
+        $"\n{ind}  </Items>\n{ind}</Control>";
+
+    static string Group(string id, string label, bool icon, params string[] controls) =>
+        $"              <Group id=\"{id}\">\n                <Label resid=\"{label}\"/>\n" + (icon ? Icons("                ") + "\n" : "") + string.Join("\n", controls) + "\n              </Group>";
+
+    static string WriteControls(string p, bool taskpaneId) => string.Join("\n",
+        Btn(p + ".Panel", "S.Panel", "L.Panel", Pane("Taskpane.Url", taskpaneId)),
+        Btn(p + ".Grammar", "S.Grammar", "L.Grammar", Fn("fixGrammar")),
+        Btn(p + ".Pro", "S.Pro", "L.Pro", Fn("professional")),
+        Btn(p + ".Short", "S.Short", "L.Short", Fn("shorten")),
+        TrMenu(p + ".Tr"),
+        Btn(p + ".Back", "S.Back", "L.Back", Fn("putBack")));
+
+    static string WorkControls(string p, bool mail) => string.Join("\n", (mail
+        ? new[] { Btn(p + ".Ask", "S.Ask", "L.Ask", Fn("openAsk")), Btn(p + ".Brief", "S.Brief", "L.Brief", Fn("openBrief")), Btn(p + ".Meet", "S.Meet", "L.Meet", Fn("openMeetings")) }
+        : Array.Empty<string>()).Concat(new[] { Btn(p + ".Hub", "S.Hub", "L.Hub", Fn("openHub")), Btn(p + ".Folder", "S.Folder", "L.Folder", Fn("openFolder")) }));
+
+    static string NovaTab(string p, bool mail, string first) => $@"            <CustomTab id=""{p}.Tab"">
+{first}
+{Group(p + ".Work", "G.Work", !mail, WorkControls(p + ".W", mail))}
+{Group(p + ".Nova", "G.Nova", !mail, Btn(p + ".Set", "S.Set", "L.Set", Fn("openSettings")))}
+              <Label resid=""Tab.Label""/>
+            </CustomTab>";
+
+    static string TabStrings(bool mail) => $@"
+        <bt:String id=""Tab.Label"" DefaultValue=""✦ Nova""/>
+        <bt:String id=""G.Write"" DefaultValue=""Write""/>
+        <bt:String id=""G.Mail"" DefaultValue=""This email""/>
+        <bt:String id=""G.Work"" DefaultValue=""My work""/>
+        <bt:String id=""G.Nova"" DefaultValue=""Nova""/>
+        <bt:String id=""S.Panel"" DefaultValue=""✦ Panel""/>
+        <bt:String id=""S.Grammar"" DefaultValue=""Fix grammar""/>
+        <bt:String id=""S.Pro"" DefaultValue=""Professional""/>
+        <bt:String id=""S.Short"" DefaultValue=""Shorten""/>
+        <bt:String id=""S.Tr"" DefaultValue=""Translate""/>
+        <bt:String id=""S.Tr.En"" DefaultValue=""English""/>
+        <bt:String id=""S.Tr.Ar"" DefaultValue=""العربية Arabic""/>
+        <bt:String id=""S.Tr.Fr"" DefaultValue=""Français""/>
+        <bt:String id=""S.Tr.De"" DefaultValue=""Deutsch""/>
+        <bt:String id=""S.Back"" DefaultValue=""Put back original""/>
+        <bt:String id=""S.Sum"" DefaultValue=""✦ Summary""/>
+        <bt:String id=""S.Draft"" DefaultValue=""✦ Draft reply""/>
+        <bt:String id=""S.Ask"" DefaultValue=""Ask Nova""/>
+        <bt:String id=""S.Brief"" DefaultValue=""Morning brief""/>
+        <bt:String id=""S.Meet"" DefaultValue=""Today's meetings""/>
+        <bt:String id=""S.Hub"" DefaultValue=""AI window""/>
+        <bt:String id=""S.Folder"" DefaultValue=""Search a folder""/>
+        <bt:String id=""S.Set"" DefaultValue=""Settings""/>";
+
+    static string TabLongStrings() => @"
+        <bt:String id=""L.Panel"" DefaultValue=""Open the Nova panel: all modes, translation, originals.""/>
+        <bt:String id=""L.Grammar"" DefaultValue=""Fix the grammar of the selected text, in place. The original is kept.""/>
+        <bt:String id=""L.Pro"" DefaultValue=""Rewrite the selected text in a professional tone, in place. The original is kept.""/>
+        <bt:String id=""L.Short"" DefaultValue=""Make the selected text shorter, in place. The original is kept.""/>
+        <bt:String id=""L.Tr"" DefaultValue=""Translate the selected text, in place. The original is kept.""/>
+        <bt:String id=""L.Back"" DefaultValue=""Select the changed text, then put the original back.""/>
+        <bt:String id=""L.Sum"" DefaultValue=""Summarise this email (follows your privacy setting in Nova).""/>
+        <bt:String id=""L.Draft"" DefaultValue=""Write a reply to this email for you to check and send.""/>
+        <bt:String id=""L.Ask"" DefaultValue=""Open Ask Nova on your desktop: find any email, what is waiting for your reply…""/>
+        <bt:String id=""L.Brief"" DefaultValue=""Open the morning brief: waiting emails, follow-ups, meetings.""/>
+        <bt:String id=""L.Meet"" DefaultValue=""Today's and tomorrow's meetings with what is still open for each.""/>
+        <bt:String id=""L.Hub"" DefaultValue=""Open Nova Chat and your AI websites in one window.""/>
+        <bt:String id=""L.Folder"" DefaultValue=""Search inside the files of a folder on your PC or Google Drive.""/>
+        <bt:String id=""L.Set"" DefaultValue=""Open Nova Enhance settings.""/>";
+
     static string Resources(string tooltip) => $@"    <Resources>
       <bt:Images>
         <bt:Image id=""Icon.16"" DefaultValue=""{Origin}/icon-16.png""/>
@@ -164,13 +241,15 @@ Uninstall: remove the two apps in Integrated apps.
       <bt:Urls>
         <bt:Url id=""Commands.Url"" DefaultValue=""{Origin}/commands.html""/>
         <bt:Url id=""Taskpane.Url"" DefaultValue=""{Origin}/taskpane.html""/>
+        <bt:Url id=""Taskpane.Sum"" DefaultValue=""{Origin}/taskpane.html?do=summary""/>
+        <bt:Url id=""Taskpane.Draft"" DefaultValue=""{Origin}/taskpane.html?do=draft""/>
       </bt:Urls>
       <bt:ShortStrings>
         <bt:String id=""Group.Label"" DefaultValue=""Nova Enhance""/>
-        <bt:String id=""Button.Label"" DefaultValue=""Nova Enhance""/>
+        <bt:String id=""Button.Label"" DefaultValue=""Nova Enhance""/>{TabStrings(true)}
       </bt:ShortStrings>
       <bt:LongStrings>
-        <bt:String id=""Button.Tooltip"" DefaultValue=""{tooltip}""/>
+        <bt:String id=""Button.Tooltip"" DefaultValue=""{tooltip}""/>{TabLongStrings()}
       </bt:LongStrings>
     </Resources>";
 
@@ -196,6 +275,7 @@ Uninstall: remove the two apps in Integrated apps.
                 </Control>
               </Group>
             </OfficeTab>
+{NovaTab("NovaT", false, Group("NovaT.Write", "G.Write", true, WriteControls("NovaT.X", true)))}
           </ExtensionPoint>
         </DesktopFormFactor>
       </Host>";
@@ -251,6 +331,12 @@ Uninstall: remove the two apps in Integrated apps.
                 </Control>
               </Group>
             </OfficeTab>
+{NovaTab("NovaM" + id, true, id == "Read"
+    ? Group("NovaM" + id + ".Mail", "G.Mail", false, string.Join("\n",
+        Btn("NovaM" + id + ".M.Panel", "S.Panel", "L.Panel", Pane("Taskpane.Url", false)),
+        Btn("NovaM" + id + ".M.Sum", "S.Sum", "L.Sum", Pane("Taskpane.Sum", false)),
+        Btn("NovaM" + id + ".M.Draft", "S.Draft", "L.Draft", Pane("Taskpane.Draft", false))))
+    : Group("NovaM" + id + ".Write", "G.Write", false, WriteControls("NovaM" + id + ".X", false)))}
           </ExtensionPoint>";
 
     public static string OutlookXml() => $@"<?xml version=""1.0"" encoding=""UTF-8""?>
@@ -597,10 +683,15 @@ static class Server
                 {
                     if (what == "ask") Screens.Ask();
                     else if (what == "folder") Screens.FolderSearch(null);
+                    else if (what == "brief") Screens.Brief();
+                    else if (what == "hub") Screens.Hub(null);
                     else Screens.Settings();
                 }, null);
                 return new JsonObject { ["ok"] = true };
             }
+            case "/api/notify":
+                Program.Balloon(S(r, "title").Length > 0 ? S(r, "title") : "Nova Enhance", S(r, "text"));
+                return new JsonObject { ["ok"] = true };
         }
         return new JsonObject { ["error"] = "unknown" };
     }

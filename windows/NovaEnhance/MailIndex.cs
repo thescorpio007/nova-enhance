@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -235,6 +236,10 @@ static class MailIndex
         Exec(c, "CREATE INDEX IF NOT EXISTS mail_conv ON mail(conv, date);");
         Exec(c, "CREATE INDEX IF NOT EXISTS mail_date ON mail(date);");
         Exec(c, "CREATE TABLE IF NOT EXISTS state(k TEXT PRIMARY KEY, v TEXT);");
+        // Which Outlook folder each email came from (for the folder list in Settings and leaving folders out).
+        try { Exec(c, "ALTER TABLE mail ADD COLUMN fid TEXT;"); } catch { }
+        Exec(c, "CREATE INDEX IF NOT EXISTS mail_fid ON mail(fid);");
+        Exec(c, "CREATE TABLE IF NOT EXISTS folders(fid TEXT PRIMARY KEY, store TEXT, store_name TEXT, path TEXT, total INTEGER, seen INTEGER);");
         try
         {
             Exec(c, "CREATE VIRTUAL TABLE IF NOT EXISTS mail_fts USING fts5(subject, body, from_name, to_list, cc_list, att_names, att_text, content='mail', content_rowid='id', tokenize='unicode61 remove_diacritics 2');");
@@ -303,6 +308,7 @@ static class MailIndex
     public static void Rebuild()
     {
         Stop();
+        Store.SetBool("win_mail_complete", false);
         try
         {
             lock (InitLock) inited = false;
@@ -355,17 +361,42 @@ static class MailIndex
             string sentId = "";
             try { sentId = Outlook.S(() => ns.GetDefaultFolder(5).EntryID); } catch { }
             var cutoff = Store.CutOff;
+            // Emails from me filed in other folders count as sent (fixes rows indexed before build 19).
+            foreach (var a in Me.Addrs) Exec(c, "UPDATE mail SET sent=1 WHERE sent=0 AND from_addr=$a COLLATE NOCASE", ("$a", a));
+            if (Me.Name.Length > 0) Exec(c, "UPDATE mail SET sent=1 WHERE sent=0 AND from_name=$n COLLATE NOCASE", ("$n", Me.Name));
+            doneThisPass = new(StringComparer.OrdinalIgnoreCase);
+            Deferred = false;
+            folderOrder = 0;
+            // Every store except public folders: your mailbox first, then shared mailboxes / Online Archive / Groups, then .pst archives.
+            // ExchangeStoreType: 0 primary · 1 delegate/shared · 2 public folders · 3 not Exchange (.pst) · 4 additional mailbox
             dynamic stores = ns.Stores;
             int n = (int)stores.Count;
-            for (int i = 1; i <= n && !stop; i++)
+            var order = new List<(int Index, int Rank)>();
+            for (int i = 1; i <= n; i++)
             {
+                int type = 0;
+                try { dynamic st0 = stores.Item(i); try { type = (int)st0.ExchangeStoreType; } catch { } Outlook.Release(st0); } catch { }
+                if (type == 2) continue;
+                order.Add((i, type == 0 ? 0 : type == 3 ? 2 : 1));
+            }
+            foreach (var (i, _) in order.OrderBy(x => x.Rank).ThenBy(x => x.Index))
+            {
+                if (stop) break;
                 dynamic st = stores.Item(i);
                 try
                 {
-                    int type = 0;
-                    try { type = (int)st.ExchangeStoreType; } catch { }
-                    if (type == 3) continue; // public folders
                     string storeId = Outlook.S(() => st.StoreID);
+                    storeName = Outlook.S(() => st.DisplayName);
+                    // Inbox and Sent Items first, so new mail and your replies are known early.
+                    foreach (var which in new[] { 6, 5 })
+                    {
+                        if (stop) break;
+                        dynamic df = null;
+                        try { df = st.GetDefaultFolder(which); } catch { }
+                        if (df == null) continue;
+                        try { IndexOne(c, (object)df, Outlook.S(() => df.EntryID), Outlook.S(() => df.Name), Outlook.S(() => df.Name), storeId, which == 5 ? Outlook.S(() => df.EntryID) : sentId, cutoff); }
+                        finally { Outlook.Release(df); }
+                    }
                     dynamic root = st.GetRootFolder();
                     Walk(c, (object)root, storeId, sentId, skip, cutoff, 0);
                     Outlook.Release(root);
@@ -376,7 +407,14 @@ static class MailIndex
                 finally { Outlook.Release(st); }
             }
             Outlook.Release(stores);
-            if (!stop) Status = $"✓ {Convert.ToInt64(Scalar(c, "SELECT COUNT(*) FROM mail")):N0} emails indexed · updated {DateTime.Now:HH:mm}";
+            if (!stop)
+            {
+                if (!Deferred) Store.SetBool("win_mail_complete", true);
+                var count = Convert.ToInt64(Scalar(c, "SELECT COUNT(*) FROM mail"));
+                Status = Deferred
+                    ? $"✓ {count:N0} emails indexed · new mail is up to date · older mail continues after {Gentle.EndHour}:00 (gentle indexing)"
+                    : $"✓ {count:N0} emails indexed · updated {DateTime.Now:HH:mm}";
+            }
         }
         finally { Outlook.Release(ns); Outlook.Release(app); }
     }
@@ -415,20 +453,83 @@ static class MailIndex
         catch (Exception e) { Log.Error("me", e); }
     }
 
-    static readonly string[] SkipNames = { "Sync Issues", "Conversation History", "RSS Feeds", "RSS Subscriptions", "Calendar", "Contacts", "Tasks", "Notes", "Journal" };
+    static readonly string[] SkipNames = { "Sync Issues", "Conversation History", "RSS Feeds", "RSS Subscriptions", "Calendar", "Contacts", "Tasks", "Notes", "Journal", "Search Folders", "Finder", "Search Root" };
 
-    static void Walk(SqliteConnection c, dynamic folder, string storeId, string sentId, HashSet<string> skip, DateTime cutoff, int depth)
+    /// <summary>Folders the user left out (Settings → Email & AI → Mailboxes and folders).</summary>
+    public static HashSet<string> LeftOut()
+    {
+        try { return new HashSet<string>((JsonNode.Parse(Store.Str("win_mail_skip", "[]"))?.AsArray() ?? new JsonArray()).Select(x => x?.ToString() ?? ""), StringComparer.OrdinalIgnoreCase); }
+        catch { return new HashSet<string>(StringComparer.OrdinalIgnoreCase); }
+    }
+
+    public static void SetLeftOut(string fid, bool leftOut)
+    {
+        var s = LeftOut();
+        if (leftOut) s.Add(fid); else s.Remove(fid);
+        Store.Set("win_mail_skip", new JsonArray(s.Select(x => (JsonNode)x).ToArray()).ToJsonString());
+    }
+
+    /// <summary>Every mail folder Nova has seen, with Outlook's count and how many are in the index.</summary>
+    public static List<(string Fid, string StoreName, string Path, int Total, int Indexed)> Folders()
+    {
+        var res = new List<(string, string, string, int, int)>();
+        try
+        {
+            using var c = Open();
+            var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            using (var cmd = c.CreateCommand())
+            {
+                cmd.CommandText = "SELECT fid, COUNT(*) FROM mail WHERE fid IS NOT NULL GROUP BY fid";
+                using var r = cmd.ExecuteReader();
+                while (r.Read()) counts[r.GetString(0)] = r.GetInt32(1);
+            }
+            using (var cmd = c.CreateCommand())
+            {
+                cmd.CommandText = "SELECT fid, store_name, path, total FROM folders ORDER BY seen, store_name, path";
+                using var r = cmd.ExecuteReader();
+                while (r.Read())
+                {
+                    var fid = r.GetString(0);
+                    res.Add((fid, r.IsDBNull(1) ? "" : r.GetString(1), r.IsDBNull(2) ? "" : r.GetString(2), r.IsDBNull(3) ? 0 : r.GetInt32(3), counts.TryGetValue(fid, out var n) ? n : 0));
+                }
+            }
+        }
+        catch (Exception e) { Log.Error("folder list", e); }
+        return res;
+    }
+
+    public static bool Deferred;
+    public static bool Complete => Store.Bool("win_mail_complete", false);
+    static HashSet<string> doneThisPass = new(StringComparer.OrdinalIgnoreCase);
+    static string storeName = "";
+    static int folderOrder;
+
+    static void IndexOne(SqliteConnection c, dynamic folder, string id, string name, string path, string storeId, string sentId, DateTime cutoff)
+    {
+        if (!doneThisPass.Add(id)) return;
+        int total = 0;
+        try { total = (int)folder.Items.Count; } catch { }
+        // Older rows (before build 19) get their folder id now; no rebuild needed.
+        Exec(c, "UPDATE mail SET fid=$fid WHERE fid IS NULL AND store=$s AND folder=$f", ("$fid", id), ("$s", storeId), ("$f", name));
+        Exec(c, "INSERT INTO folders(fid,store,store_name,path,total,seen) VALUES($fid,$s,$sn,$p,$t,$o) ON CONFLICT(fid) DO UPDATE SET store_name=$sn, path=$p, total=$t, seen=$o",
+            ("$fid", id), ("$s", storeId), ("$sn", storeName), ("$p", path), ("$t", total), ("$o", folderOrder++));
+        if (LeftOut().Contains(id)) return;
+        bool sent = id.Equals(sentId, StringComparison.OrdinalIgnoreCase) || name.Contains("Sent", StringComparison.OrdinalIgnoreCase);
+        IndexFolder(c, (object)folder, id, name, storeId, sent, cutoff);
+    }
+
+    static void Walk(SqliteConnection c, dynamic folder, string storeId, string sentId, HashSet<string> skip, DateTime cutoff, int depth, string path = "")
     {
         if (stop || depth > 8) return;
         string id = Outlook.S(() => folder.EntryID);
         string name = Outlook.S(() => folder.Name);
         if (skip.Contains(id) || SkipNames.Any(s => name.StartsWith(s, StringComparison.OrdinalIgnoreCase))) return;
+        var here = depth == 0 ? "" : (path.Length > 0 ? path + " › " : "") + name;
         int type = -1;
         try { type = (int)folder.DefaultItemType; } catch { }
         if (type == 0 && depth > 0)
         {
-            bool sent = id.Equals(sentId, StringComparison.OrdinalIgnoreCase) || name.Contains("Sent", StringComparison.OrdinalIgnoreCase);
-            try { IndexFolder(c, (object)folder, id, name, storeId, sent, cutoff); }
+            try { IndexOne(c, (object)folder, id, name, here, storeId, sentId, cutoff); }
             catch (OutlookPause) { throw; }
             catch (Exception e) when (Outlook.Gone(e) || Outlook.Busy(e)) { throw new OutlookPause(Outlook.Gone(e), e); }
             catch (Exception e) { Log.Error("index folder " + name, e); }
@@ -441,7 +542,7 @@ static class MailIndex
             for (int i = 1; i <= n && !stop; i++)
             {
                 dynamic f = subs.Item(i);
-                try { Walk(c, (object)f, storeId, sentId, skip, cutoff, depth + 1); } finally { Outlook.Release(f); }
+                try { Walk(c, (object)f, storeId, sentId, skip, cutoff, depth + 1, here); } finally { Outlook.Release(f); }
             }
         }
         catch (OutlookPause) { throw; }
@@ -481,6 +582,8 @@ static class MailIndex
                         DateTime d = sent ? (DateTime)it.SentOn : (DateTime)it.ReceivedTime;
                         if (d < cutoff) { Outlook.Release(it); it = null; break; }
                         long ms = Ms(d);
+                        // Gentle indexing: in working hours only new mail (and the last 14 days); older mail waits for the evening.
+                        if (ms <= oldHi && Gentle.HoldBacklog(d)) { Deferred = true; Outlook.Release(it); it = null; break; }
                         bool doIt;
                         if (fresh) { doIt = true; if (hi == 0) hi = ms; lo = ms; }
                         else if (ms > oldHi) { doIt = true; newHi = Math.Max(newHi, ms); }
@@ -491,7 +594,7 @@ static class MailIndex
                             string entry = Outlook.S(() => it.EntryID);
                             if (entry.Length > 0 && Scalar(c, "SELECT 1 FROM mail WHERE entry=$e", ("$e", entry)) == null)
                             {
-                                Insert(c, (object)it, entry, storeId, fname, sent, ms);
+                                Insert(c, (object)it, entry, storeId, fname, sent, ms, fid);
                                 batch++;
                             }
                         }
@@ -507,7 +610,7 @@ static class MailIndex
                     tx.Commit(); tx.Dispose(); tx = c.BeginTransaction(); batch = 0;
                     Status = $"Indexing {fname}… {Convert.ToInt64(Scalar(c, "SELECT COUNT(*) FROM mail")):N0} emails so far";
                 }
-                if (++seen % 40 == 0) Thread.Sleep(3);
+                if (++seen % 25 == 0) Gentle.Pause();
                 it = stop ? null : items.GetNext();
             }
             if (!stop && !segDone) hi = newHi;
@@ -536,10 +639,12 @@ static class MailIndex
         return smtp;
     }
 
-    static void Insert(SqliteConnection c, dynamic it, string entry, string storeId, string folder, bool sent, long ms)
+    static void Insert(SqliteConnection c, dynamic it, string entry, string storeId, string folder, bool sent, long ms, string fid)
     {
         string fromName = Outlook.S(() => it.SenderName);
         string fromAddr = ExAddr(Outlook.S(() => it.SenderEmailAddress), () => (object)it.Sender);
+        // Sent by me = my address (or name) as the sender, in ANY folder: Sent Items › To Do, project folders, archives…
+        if (!sent && (Me.IsMe(fromAddr) || (Me.Name.Length > 0 && fromName.Equals(Me.Name, StringComparison.OrdinalIgnoreCase)))) sent = true;
         var to = new List<string>(); var cc = new List<string>(); var toA = new List<string>(); var ccA = new List<string>();
         try
         {
@@ -608,9 +713,9 @@ static class MailIndex
         var at = attText.ToString();
         if (at.Length > 60000) at = at[..60000];
 
-        Exec(c, @"INSERT OR IGNORE INTO mail(entry,store,conv,folder,sent,date,from_name,from_addr,to_list,cc_list,to_addr,cc_addr,subject,body,att_names,att_text,unread,importance,flagged)
-                  VALUES($e,$s,$cv,$f,$sent,$d,$fn,$fa,$to,$cc,$toa,$cca,$sub,$body,$an,$at,$u,$imp,$fl)",
-            ("$e", entry), ("$s", storeId), ("$cv", conv), ("$f", folder), ("$sent", sent ? 1 : 0), ("$d", ms),
+        Exec(c, @"INSERT OR IGNORE INTO mail(entry,store,conv,folder,sent,date,from_name,from_addr,to_list,cc_list,to_addr,cc_addr,subject,body,att_names,att_text,unread,importance,flagged,fid)
+                  VALUES($e,$s,$cv,$f,$sent,$d,$fn,$fa,$to,$cc,$toa,$cca,$sub,$body,$an,$at,$u,$imp,$fl,$fid)",
+            ("$e", entry), ("$s", storeId), ("$cv", conv), ("$f", folder), ("$sent", sent ? 1 : 0), ("$d", ms), ("$fid", fid),
             ("$fn", fromName), ("$fa", fromAddr), ("$to", string.Join("; ", to)), ("$cc", string.Join("; ", cc)),
             ("$toa", string.Join("; ", toA)), ("$cca", string.Join("; ", ccA)), ("$sub", subject), ("$body", body),
             ("$an", string.Join("; ", attNames)), ("$at", at), ("$u", unread ? 1 : 0), ("$imp", imp), ("$fl", flag));
@@ -714,6 +819,12 @@ static class MailIndex
                     where.Add($"(m.subject LIKE {like} OR m.body LIKE {like} OR m.att_names LIKE {like} OR m.att_text LIKE {like} OR m.from_name LIKE {like})");
                 }
             }
+        }
+        var leftOut = LeftOut();
+        if (leftOut.Count > 0)
+        {
+            var ids = leftOut.Select(P).ToList();
+            where.Add($"(m.fid IS NULL OR m.fid NOT IN ({string.Join(",", ids)}))");
         }
         if (q.Unanswered)
             where.Add("m.sent=0 AND NOT EXISTS (SELECT 1 FROM mail s WHERE s.sent=1 AND s.conv=m.conv AND m.conv<>'' AND s.date>m.date)");

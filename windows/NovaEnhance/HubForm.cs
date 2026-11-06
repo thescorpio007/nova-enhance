@@ -316,6 +316,16 @@ class HubForm : NovaForm
         if (!(left.IsChat && fresh)) await Type(left, text, false);
     }
 
+    /// <summary>"Send to Nova Chat" from another window: opens the chat tab with the file attached.</summary>
+    public async void AttachFile(string path)
+    {
+        var chat = tabs.FirstOrDefault(t => t.IsChat);
+        if (chat == null) return;
+        await Select(chat);
+        if (!chat.Loaded.Task.IsCompleted) { await Task.WhenAny(chat.Loaded.Task, Task.Delay(15000)); await Task.Delay(500); }
+        chat.Chat?.Attach(path);
+    }
+
     void PasteClipboard()
     {
         string t = "";

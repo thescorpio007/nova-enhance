@@ -1,4 +1,95 @@
 <!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta http-equiv="X-UA-Compatible" content="IE=Edge">
 <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
-<script>Office.initialize = function () {};</script></head><body></body></html>
+<script>
+/* ✦ Nova tab buttons that work without opening the panel. Served by Nova Enhance on this PC. Designed by A.HAMROUNI */
+function novaApi(path, body, cb) {
+  var x = new XMLHttpRequest();
+  x.open(body ? "POST" : "GET", "/api/" + path, true);
+  x.setRequestHeader("X-Nova", "1");
+  if (body) x.setRequestHeader("Content-Type", "application/json");
+  x.onreadystatechange = function () {
+    if (x.readyState !== 4) return;
+    var r = null;
+    try { r = JSON.parse(x.responseText); } catch (e) { r = null; }
+    if (!r) r = { error: x.status === 0 ? "Nova Enhance is not running on this PC" : "Nova Enhance is not answering" };
+    cb(r);
+  };
+  x.send(body ? JSON.stringify(body) : null);
+}
+
+function novaMail() { return Office.context && Office.context.mailbox && Office.context.mailbox.item; }
+
+/* A short note: in Outlook on the email itself, elsewhere as a Windows notification from Nova. */
+function novaNote(kind, text) {
+  var it = novaMail();
+  if (it && it.notificationMessages) {
+    var msg = { type: kind === "busy" ? "progressIndicator" : kind === "bad" ? "errorMessage" : "informationalMessage", message: String(text).substring(0, 150) };
+    if (msg.type === "informationalMessage") { msg.icon = "Icon.16"; msg.persistent = false; }
+    try { it.notificationMessages.replaceAsync("nova", msg); } catch (e) { }
+  } else if (kind !== "busy") novaApi("notify", { title: "Nova Enhance", text: text }, function () { });
+}
+
+function novaGet(cb) {
+  var it = novaMail();
+  var src = it ? it : Office.context.document;
+  src.getSelectedDataAsync(Office.CoercionType.Text, function (r) { cb(r.status === Office.AsyncResultStatus.Succeeded && r.value ? (r.value.data !== undefined ? r.value.data : r.value) : ""); });
+}
+
+function novaPut(text, cb) {
+  var it = novaMail();
+  if (it) it.setSelectedDataAsync(text, { coercionType: Office.CoercionType.Text }, function (r) { cb(r.status === Office.AsyncResultStatus.Succeeded, r.error ? r.error.message : ""); });
+  else Office.context.document.setSelectedDataAsync(text, { coercionType: Office.CoercionType.Text }, function (r) { cb(r.status === Office.AsyncResultStatus.Succeeded, r.error ? r.error.message : ""); });
+}
+
+function novaRun(event, mode, lang) {
+  var done = function () { try { event.completed(); } catch (e) { } };
+  novaGet(function (text) {
+    if (!text || !String(text).replace(/\s/g, "").length) { novaNote("bad", "Select some text first, then press the button again."); done(); return; }
+    if (!novaMail() && /\t/.test(text)) { novaNote("bad", "Several cells are selected — open the ✦ Panel to change each cell on its own."); done(); return; }
+    novaNote("busy", mode === "translate" ? "Nova is translating…" : "Nova is working…");
+    novaApi("enhance", { mode: mode, text: text, lang: lang || "", host: novaMail() ? "compose" : "doc" }, function (r) {
+      if (r.error) { novaNote("bad", "⚠ " + r.error); done(); return; }
+      novaPut(r.result, function (ok, err) {
+        novaNote(ok ? "good" : "bad", ok ? "✓ " + r.label + " · original kept — ↩ Put back original undoes it" : "⚠ " + err);
+        done();
+      });
+    });
+  });
+}
+
+function fixGrammar(e) { novaRun(e, "grammar"); }
+function professional(e) { novaRun(e, "professional"); }
+function shorten(e) { novaRun(e, "shorten"); }
+function trEnglish(e) { novaRun(e, "translate", "English"); }
+function trArabic(e) { novaRun(e, "translate", "Arabic"); }
+function trFrench(e) { novaRun(e, "translate", "French"); }
+function trGerman(e) { novaRun(e, "translate", "German"); }
+
+function putBack(event) {
+  novaApi("originals", null, function (r) {
+    var o = r && r.originals && r.originals[0];
+    if (!o) { novaNote("bad", "Nothing to put back yet."); event.completed(); return; }
+    novaPut(o.text, function (ok, err) { novaNote(ok ? "good" : "bad", ok ? "↩ Original put back" : "⚠ " + err); event.completed(); });
+  });
+}
+
+function novaOpen(event, what, note) {
+  novaApi("open", { what: what }, function (r) { if (r.error) novaNote("bad", "⚠ " + r.error); else if (note) novaNote("good", note); event.completed(); });
+}
+function openAsk(e) { novaOpen(e, "ask", "🔍 Ask Nova is open on your desktop"); }
+function openBrief(e) { novaOpen(e, "brief", "☀ The morning brief is open on your desktop"); }
+function openMeetings(e) { novaOpen(e, "brief", "📅 Today's meetings are in the brief on your desktop"); }
+function openHub(e) { novaOpen(e, "hub", "💬 The AI window is open on your desktop"); }
+function openFolder(e) { novaOpen(e, "folder", "📁 Folder search is open on your desktop"); }
+function openSettings(e) { novaOpen(e, "settings", ""); }
+
+Office.initialize = function () { };
+if (Office.onReady) Office.onReady(function () {
+  if (Office.actions && Office.actions.associate) {
+    var all = { fixGrammar: fixGrammar, professional: professional, shorten: shorten, trEnglish: trEnglish, trArabic: trArabic, trFrench: trFrench, trGerman: trGerman,
+      putBack: putBack, openAsk: openAsk, openBrief: openBrief, openMeetings: openMeetings, openHub: openHub, openFolder: openFolder, openSettings: openSettings };
+    for (var k in all) { try { Office.actions.associate(k, all[k]); } catch (e) { } }
+  }
+});
+</script></head><body></body></html>
