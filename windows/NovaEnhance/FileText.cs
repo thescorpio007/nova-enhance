@@ -532,19 +532,46 @@ static class FileText
     }
 
     // ------------------------------------------------------------------ emails
+    /// <summary>Outlook .msg files, read through the Outlook installed on this PC.</summary>
     static IEnumerable<Seg> Msg(string path, int depth)
     {
         var res = new List<Seg>();
-        using var msg = new MsgReader.Outlook.Storage.Message(path);
-        var head = $"From: {msg.Sender?.DisplayName} <{msg.Sender?.Email}> · {msg.SentOn?.ToString("dd MMM yyyy HH:mm")}\nSubject: {msg.Subject}";
-        var body = msg.BodyText;
-        if (string.IsNullOrWhiteSpace(body) && !string.IsNullOrEmpty(msg.BodyHtml))
-            body = System.Net.WebUtility.HtmlDecode(Regex.Replace(msg.BodyHtml, "<[^>]+>", " "));
-        res.Add(new Seg("email", Clean(head + "\n" + body)));
-        foreach (var a in msg.Attachments)
+        if (!Outlook.Installed) return res;
+        dynamic app = Outlook.Get();
+        dynamic item = app.Session.OpenSharedItem(path);
+        try
         {
-            if (a is MsgReader.Outlook.Storage.Attachment att && att.Data != null && !string.IsNullOrEmpty(att.FileName))
-                res.AddRange(Inner(att.FileName, att.Data, "attachment", depth));
+            string subject = Outlook.S(() => item.Subject), from = Outlook.S(() => item.SenderName), addr = Outlook.S(() => item.SenderEmailAddress);
+            string to = Outlook.S(() => item.To), body = Outlook.S(() => item.Body);
+            DateTime when = DateTime.MinValue;
+            try { when = (DateTime)item.SentOn; } catch { }
+            res.Add(new Seg("email", Clean($"From: {from} <{addr}> · {(when.Year > 1990 ? when.ToString("dd MMM yyyy HH:mm") : "")}\nTo: {to}\nSubject: {subject}\n{body}")));
+            dynamic atts = item.Attachments;
+            int n = (int)atts.Count;
+            for (int i = 1; i <= n && i <= 30; i++)
+            {
+                dynamic a = atts.Item(i);
+                try
+                {
+                    string name = Outlook.S(() => a.FileName);
+                    if (name.Length == 0) continue;
+                    var tmp = Path.Combine(Paths.Cache, Guid.NewGuid().ToString("N") + Path.GetExtension(name));
+                    try
+                    {
+                        a.SaveAsFile(tmp);
+                        res.AddRange(Inner(name, File.ReadAllBytes(tmp), "attachment", depth));
+                    }
+                    catch { res.Add(new Seg($"attachment: {name}", "File name: " + name)); }
+                    finally { try { File.Delete(tmp); } catch { } }
+                }
+                finally { Outlook.Release(a); }
+            }
+            Outlook.Release(atts);
+        }
+        finally
+        {
+            try { item.Close(1); } catch { }
+            Outlook.Release(item);
         }
         return res;
     }

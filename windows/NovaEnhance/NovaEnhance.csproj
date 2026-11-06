@@ -36,7 +36,6 @@
     <PackageReference Include="PdfPig" Version="0.1.9" />
     <PackageReference Include="NAudio.WinMM" Version="2.2.1" />
     <PackageReference Include="MimeKit" Version="4.8.0" />
-    <PackageReference Include="MsgReader" Version="5.6.0" />
   </ItemGroup>
 
   <ItemGroup>
