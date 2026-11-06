@@ -16,7 +16,8 @@ static class Ocr
     public static string Mode { get => Store.Str("win_ocr_mode", "pc"); set => Store.Set("win_ocr_mode", value); }
 
     const int Tile = 2400, Overlap = 220, MaxTiles = 80;
-    static List<OcrEngine> engines;
+    // Each reading thread gets its own engines: one engine used by several files at once can silently return nothing.
+    [ThreadStatic] static List<OcrEngine> engines;
     static readonly object L = new();
 
     public static List<OcrEngine> Engines()
@@ -59,16 +60,20 @@ static class Ocr
     {
         foreach (var e in Engines())
         {
-            try
+            for (int attempt = 0; attempt < 2; attempt++)
             {
-                var r = e.RecognizeAsync(bmp).AsTask().Result;
-                foreach (var line in r.Lines)
+                try
                 {
-                    var t = line.Text.Trim();
-                    if (t.Length > 0 && seen.Add(t)) lines.Add(t);
+                    var r = e.RecognizeAsync(bmp).AsTask().Result;
+                    foreach (var line in r.Lines)
+                    {
+                        var t = line.Text.Trim();
+                        if (t.Length > 0 && seen.Add(t)) lines.Add(t);
+                    }
+                    break;
                 }
+                catch (Exception ex) { if (attempt == 1) Log.Write("OCR engine: " + ex.Message); else Thread.Sleep(150); }
             }
-            catch { }
         }
     }
 
