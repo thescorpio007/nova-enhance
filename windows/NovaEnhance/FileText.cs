@@ -13,6 +13,9 @@ class Seg
     /// <summary>How to open it there: page:12 · slide:4 · cell:BOQ!D45 · line:120 · zip:entry|page:3 · "".</summary>
     public string Goto = "";
     public string Text = "";
+    /// <summary>Scanned page or image read by OCR: (page, kind) for Gemini vision when the reading is unclear.</summary>
+    public int OcrPage = -1;
+    public bool Unclear;
     public Seg() { }
     public Seg(string loc, string text, string go = "") { Loc = loc; Text = text; Goto = go; }
 }
@@ -31,6 +34,7 @@ static class FileKinds
         ("G", "Text and data: .txt, .xml, .json, .html, .md, .log, .ini", new[] { ".txt", ".xml", ".json", ".html", ".htm", ".md", ".log", ".ini", ".cfg", ".yaml", ".yml" }),
         ("H", "CAD and BIM text: .dxf, .ifc", new[] { ".dxf", ".ifc" }),
         ("I", "Zip files (searches the files inside)", new[] { ".zip" }),
+        ("K", "Google Docs, Sheets and Slides on Google Drive for desktop (.gdoc, .gsheet, .gslides) — needs the Google sign-in", new[] { ".gdoc", ".gsheet", ".gslides" }),
         ("J", "File names and properties of every file (also .dwg, .rvt)", Array.Empty<string>())
     };
 
@@ -79,8 +83,9 @@ static class FileText
                 case ".csv": segs.AddRange(TextFile(path, false)); break;
                 case ".pdf": segs.AddRange(Pdf(path)); break;
                 case ".jpg": case ".jpeg": case ".png": case ".tif": case ".tiff": case ".bmp":
+                    if (!FileKinds.On("E")) break;
                     var t = Ocr.Image(path);
-                    if (t.Trim().Length > 0) segs.Add(new Seg("image text (OCR)", t));
+                    segs.Add(new Seg("image text (OCR)", Clean(t)) { OcrPage = 0, Unclear = Ocr.IsUnclear(t) });
                     break;
                 case ".msg": segs.AddRange(Msg(path, depth)); break;
                 case ".eml": segs.AddRange(Eml(path, depth)); break;
@@ -90,10 +95,27 @@ static class FileText
                 case ".dxf": segs.AddRange(Dxf(path)); break;
                 case ".ifc": segs.AddRange(Ifc(path)); break;
                 case ".zip": if (depth < 2) segs.AddRange(Zip(path, depth)); break;
+                case ".gdoc": case ".gsheet": case ".gslides": segs.AddRange(GoogleShortcut(path, ext)); break;
             }
         }
         catch (Exception e) { Log.Write($"read {Path.GetFileName(path)}: {e.GetType().Name}: {e.Message}"); }
         return segs;
+    }
+
+    /// <summary>Google Drive for desktop shortcut → the real Google Doc/Sheet/Slides, exported through the Google sign-in.</summary>
+    static IEnumerable<Seg> GoogleShortcut(string path, string ext)
+    {
+        if (!GDrive.SignedIn) return Array.Empty<Seg>();
+        var id = GDrive.IdFromShortcut(File.ReadAllText(path));
+        if (string.IsNullOrEmpty(id)) return Array.Empty<Seg>();
+        var mime = GDrive.MimeForShortcut(ext);
+        var tmp = Path.Combine(Paths.Cache, Guid.NewGuid().ToString("N") + (ext == ".gdoc" ? ".docx" : ext == ".gsheet" ? ".xlsx" : ".pptx"));
+        try
+        {
+            GDrive.Download(id, mime, tmp).GetAwaiter().GetResult();
+            return Extract(tmp).ToList();
+        }
+        finally { try { File.Delete(tmp); } catch { } }
     }
 
     // ------------------------------------------------------------------ helpers
@@ -405,7 +427,7 @@ static class FileText
         {
             var todo = FileKinds.On("D") ? noText : null;
             foreach (var (pg, text) in Ocr.Pdf(path, todo, 300))
-                if (text.Trim().Length > 0) res.Add(new Seg($"page {pg} (OCR)", Clean(text), $"page:{pg}"));
+                res.Add(new Seg($"page {pg} (OCR)", Clean(text), $"page:{pg}") { OcrPage = pg, Unclear = Ocr.IsUnclear(text) });
         }
         return res;
     }
@@ -716,106 +738,6 @@ static class OfficeConvert
             Outlook.Release(o);
         }
         apps.Clear();
-    }
-}
-
-/// <summary>Windows' built-in text recognition (OCR) for scanned PDFs and images, in the languages installed in Windows (English, Arabic, French…).</summary>
-static class Ocr
-{
-    static List<Windows.Media.Ocr.OcrEngine> engines;
-
-    public static List<Windows.Media.Ocr.OcrEngine> Engines()
-    {
-        if (engines != null) return engines;
-        engines = new();
-        try
-        {
-            var wanted = new[] { "en", "ar", "fr" };
-            foreach (var lang in Windows.Media.Ocr.OcrEngine.AvailableRecognizerLanguages)
-            {
-                var two = lang.LanguageTag.Split('-')[0].ToLowerInvariant();
-                if (!wanted.Contains(two) || engines.Any(e => e.RecognizerLanguage.LanguageTag.StartsWith(two))) continue;
-                var e = Windows.Media.Ocr.OcrEngine.TryCreateFromLanguage(lang);
-                if (e != null) engines.Add(e);
-            }
-            if (engines.Count == 0)
-            {
-                var e = Windows.Media.Ocr.OcrEngine.TryCreateFromUserProfileLanguages();
-                if (e != null) engines.Add(e);
-            }
-        }
-        catch (Exception ex) { Log.Write("OCR not available: " + ex.Message); }
-        return engines;
-    }
-
-    public static string Languages => Engines().Count == 0 ? "not available" : string.Join(", ", Engines().Select(e => e.RecognizerLanguage.DisplayName));
-
-    static string Read(Windows.Graphics.Imaging.SoftwareBitmap bmp)
-    {
-        var sb = new StringBuilder();
-        foreach (var e in Engines())
-        {
-            try
-            {
-                var r = e.RecognizeAsync(bmp).AsTask().Result;
-                foreach (var line in r.Lines) sb.Append(line.Text).Append('\n');
-            }
-            catch { }
-        }
-        return sb.ToString();
-    }
-
-    static Windows.Graphics.Imaging.SoftwareBitmap Decode(Windows.Storage.Streams.IRandomAccessStream stream)
-    {
-        var dec = Windows.Graphics.Imaging.BitmapDecoder.CreateAsync(stream).AsTask().Result;
-        var max = Windows.Media.Ocr.OcrEngine.MaxImageDimension;
-        var w = dec.PixelWidth; var h = dec.PixelHeight;
-        var tr = new Windows.Graphics.Imaging.BitmapTransform();
-        if (w > max || h > max)
-        {
-            var f = Math.Min((double)max / w, (double)max / h);
-            tr.ScaledWidth = (uint)(w * f); tr.ScaledHeight = (uint)(h * f);
-        }
-        return dec.GetSoftwareBitmapAsync(Windows.Graphics.Imaging.BitmapPixelFormat.Bgra8, Windows.Graphics.Imaging.BitmapAlphaMode.Premultiplied, tr,
-            Windows.Graphics.Imaging.ExifOrientationMode.RespectExifOrientation, Windows.Graphics.Imaging.ColorManagementMode.DoNotColorManage).AsTask().Result;
-    }
-
-    public static string Image(string path)
-    {
-        if (!FileKinds.On("E") || Engines().Count == 0) return "";
-        try
-        {
-            var file = Windows.Storage.StorageFile.GetFileFromPathAsync(path).AsTask().Result;
-            using var stream = file.OpenAsync(Windows.Storage.FileAccessMode.Read).AsTask().Result;
-            using var bmp = Decode(stream);
-            return Read(bmp);
-        }
-        catch (Exception e) { Log.Write($"OCR {Path.GetFileName(path)}: {e.Message}"); return ""; }
-    }
-
-    /// <summary>OCR of PDF pages (all pages, or only the given ones). Returns (page, text).</summary>
-    public static IEnumerable<(int, string)> Pdf(string path, List<int> only, int maxPages)
-    {
-        var res = new List<(int, string)>();
-        if (Engines().Count == 0) return res;
-        try
-        {
-            var file = Windows.Storage.StorageFile.GetFileFromPathAsync(path).AsTask().Result;
-            var doc = Windows.Data.Pdf.PdfDocument.LoadFromFileAsync(file).AsTask().Result;
-            var pages = only ?? Enumerable.Range(1, (int)doc.PageCount).ToList();
-            foreach (var p in pages.Take(maxPages))
-            {
-                if (p < 1 || p > doc.PageCount) continue;
-                using var page = doc.GetPage((uint)(p - 1));
-                using var ras = new Windows.Storage.Streams.InMemoryRandomAccessStream();
-                var width = (uint)Math.Clamp(page.Size.Width * 2.5, 800, Windows.Media.Ocr.OcrEngine.MaxImageDimension);
-                page.RenderToStreamAsync(ras, new Windows.Data.Pdf.PdfPageRenderOptions { DestinationWidth = width }).AsTask().Wait();
-                using var bmp = Decode(ras);
-                res.Add((p, Read(bmp)));
-            }
-        }
-        catch (Exception e) { Log.Write($"OCR {Path.GetFileName(path)}: {e.Message}"); }
-        return res;
     }
 }
 

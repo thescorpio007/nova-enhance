@@ -141,6 +141,57 @@ static class Smoke
         using var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Classes\Directory\shell\NovaEnhance.Search\command");
         Ok(k?.GetValue("")?.ToString()?.Contains("--search") == true, "Right-click menu registered: " + k?.GetValue(""));
         Ok(true, "OCR languages on the test PC: " + Ocr.Languages);
+
+        // ✦ Ask AI: best passages for a question (no AI on the test PC, so the words are given)
+        var root2 = Path.Combine(Path.GetTempPath(), "Nova ask test");
+        if (Directory.Exists(root2)) Directory.Delete(root2, true);
+        foreach (var f in Directory.GetFiles(src, "*", SearchOption.AllDirectories))
+        {
+            var dst = Path.Combine(root2, Path.GetRelativePath(src, f));
+            Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
+            File.Copy(f, dst);
+        }
+        var upd = new FolderIndex.Progress();
+        FolderIndex.Search(root2, null, null, _ => { }, null, upd, CancellationToken.None);
+        var ps = FolderIndex.Retrieve(root2, new List<string> { "fire rating", "fire resistance", "EI 60", "curtain wall" });
+        Ok(ps.Count > 0 && FolderAsk.Label(ps[0]) == "Specification.pdf · page 3", "Ask AI picks the best passage: " + (ps.Count > 0 ? FolderAsk.Label(ps[0]) : "none") + $" ({ps.Count} passages)");
+        var cited = FolderAsk.WithSources("Fire resistance is 60 minutes [1].\n⚠ Other value [1, 2]", ps);
+        Ok(cited.Contains("[Specification.pdf · page 3]"), "Answer shows its sources: " + cited.Split('\n')[0]);
+        Ok(FolderAsk.LocalTerms("What is the fire rating of the curtain wall?").Contains("fire"), "Words from the question");
+        FolderIndex.Forget(root2);
+
+        // Google Drive helpers (no sign-in on the test PC)
+        Ok(GDrive.IdFromShortcut("{\"url\":\"https://docs.google.com/document/d/1AbCdEfGhIjKlMnOp/edit\",\"doc_id\":\"1AbCdEfGhIjKlMnOp\"}") == "1AbCdEfGhIjKlMnOp", "Google Docs shortcut (.gdoc) read");
+        var rk = GDrive.RootKey("0Bxyz123", "Tower B");
+        Ok(GDrive.IsRoot(rk) && GDrive.ParseRoot(rk).Id == "0Bxyz123" && GDrive.Display(rk) == "☁ Google Drive › Tower B", "Drive folder key");
+        Ok(!GDrive.SignedIn, "Google Drive not connected on the test PC (expected)");
+
+        // Stronger OCR: scanned A4, A1 drawing title block, vertical text; unclear page queued for Gemini vision
+        var scans = Path.Combine(data, "Scans");
+        if (Directory.Exists(scans) && Ocr.Engines().Count > 0)
+        {
+            var root3 = Path.Combine(Path.GetTempPath(), "Nova ocr test");
+            if (Directory.Exists(root3)) Directory.Delete(root3, true);
+            Directory.CreateDirectory(root3);
+            foreach (var f in Directory.GetFiles(scans)) File.Copy(f, Path.Combine(root3, Path.GetFileName(f)));
+            Ocr.Mode = "pc+gemini";
+            var t0 = DateTime.Now;
+            var hitsA = new List<FileHit>();
+            var pgo = new FolderIndex.Progress();
+            FolderIndex.Search(root3, new Matcher("FIRESTOP", "phrase", false, false), null, h => hitsA.Add(h), null, pgo, CancellationToken.None);
+            Ok(hitsA.Any(h => h.Name == "Scanned spec.pdf"), $"OCR: scanned PDF page read ({(DateTime.Now - t0).TotalSeconds:0} s for {pgo.Files} files)");
+            List<FileHit> Find(string q) { var l = new List<FileHit>(); FolderIndex.Search(root3, new Matcher(q, "phrase", false, false), null, h => l.Add(h), null, new FolderIndex.Progress(), CancellationToken.None); return l; }
+            var tb = Find("TITLEBLOCK");
+            Ok(tb.Any(h => h.Name == "A1 drawing scan.pdf"), "OCR: small title-block text on an A1 drawing (tiles): " + (tb.FirstOrDefault()?.Pieces.FirstOrDefault()?.Loc ?? "not found"));
+            var vt = Find("VERTICALNOTE");
+            Ok(vt.Any(h => h.Name == "vertical label.png"), "OCR: vertical text (90° pass)");
+            var pend = FolderIndex.VisionPending(root3);
+            Ok(pend.Any(x => x.Path.EndsWith("blank.png")), $"Unclear page offered to Gemini vision: {pend.Count} page(s)");
+            Ocr.Mode = "pc";
+            FolderIndex.VisionClear(root3);
+            FolderIndex.Forget(root3);
+        }
+        else Ok(true, "OCR test skipped (no OCR language on this PC)");
     }
 
     static void Pump(int ms)
@@ -153,7 +204,7 @@ static class Smoke
     {
         var e = new EnhanceForm(); e.Start(IntPtr.Zero, ""); Pump(400); Ok(e.Visible, "Enhance window opens"); e.Dispose();
         var s = new SettingsForm(); s.Show();
-        foreach (var sec in new[] { "AI & API keys", "About me", "Enhancement", "Email & AI", "Shortcuts", "Backup & restore", "Updates", "Error log", "About" })
+        foreach (var sec in new[] { "AI & API keys", "About me", "Enhancement", "Email & AI", "Folder search", "Google Drive", "Shortcuts", "Backup & restore", "Updates", "Error log", "About" })
         {
             s.Go(sec); Pump(250);
         }
@@ -161,6 +212,7 @@ static class Smoke
         var a = new AskForm(); a.Show(); Pump(400); Ok(a.Visible, "Ask Nova window opens"); a.Dispose();
         var b = new BriefForm(); b.Show(); b.Reload(); Pump(1500); Ok(b.Visible, "Morning brief opens"); b.Dispose();
         var f = new FolderSearchForm(); f.Show(); f.Begin(Path.GetTempPath()); Pump(400); Ok(f.Visible, "Folder search window opens"); f.Dispose();
+        var cs = new ConfirmSend("✦ Send 3 extracts to Gemini?", "Test", "[1] a\n[2] b", "Send and answer", true); cs.Show(); Pump(200); Ok(cs.Visible, "Confirmation window opens"); cs.Dispose();
         var errs = Log.Read();
         Ok(!errs.Contains("settings ") || true, "No settings errors");
     }

@@ -140,6 +140,30 @@ static class Ai
         return (await GeminiText(key, Store.Model("gemini"), body, true, false, ct)).Trim();
     }
 
+    /// <summary>Gemini vision: all the text on a scanned page or picture (only after the user agreed to send it).</summary>
+    public static async Task<string> Vision(byte[] image, string mime, CancellationToken ct = default)
+    {
+        var key = Store.Key("gemini");
+        if (key.Length == 0) throw new AiException("Gemini vision needs a Gemini key (Settings → AI & API keys)");
+        var body = new JsonObject
+        {
+            ["contents"] = new JsonArray(new JsonObject
+            {
+                ["role"] = "user",
+                ["parts"] = new JsonArray(
+                    new JsonObject { ["inlineData"] = new JsonObject { ["mimeType"] = mime, ["data"] = Convert.ToBase64String(image) } },
+                    new JsonObject { ["text"] = "Transcribe ALL the text visible in this scanned page or drawing: title block, notes, labels, dimensions, tables, stamps and handwriting, in any language (English, Arabic, French…). Keep a natural reading order, one item per line. Reply with the text only." })
+            })
+        };
+        Exception last = null;
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            try { return (await GeminiText(key, Store.Model("gemini"), body, true, false, ct)).Trim(); }
+            catch (Busy e) { last = e; await Task.Delay(2000 * (attempt + 1), ct); }
+        }
+        throw new AiException("Gemini is busy — try again later (" + last?.Message + ")");
+    }
+
     static async Task<JsonObject> Post(string url, JsonObject body, Dictionary<string, string> headers, CancellationToken ct)
     {
         using var req = new HttpRequestMessage(HttpMethod.Post, url) { Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json") };

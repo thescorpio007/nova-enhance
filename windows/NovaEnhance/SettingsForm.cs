@@ -3,7 +3,7 @@ namespace NovaEnhance;
 /// <summary>Settings, split into sections like the phone app.</summary>
 class SettingsForm : NovaForm
 {
-    static readonly string[] Sections = { "AI & API keys", "About me", "Enhancement", "Email & AI", "Folder search", "Shortcuts", "Backup & restore", "Updates", "Error log", "About" };
+    static readonly string[] Sections = { "AI & API keys", "About me", "Enhancement", "Email & AI", "Folder search", "Google Drive", "Shortcuts", "Backup & restore", "Updates", "Error log", "About" };
     readonly ListBox nav;
     readonly Panel host;
     Stack page;
@@ -68,6 +68,7 @@ class SettingsForm : NovaForm
                 case "Enhancement": Enhancement(); break;
                 case "Email & AI": EmailAi(); break;
                 case "Folder search": FolderSearch(); break;
+                case "Google Drive": GoogleDrive(); break;
                 case "Shortcuts": Shortcuts(); break;
                 case "Backup & restore": BackupPage(); break;
                 case "Updates": Updates(); break;
@@ -275,7 +276,19 @@ class SettingsForm : NovaForm
             var kk = k;
             page.Add(Th.Check($"{k} · {label}", FileKinds.On(k), v => FileKinds.Set(kk, v)));
         }
-        Note("OCR languages installed in Windows: " + Ocr.Languages + ". To add Arabic or French: Windows Settings → Time & language → Language → add the language (with \"Optical character recognition\").");
+        page.Add(Th.Section("OCR · scanned PDFs and images"));
+        Opt("PC only  (default)", "Windows text recognition on this PC: big drawings are read in high-resolution tiles, with a second pass turned 90° for vertical text. Nothing leaves the PC.", Ocr.Mode == "pc", () => Ocr.Mode = "pc");
+        Opt("PC first, then Gemini vision for unclear pages", "Pages where the PC finds little text are offered to Gemini vision — Nova asks before sending the page images.", Ocr.Mode == "pc+gemini", () => Ocr.Mode = "pc+gemini");
+        Opt("Gemini vision for every scanned page", "Best for drawings, tables, stamps, handwriting and Arabic. Nova asks before sending; slower on big folders.", Ocr.Mode == "gemini", () => Ocr.Mode = "gemini");
+        var langs = Ocr.Languages;
+        Note("OCR languages installed in Windows: " + langs + (Ocr.Has("ar") && Ocr.Has("fr") ? "" : " — to add " + string.Join(" and ", new[] { Ocr.Has("ar") ? null : "Arabic", Ocr.Has("fr") ? null : "French" }.Where(x => x != null)) + ": Windows Settings → Time & language → Language → Add a language (tick \"Optical character recognition\"), then restart Nova."), Ocr.Has("ar") && Ocr.Has("fr") ? Th.Good : Th.Warn);
+        page.Add(Th.Row(false)).Controls.Add(Th.B("Open Windows language settings", () => Shell.Open("ms-settings:regionlanguage")));
+
+        page.Add(Th.Section("✦ Ask AI about a folder · what the AI may see"));
+        Opt("Ask me each time  (default)", "Before answering, Nova shows which extracts would be sent — Send, Show passages only, or Cancel.", FolderAsk.Sees == "ask", () => FolderAsk.Sees = "ask");
+        Opt("Never send my files", "The AI only turns your question into search words; you get the best passages to read yourself.", FolderAsk.Sees == "never", () => FolderAsk.Sees = "never");
+        Opt("Send the extracts without asking", "About 10–15 short passages per question, never whole files.", FolderAsk.Sees == "send", () => FolderAsk.Sees = "send");
+        Note("Check your company's IT / data policy before sending project documents to an outside AI.", Th.Warn);
         Note("Old .doc, .ppt and .xls files are read through the Office installed on this PC" + (OfficeConvert.Missing("word") ? " (Word not found)" : "") + ".");
         var big = page.Add(Th.Row(false));
         big.Controls.Add(Th.L("Skip files larger than", 10, Th.Text));
@@ -304,6 +317,54 @@ class SettingsForm : NovaForm
             if (MessageBox.Show("Forget every remembered folder? (Your files are not touched.)", "Nova Enhance", MessageBoxButtons.YesNo) == DialogResult.Yes) { FolderIndex.ForgetAll(); Draw("Folder search"); }
         }));
         page.Add(Th.Check("Keep the folder index on this PC only (not in Documents / OneDrive) — takes effect for new searches", FolderIndex.Local, v => { FolderIndex.Local = v; }));
+    }
+
+    // ------------------------------------------------------------------ Google Drive
+    void GoogleDrive()
+    {
+        Note("Two ways: (1) Google Drive for desktop — your Drive appears as G:\\ and Nova searches it like any folder; (2) the Google sign-in below — Nova reads Drive folders directly, including Google Docs, Sheets and Slides. Access is read-only.");
+        page.Add(Th.Section("Status"));
+        Note(GDrive.SignedIn ? $"✓ Connected{(GDrive.Account.Length > 0 ? " as " + GDrive.Account : "")} (read-only)" : GDrive.Configured ? "Not signed in yet" : "Not set up yet — follow the steps below once", GDrive.SignedIn ? Th.Good : Th.Warn);
+        var row = page.Add(Th.Row(false));
+        var st = Th.L("", 9.5f, Th.Muted);
+        if (GDrive.SignedIn)
+        {
+            row.Controls.Add(Th.B("☁ Search a Drive folder…", () => { Screens.FolderSearch(null); }, true));
+            row.Controls.Add(Th.B("Sign out", async () => { await GDrive.SignOut(); Draw("Google Drive"); }));
+        }
+        page.Add(Th.Section("Your Google app (one-time setup)"));
+        var grid = page.Add(new TableLayoutPanel { ColumnCount = 2, AutoSize = true, BackColor = Color.Transparent, Margin = new Padding(0) }, true);
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        grid.Controls.Add(Th.L("Client ID", 9.5f, Th.Muted), 0, 0);
+        var id = Th.Box(false); id.Text = GDrive.ClientId; id.Dock = DockStyle.Fill; id.PlaceholderText = "…apps.googleusercontent.com";
+        grid.Controls.Add(id, 1, 0);
+        grid.Controls.Add(Th.L("Client secret", 9.5f, Th.Muted), 0, 1);
+        var sec = Th.Box(false, 1, true); sec.Text = GDrive.ClientSecret; sec.Dock = DockStyle.Fill;
+        grid.Controls.Add(sec, 1, 1);
+        var srow = page.Add(Th.Row(false));
+        srow.Controls.Add(Th.B("Save and sign in with Google", async () =>
+        {
+            GDrive.ClientId = id.Text; GDrive.ClientSecret = sec.Text;
+            st.Text = "Your browser opens Google's sign-in — choose your account and allow read-only access…"; st.ForeColor = Th.Muted;
+            try { var who = await GDrive.SignIn(); st.Text = "✓ Connected " + who; st.ForeColor = Th.Good; Draw("Google Drive"); }
+            catch (Exception e) { st.Text = "⚠ " + e.Message; st.ForeColor = Th.Bad; }
+        }, true));
+        srow.Controls.Add(Th.B("Open Google Cloud Console", () => Shell.Open("https://console.cloud.google.com/")));
+        page.Add(st);
+        page.Add(Th.Section("Steps (about 10 minutes, in Chrome)"));
+        foreach (var step in new[]
+                 {
+                     "1 · Open console.cloud.google.com and sign in with the Google account that has your project folders.",
+                     "2 · Create a project, e.g. \"Nova Enhance\".",
+                     "3 · APIs & Services → Library → \"Google Drive API\" → Enable.",
+                     "4 · APIs & Services → OAuth consent screen (Google Auth Platform) → External → app name \"Nova Enhance\" → add your email as a Test user.",
+                     "5 · Credentials (Clients) → Create → OAuth client ID → Application type: Desktop app → Create.",
+                     "6 · Copy the Client ID and Client secret into the two boxes above → Save and sign in with Google.",
+                     "7 · Google shows \"Google hasn't verified this app\" (normal for your own app) → Continue → allow read-only access."
+                 })
+            Note(step, Th.Text);
+        Note("Company Google Workspace accounts may need the admin to allow the app.");
     }
 
     // ------------------------------------------------------------------ Shortcuts

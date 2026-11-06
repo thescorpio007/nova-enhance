@@ -57,6 +57,8 @@ class Matcher
 class FileHit
 {
     public string Path, Root, Kind;
+    /// <summary>Google Drive file: "id|mimeType" (opened in the browser).</summary>
+    public string Remote;
     public List<PieceHit> Pieces = new();
     public string Name => System.IO.Path.GetFileName(Path);
     public string Folder => System.IO.Path.GetDirectoryName(Path) ?? "";
@@ -118,6 +120,8 @@ static class FolderIndex
             {
                 Exec(c, "PRAGMA journal_mode=WAL;");
                 Exec(c, "CREATE TABLE IF NOT EXISTS files(id INTEGER PRIMARY KEY, path TEXT UNIQUE, size INTEGER, mtime INTEGER, kind TEXT, note TEXT);");
+                try { Exec(c, "ALTER TABLE files ADD COLUMN remote TEXT;"); } catch { }
+                Exec(c, "CREATE TABLE IF NOT EXISTS vision(path TEXT, page INTEGER, PRIMARY KEY(path, page));");
                 Exec(c, "CREATE TABLE IF NOT EXISTS segs(id INTEGER PRIMARY KEY, file_id INTEGER, loc TEXT, go TEXT, text TEXT);");
                 Exec(c, "CREATE INDEX IF NOT EXISTS segs_file ON segs(file_id);");
                 Exec(c, "CREATE TABLE IF NOT EXISTS roots(path TEXT PRIMARY KEY, last INTEGER, files INTEGER);");
@@ -217,7 +221,7 @@ static class FolderIndex
 
     public class Progress
     {
-        public int Total, Done, Read, Files;
+        public int Total, Done, Read, Files, Unclear;
         public string Current = "", Phase = "";
         public bool Finished;
         public double Seconds;
@@ -225,19 +229,77 @@ static class FolderIndex
 
     static long Ms(DateTime d) => new DateTimeOffset(d.ToUniversalTime()).ToUnixTimeMilliseconds();
 
+    /// <summary>One file of a folder on this PC or in Google Drive.</summary>
+    public class Item
+    {
+        public string Key, Name, Ext, Remote, RemoteMime, RemoteId;
+        public long Size, Mtime;
+        public string LocalPath;   // files on this PC
+    }
+
+    /// <summary>All files of a folder: on this PC, or (root "gdrive:…") in Google Drive.</summary>
+    public static IEnumerable<Item> Items(string root, Progress pg, CancellationToken ct)
+    {
+        if (GDrive.IsRoot(root))
+        {
+            var (id, name) = GDrive.ParseRoot(root);
+            var queue = new Queue<(string Id, string Rel)>();
+            queue.Enqueue((id, ""));
+            while (queue.Count > 0 && !ct.IsCancellationRequested)
+            {
+                var (fid, rel) = queue.Dequeue();
+                pg.Phase = "Listing Google Drive… " + (rel.Length > 0 ? rel : name);
+                List<DriveFile> kids;
+                try { kids = GDrive.Children(fid, ct).GetAwaiter().GetResult(); }
+                catch (Exception e) { Log.Error("drive list", e); continue; }
+                var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var k in kids)
+                {
+                    var safe = string.Join("_", (k.Name ?? "").Split(Path.GetInvalidFileNameChars()));
+                    if (!used.Add(safe)) safe += $" ({k.Id[..Math.Min(6, k.Id.Length)]})";
+                    if (k.IsFolder) { queue.Enqueue((k.Id, rel.Length == 0 ? safe : rel + "\\" + safe)); continue; }
+                    var ext = GDrive.ReadExt(k);
+                    yield return new Item
+                    {
+                        Key = root + "\\" + (rel.Length == 0 ? "" : rel + "\\") + safe, Name = safe, Ext = ext.Length > 0 ? ext : Path.GetExtension(safe).ToLowerInvariant(),
+                        Size = k.Size, Mtime = k.Modified.ToUnixTimeMilliseconds(), Remote = k.Id + "|" + k.Mime, RemoteId = k.Id, RemoteMime = k.Mime
+                    };
+                }
+            }
+            yield break;
+        }
+        var opts = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.Hidden | FileAttributes.System, ReturnSpecialDirectories = false };
+        pg.Phase = "Listing files…";
+        foreach (var f in Directory.EnumerateFiles(root, "*", opts))
+        {
+            var n = Path.GetFileName(f);
+            if (n.StartsWith("~$")) continue;
+            FileInfo fi;
+            try { fi = new FileInfo(f); } catch { continue; }
+            yield return new Item { Key = f, Name = n, Ext = fi.Extension.ToLowerInvariant(), Size = fi.Length, Mtime = Ms(fi.LastWriteTime), LocalPath = f };
+        }
+    }
+
+    public static string NormalRoot(string root)
+    {
+        if (GDrive.IsRoot(root)) return root;
+        root = Path.GetFullPath(root).TrimEnd('\\');
+        if (root.Length == 2 && root[1] == ':') root += "\\";
+        return root;
+    }
+
     /// <summary>
     /// Search a folder: first instant results from the index, then new and changed files are read (and remembered), results
-    /// arriving as they are found. Runs on a background thread (Office and OCR need it).
+    /// arriving as they are found. With m == null it only brings the index up to date (used by ✦ Ask AI).
+    /// Runs on a background STA thread (Office, Outlook and OCR need it).
     /// </summary>
     public static void Search(string root, Matcher m, HashSet<string> kinds, Action<FileHit> onHit, Action<string> onRemove, Progress pg, CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
-        root = Path.GetFullPath(root).TrimEnd('\\');
-        if (root.Length == 2 && root[1] == ':') root += "\\";
+        root = NormalRoot(root);
         var pre = Prefix(root);
         using var c = Open();
 
-        // 1 · instant results from what is already remembered
         pg.Phase = "Searching what Nova already knows…";
         var known = new Dictionary<string, (long Id, long Size, long Mtime)>(StringComparer.OrdinalIgnoreCase);
         using (var cmd = c.CreateCommand())
@@ -247,65 +309,78 @@ static class FolderIndex
             using var r = cmd.ExecuteReader();
             while (r.Read()) known[r.GetString(1)] = (r.GetInt64(0), r.GetInt64(2), r.GetInt64(3));
         }
-        if (known.Count > 0) FromIndex(c, pre, m, kinds, onHit, ct);
+        if (known.Count > 0 && m != null) FromIndex(c, pre, m, kinds, onHit, ct);
 
-        // 2 · read new and changed files
-        pg.Phase = "Listing files…";
-        var opts = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.Hidden | FileAttributes.System, ReturnSpecialDirectories = false };
-        List<string> files;
-        try { files = Directory.EnumerateFiles(root, "*", opts).Where(f => !Path.GetFileName(f).StartsWith("~$")).ToList(); }
+        List<Item> files;
+        try { files = Items(root, pg, ct).ToList(); }
         catch (Exception e) { pg.Phase = "⚠ " + e.Message; pg.Finished = true; return; }
         pg.Total = files.Count;
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var tx = c.BeginTransaction();
         int batch = 0;
         long maxBytes = (long)MaxMb * 1024 * 1024;
-        pg.Phase = "Reading files…";
+        pg.Phase = GDrive.IsRoot(root) ? "Reading files from Google Drive…" : "Reading files…";
         try
         {
-            foreach (var f in files)
+            foreach (var it in files)
             {
                 if (ct.IsCancellationRequested) break;
                 pg.Done++;
-                seen.Add(f);
-                FileInfo fi;
-                try { fi = new FileInfo(f); } catch { continue; }
-                var mt = Ms(fi.LastWriteTime);
-                if (known.TryGetValue(f, out var k) && k.Size == fi.Length && k.Mtime == mt) continue;
-                pg.Current = fi.Name;
-                var ext = fi.Extension.ToLowerInvariant();
-                var segs = new List<Seg> { new("file name", fi.Name) };
+                seen.Add(it.Key);
+                if (known.TryGetValue(it.Key, out var k) && k.Size == it.Size && k.Mtime == it.Mtime) continue;
+                pg.Current = it.Name;
+                var segs = new List<Seg> { new("file name", it.Name) };
                 var note = "";
-                if (FileKinds.On("J"))
+                string local = it.LocalPath, temp = null;
+                try
                 {
-                    var props = ext is ".docx" or ".docm" or ".pptx" or ".pptm" or ".xlsx" or ".xlsm" ? FileText.OfficeProps(f)
-                        : ext == ".pdf" ? FileText.PdfProps(f)
-                        : !FileKinds.ReadContent(ext) ? ShellProps.Get(f) : "";
-                    if (props.Length > 0) segs.Add(new Seg("file properties", props));
-                }
-                if (FileKinds.ReadContent(ext))
-                {
-                    if (fi.Length > maxBytes) note = $"skipped: larger than {MaxMb} MB";
-                    else
+                    bool content = FileKinds.ReadContent(it.Ext);
+                    if (content && it.Size > maxBytes) { note = $"skipped: larger than {MaxMb} MB"; content = false; }
+                    if (it.RemoteId != null && (content || FileKinds.On("J")))
                     {
-                        var content = FileText.Extract(f);
-                        segs.AddRange(content);
+                        if (it.Ext.Length > 0 && (content || it.Ext is ".docx" or ".pptx" or ".xlsx" or ".pdf"))
+                        {
+                            temp = Path.Combine(Paths.Cache, Guid.NewGuid().ToString("N") + it.Ext);
+                            try { GDrive.Download(it.RemoteId, it.RemoteMime, temp, ct).GetAwaiter().GetResult(); local = temp; }
+                            catch (Exception e) { note = "download failed: " + e.Message; local = null; }
+                        }
+                    }
+                    if (local != null && FileKinds.On("J"))
+                    {
+                        var props = it.Ext is ".docx" or ".docm" or ".pptx" or ".pptm" or ".xlsx" or ".xlsm" ? FileText.OfficeProps(local)
+                            : it.Ext == ".pdf" ? FileText.PdfProps(local)
+                            : !content && it.RemoteId == null ? ShellProps.Get(local) : "";
+                        if (props.Length > 0) segs.Add(new Seg("file properties", props));
+                    }
+                    if (content && local != null)
+                    {
+                        segs.AddRange(FileText.Extract(local));
                         pg.Read++;
                     }
                 }
-                if (k.Id > 0) { DeleteFile(c, k.Id); onRemove?.Invoke(f); }
-                Exec(c, "INSERT INTO files(path,size,mtime,kind,note) VALUES($p,$s,$m,$k,$n)", ("$p", f), ("$s", fi.Length), ("$m", mt), ("$k", FileKinds.KindOf(ext)), ("$n", note));
+                finally { if (temp != null) try { File.Delete(temp); } catch { } }
+
+                if (k.Id > 0) { DeleteFile(c, k.Id); onRemove?.Invoke(it.Key); }
+                Exec(c, "INSERT INTO files(path,size,mtime,kind,note,remote) VALUES($p,$s,$m,$k,$n,$r)",
+                    ("$p", it.Key), ("$s", it.Size), ("$m", it.Mtime), ("$k", FileKinds.KindOf(it.Ext)), ("$n", note), ("$r", it.Remote));
                 var fid = Convert.ToInt64(Scalar(c, "SELECT last_insert_rowid()"));
-                foreach (var s in segs)
+                foreach (var sg in segs)
                 {
-                    Exec(c, "INSERT INTO segs(file_id,loc,go,text) VALUES($f,$l,$g,$t)", ("$f", fid), ("$l", s.Loc), ("$g", s.Goto), ("$t", s.Text));
-                    if (Fts) Exec(c, "INSERT INTO segs_fts(rowid,text) VALUES(last_insert_rowid(),$t)", ("$t", s.Text));
+                    Exec(c, "INSERT INTO segs(file_id,loc,go,text) VALUES($f,$l,$g,$t)", ("$f", fid), ("$l", sg.Loc), ("$g", sg.Goto), ("$t", sg.Text));
+                    if (Fts) Exec(c, "INSERT INTO segs_fts(rowid,text) VALUES(last_insert_rowid(),$t)", ("$t", sg.Text));
+                    if (sg.Unclear && sg.OcrPage >= 0)
+                    {
+                        Exec(c, "INSERT OR IGNORE INTO vision(path,page) VALUES($p,$g)", ("$p", it.Key), ("$g", sg.OcrPage));
+                        pg.Unclear++;
+                    }
                 }
-                var hit = Match(f, root, FileKinds.KindOf(ext), segs, m, kinds);
-                if (hit != null) onHit(hit);
+                if (m != null)
+                {
+                    var hit = Match(it.Key, root, FileKinds.KindOf(it.Ext), segs, m, kinds);
+                    if (hit != null) { hit.Remote = it.Remote; onHit(hit); }
+                }
                 if (++batch >= 15) { tx.Commit(); tx.Dispose(); tx = c.BeginTransaction(); batch = 0; }
             }
-            // 3 · files that were deleted from the folder leave the index
             if (!ct.IsCancellationRequested)
                 foreach (var (path, k) in known)
                     if (!seen.Contains(path)) { DeleteFile(c, k.Id); onRemove?.Invoke(path); }
@@ -320,6 +395,156 @@ static class FolderIndex
             pg.Seconds = sw.Elapsed.TotalSeconds;
             pg.Finished = true;
         }
+    }
+
+    // ================================================================== Gemini vision for unclear scanned pages
+
+    public static List<(string Path, int Page)> VisionPending(string root)
+    {
+        var res = new List<(string, int)>();
+        var pre = Prefix(NormalRoot(root));
+        using var c = Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT path,page FROM vision WHERE lower(substr(path,1,$n))=lower($p) ORDER BY path,page LIMIT 500";
+        cmd.Parameters.AddWithValue("$n", pre.Length); cmd.Parameters.AddWithValue("$p", pre);
+        using var r = cmd.ExecuteReader();
+        while (r.Read()) res.Add((r.GetString(0), r.GetInt32(1)));
+        return res;
+    }
+
+    public static void VisionClear(string root)
+    {
+        var pre = Prefix(NormalRoot(root));
+        using var c = Open();
+        Exec(c, "DELETE FROM vision WHERE lower(substr(path,1,$n))=lower($p)", ("$n", pre.Length), ("$p", pre));
+    }
+
+    /// <summary>Sends the given pages to Gemini vision (the user agreed) and replaces their OCR text in the index.</summary>
+    public static int VisionRun(List<(string Path, int Page)> pages, Action<string> progress, CancellationToken ct)
+    {
+        int done = 0;
+        using var c = Open();
+        foreach (var g in pages.GroupBy(p => p.Path))
+        {
+            if (ct.IsCancellationRequested) break;
+            string local = g.Key, temp = null;
+            try
+            {
+                var remote = Scalar(c, "SELECT remote FROM files WHERE path=$p", ("$p", g.Key)) as string;
+                if (!string.IsNullOrEmpty(remote))
+                {
+                    var parts = remote.Split('|');
+                    temp = Path.Combine(Paths.Cache, Guid.NewGuid().ToString("N") + Path.GetExtension(g.Key));
+                    GDrive.Download(parts[0], parts.Length > 1 ? parts[1] : "", temp, ct).GetAwaiter().GetResult();
+                    local = temp;
+                }
+                var fid = Scalar(c, "SELECT id FROM files WHERE path=$p", ("$p", g.Key));
+                foreach (var (_, page) in g)
+                {
+                    if (ct.IsCancellationRequested) break;
+                    progress?.Invoke($"Gemini vision · {Path.GetFileName(g.Key)}{(page > 0 ? " · page " + page : "")} ({done + 1}/{pages.Count})");
+                    try
+                    {
+                        var (data, mime) = Ocr.Picture(local, page);
+                        var text = Ai.Vision(data, mime, ct).GetAwaiter().GetResult();
+                        var oldLoc = page > 0 ? $"page {page} (OCR)" : "image text (OCR)";
+                        var newLoc = page > 0 ? $"page {page} (Gemini vision)" : "image text (Gemini vision)";
+                        var go = page > 0 ? $"page:{page}" : "";
+                        if (fid != null)
+                        {
+                            using (var cmd = c.CreateCommand())
+                            {
+                                cmd.CommandText = "SELECT id,text FROM segs WHERE file_id=$f AND loc=$l";
+                                cmd.Parameters.AddWithValue("$f", fid); cmd.Parameters.AddWithValue("$l", oldLoc);
+                                var rows = new List<(long, string)>();
+                                using (var r = cmd.ExecuteReader()) while (r.Read()) rows.Add((r.GetInt64(0), r.IsDBNull(1) ? "" : r.GetString(1)));
+                                foreach (var (sid, t) in rows)
+                                {
+                                    if (Fts) Exec(c, "INSERT INTO segs_fts(segs_fts,rowid,text) VALUES('delete',$id,$t)", ("$id", sid), ("$t", t));
+                                    Exec(c, "DELETE FROM segs WHERE id=$id", ("$id", sid));
+                                }
+                            }
+                            Exec(c, "INSERT INTO segs(file_id,loc,go,text) VALUES($f,$l,$g,$t)", ("$f", fid), ("$l", newLoc), ("$g", go), ("$t", text));
+                            if (Fts) Exec(c, "INSERT INTO segs_fts(rowid,text) VALUES(last_insert_rowid(),$t)", ("$t", text));
+                        }
+                        Exec(c, "DELETE FROM vision WHERE path=$p AND page=$g", ("$p", g.Key), ("$g", page));
+                        done++;
+                    }
+                    catch (Exception e) { Log.Error("vision " + Path.GetFileName(g.Key), e); progress?.Invoke("⚠ " + e.Message); if (e is AiException) return done; }
+                }
+            }
+            catch (Exception e) { Log.Error("vision file", e); }
+            finally { if (temp != null) try { File.Delete(temp); } catch { } }
+        }
+        return done;
+    }
+
+    // ================================================================== ✦ Ask AI: best passages for a question
+
+    public class Passage
+    {
+        public string Path, Kind, Remote, Loc, Goto, Text, Root;
+        public double Score;
+    }
+
+    /// <summary>The most relevant pieces of the folder for these words (full-text ranking), at most 4 per file.</summary>
+    public static List<Passage> Retrieve(string root, List<string> words, int max = 14)
+    {
+        root = NormalRoot(root);
+        var pre = Prefix(root);
+        var terms = words.Select(w => Regex.Replace(w ?? "", @"[^\p{L}\p{N}\s\-\.]", " ").Trim()).Where(w => w.Length > 1).Distinct(StringComparer.OrdinalIgnoreCase).Take(24).ToList();
+        if (terms.Count == 0) return new();
+        var res = new List<Passage>();
+        using var c = Open();
+        using var cmd = c.CreateCommand();
+        if (Fts)
+        {
+            var q = string.Join(" OR ", terms.Select(t =>
+            {
+                var toks = Regex.Matches(t, @"[\p{L}\p{N}]+").Select(x => x.Value).ToList();
+                return toks.Count == 0 ? null : "\"" + string.Join(" ", toks) + "\"";
+            }).Where(x => x != null).Distinct());
+            cmd.CommandText = "SELECT f.path,f.kind,f.remote,s.loc,s.go,s.text,bm25(segs_fts) AS sc FROM segs_fts JOIN segs s ON s.id=segs_fts.rowid JOIN files f ON f.id=s.file_id " +
+                              "WHERE segs_fts MATCH $q AND lower(substr(f.path,1,$n))=lower($p) ORDER BY sc LIMIT 300";
+            cmd.Parameters.AddWithValue("$q", q);
+        }
+        else
+        {
+            cmd.CommandText = "SELECT f.path,f.kind,f.remote,s.loc,s.go,s.text,0 FROM segs s JOIN files f ON f.id=s.file_id WHERE lower(substr(f.path,1,$n))=lower($p) AND (" +
+                              string.Join(" OR ", terms.Select((t, i) => $"s.text LIKE $w{i}")) + ") LIMIT 300";
+            for (int i = 0; i < terms.Count; i++) cmd.Parameters.AddWithValue("$w" + i, "%" + terms[i] + "%");
+        }
+        cmd.Parameters.AddWithValue("$n", pre.Length); cmd.Parameters.AddWithValue("$p", pre);
+        var rows = new List<Passage>();
+        using (var r = cmd.ExecuteReader())
+            while (r.Read())
+                rows.Add(new Passage
+                {
+                    Path = r.GetString(0), Kind = r.IsDBNull(1) ? "J" : r.GetString(1), Remote = r.IsDBNull(2) ? null : r.GetString(2),
+                    Loc = r.GetString(3), Goto = r.IsDBNull(4) ? "" : r.GetString(4), Text = r.IsDBNull(5) ? "" : r.GetString(5), Score = r.GetDouble(6), Root = root
+                });
+        // Prefer pieces that contain more of the different words; at most 4 per file.
+        foreach (var p in rows) p.Score -= terms.Count(t => p.Text.Contains(t, StringComparison.OrdinalIgnoreCase)) * 2.0;
+        var perFile = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var p in rows.Where(p => p.Loc != "file name").OrderBy(p => p.Score))
+        {
+            perFile.TryGetValue(p.Path, out var n);
+            if (n >= 4) continue;
+            perFile[p.Path] = n + 1;
+            p.Text = Window(p.Text, terms, 750);
+            res.Add(p);
+            if (res.Count >= max) break;
+        }
+        return res;
+    }
+
+    static string Window(string text, List<string> terms, int size)
+    {
+        if (text.Length <= size) return text;
+        var first = terms.Select(t => text.IndexOf(t, StringComparison.OrdinalIgnoreCase)).Where(i => i >= 0).DefaultIfEmpty(0).Min();
+        var a = Math.Max(0, first - size / 3);
+        var b = Math.Min(text.Length, a + size);
+        return (a > 0 ? "…" : "") + text[a..b] + (b < text.Length ? "…" : "");
     }
 
     static bool KindOk(HashSet<string> kinds, string kind) => kinds == null || kinds.Count == 0 || kinds.Contains(kind);
@@ -343,7 +568,7 @@ static class FolderIndex
     {
         var fts = Fts ? m.Fts() : null;
         using var cmd = c.CreateCommand();
-        cmd.CommandText = "SELECT f.path,f.kind,s.loc,s.go,s.text FROM segs s JOIN files f ON f.id=s.file_id WHERE lower(substr(f.path,1,$n))=lower($p)"
+        cmd.CommandText = "SELECT f.path,f.kind,s.loc,s.go,s.text,f.remote FROM segs s JOIN files f ON f.id=s.file_id WHERE lower(substr(f.path,1,$n))=lower($p)"
                           + (fts != null ? " AND s.id IN (SELECT rowid FROM segs_fts WHERE segs_fts MATCH $q)" : " AND s.text LIKE $like")
                           + " ORDER BY f.path, s.id LIMIT 20000";
         cmd.Parameters.AddWithValue("$n", pre.Length); cmd.Parameters.AddWithValue("$p", pre);
@@ -360,7 +585,7 @@ static class FolderIndex
             var text = r.IsDBNull(4) ? "" : r.GetString(4);
             var found = m.Find(text);
             if (found.Count == 0) continue;
-            cur ??= new FileHit { Path = path, Root = pre.TrimEnd('\\'), Kind = kind };
+            cur ??= new FileHit { Path = path, Root = pre.TrimEnd('\\'), Kind = kind, Remote = r.IsDBNull(5) ? null : r.GetString(5) };
             if (cur.Pieces.Count < 200) cur.Pieces.Add(new PieceHit { Loc = r.GetString(2), Goto = r.IsDBNull(3) ? "" : r.GetString(3), Text = text, Matches = found });
         }
         if (cur != null && cur.Pieces.Count > 0) onHit(cur);
@@ -468,6 +693,12 @@ static class Opener
 
     public static void Open(FileHit h, PieceHit p, string term)
     {
+        if (!string.IsNullOrEmpty(h.Remote))
+        {
+            var parts = h.Remote.Split('|');
+            Shell.Open(GDrive.WebLink(parts[0], parts.Length > 1 ? parts[1] : ""));
+            return;
+        }
         var path = h.Path;
         var go = p?.Goto ?? "";
         try
