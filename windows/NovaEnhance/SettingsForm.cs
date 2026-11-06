@@ -3,7 +3,7 @@ namespace NovaEnhance;
 /// <summary>Settings, split into sections like the phone app.</summary>
 class SettingsForm : NovaForm
 {
-    static readonly string[] Sections = { "AI & API keys", "About me", "Enhancement", "Email & AI", "Folder search", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "About" };
+    static readonly string[] Sections = { "AI & API keys", "About me", "Enhancement", "Email & AI", "Folder search", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "About" };
     readonly ListBox nav;
     readonly Panel host;
     Stack page;
@@ -72,6 +72,8 @@ class SettingsForm : NovaForm
                 case "Shortcuts": Shortcuts(); break;
                 case "Browser add-on": BrowserPage(); break;
                 case "AI window": AiWindowPage(); break;
+                case "🧠 What Nova knows": KnowsPage(); break;
+                case "Spelling & grammar": SpellPage(); break;
                 case "Backup & restore": BackupPage(); break;
                 case "Updates": Updates(); break;
                 case "Error log": ErrorLog(); break;
@@ -110,7 +112,7 @@ class SettingsForm : NovaForm
             var key = Th.Box(false, 1, true); key.Text = Store.Key(p.Id); key.Dock = DockStyle.Fill;
             grid.Controls.Add(key, 1, 0);
             grid.Controls.Add(Th.L("Model", 9.5f, Th.Muted), 0, 1);
-            var model = Th.Box(false); model.Text = Store.Model(p.Id); model.Dock = DockStyle.Fill;
+            var model = Th.NoSpell(Th.Box(false)); model.Text = Store.Model(p.Id); model.Dock = DockStyle.Fill;
             grid.Controls.Add(model, 1, 1);
             var btns = page.Add(Th.Row(false));
             var status = Th.L("", 9.5f, Th.Muted);
@@ -149,7 +151,7 @@ class SettingsForm : NovaForm
         about.Text = Store.ProfileAbout;
         about.PlaceholderText = "e.g. Senior site architect: Design Development and coordination with structural and MEP…";
         page.Add(Th.Section("My terms · kept exactly as written"));
-        var terms = page.Add(Th.Box(true, 2), true);
+        var terms = page.Add(Th.NoSpell(Th.Box(true, 2)), true);
         terms.Text = Store.ProfileTerms;
         terms.PlaceholderText = "e.g. IFC, RFI, NY, PQP, PVRS, SLV";
         var save = page.Add(Th.Row(false));
@@ -418,7 +420,7 @@ class SettingsForm : NovaForm
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         grid.Controls.Add(Th.L("Client ID", 9.5f, Th.Muted), 0, 0);
-        var id = Th.Box(false); id.Text = GDrive.ClientId; id.Dock = DockStyle.Fill; id.PlaceholderText = "…apps.googleusercontent.com";
+        var id = Th.NoSpell(Th.Box(false)); id.Text = GDrive.ClientId; id.Dock = DockStyle.Fill; id.PlaceholderText = "…apps.googleusercontent.com";
         grid.Controls.Add(id, 1, 0);
         grid.Controls.Add(Th.L("Client secret", 9.5f, Th.Muted), 0, 1);
         var sec = Th.Box(false, 1, true); sec.Text = GDrive.ClientSecret; sec.Dock = DockStyle.Fill;
@@ -504,6 +506,103 @@ class SettingsForm : NovaForm
         Note("◫ Side by side shows two tabs at once; type in \"Same question to both\" to compare two AIs (or Nova Chat and a website).", Th.Text);
         Note("Right-click a website tab to rename, reload, open it in your browser or remove it. ＋ Add a site for any other AI.", Th.Text);
         Note("Nova Chat keeps your chats in Documents\\Nova Enhance\\Nova Chat. Your privacy choices still apply: Folder search (Never / Ask / Send) and Email & AI (first lines or full email).");
+    }
+
+    // ------------------------------------------------------------------ Spelling & grammar
+    void SpellPage()
+    {
+        Note("Red wavy line = spelling (Windows' own spell checker, on this PC: English, Arabic, French). Blue wavy line = grammar (your AI checks the sentence when you pause). Click a line for the fixes, ＋ Add to my words, Ignore or ✦ Fix all · Ctrl+Space fixes the next one.");
+        if (!Speller.Available) Note("⚠ The Windows spell checker is not available on this PC (Windows Settings → Time & language → Language: add English with \"Basic typing\").", Th.Warn);
+        page.Add(Th.Check("Underline spelling mistakes as I type (on this PC)", Speller.On, v => Speller.On = v));
+        page.Add(Th.Check("Check grammar with my AI when I pause (questions, notes, Enhance text)", Speller.GrammarOn, v => Speller.GrammarOn = v));
+        page.Add(Th.Check("Smart search: correct typos before searching (↩ search exactly as typed is shown under the box)", Speller.SmartSearch, v => Speller.SmartSearch = v));
+        page.Add(Th.Section("My words (never marked)"));
+        Note("Your project words, names and codes. Words in About me → terms, names from your emails, and the vocabulary Nova learned are never marked either. Codes with numbers (CSU1095, EI 60) and short capitals (SLV, IFC) are always skipped.", Th.Muted);
+        var words = page.Add(Th.NoSpell(Th.Box(true, 5)), true);
+        words.Text = Store.Str("win_my_words").Replace("|", "\r\n");
+        var st = Th.L("", 9.5f, Th.Good);
+        var r = page.Add(Th.Row());
+        r.Controls.Add(Th.B("Save my words", () =>
+        {
+            Store.Set("win_my_words", string.Join("|", words.Lines.Select(x => x.Trim()).Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase)));
+            st.Text = "✓ Saved (used within a few minutes)";
+        }, true));
+        r.Controls.Add(st);
+    }
+
+    // ------------------------------------------------------------------ 🧠 What Nova knows
+    void KnowsPage()
+    {
+        var m = Memory.Data;
+        Note("What Nova learned from you — kept encrypted on this PC (your Windows account only) and inside your backup. Nothing here is sent anywhere unless it helps answer a question you ask.");
+        Note($"🧠 {m.Cards.Count} remembered answers · {m.Vocab.Count} vocabulary words · {m.Boosts.Count} file hints · 👍 {m.Good} · 👎 {m.Bad} · writing style: {(string.IsNullOrWhiteSpace(m.Style) ? "not learned" : "learned " + m.StyleAt.ToString("dd MMM yyyy"))}", Th.AccentText);
+        page.Add(Th.Check("Learn from my 👍 / 👎 and answer similar questions at once (then re-check the files)", Memory.On, v => Memory.On = v));
+        page.Add(Th.Check("Add 🎓 Architect's advice under answers (general knowledge, clearly kept apart from your documents)", Memory.AdviceOn, v => Memory.AdviceOn = v));
+
+        page.Add(Th.Section("Remembered answers"));
+        if (m.Cards.Count == 0) Note("None yet — press 👍 under a good answer (folder Ask AI or the PDF panel).", Th.Muted);
+        foreach (var c in m.Cards.OrderByDescending(c => c.Saved).Take(40).ToList())
+        {
+            var row = page.Add(Th.Row(false));
+            var where = c.Kind == "pdf" ? Path.GetFileName(c.Root) : GDrive.Display(c.Root);
+            row.Controls.Add(Th.L($"{c.Saved:dd MMM yyyy} · {(c.Q.Length > 70 ? c.Q[..70] + "…" : c.Q)} · {where} · used {c.Uses}×", 9.5f, Th.Text));
+            var card = c;
+            row.Controls.Add(Th.B("View", () => MessageBox.Show(this, card.Q + "\n\n" + card.A + "\n\nFiles:\n" + string.Join("\n", card.Files), "🧠 Remembered answer")));
+            row.Controls.Add(Th.B("🗑", () => { Memory.Data.Cards.Remove(card); Memory.Save(); Draw("🧠 What Nova knows"); }));
+        }
+
+        page.Add(Th.Section("Project vocabulary"));
+        Note("One per line: ABBREVIATION = meaning. Nova uses these to search (SLV finds Sea La Vie too) and never marks them as spelling mistakes. Learned from passages you liked; edit freely.", Th.Muted);
+        var vocab = page.Add(Th.NoSpell(Th.Box(true, 6)), true);
+        vocab.Text = string.Join("\r\n", m.Vocab.OrderBy(x => x.Key).Select(x => x.Key + " = " + x.Value));
+        var vs = Th.L("", 9.5f, Th.Good);
+        var vr = page.Add(Th.Row());
+        vr.Controls.Add(Th.B("Save vocabulary", () =>
+        {
+            Memory.Data.Vocab.Clear();
+            foreach (var line in vocab.Lines)
+            {
+                var i = line.IndexOf('=');
+                if (i > 0 && line[(i + 1)..].Trim().Length > 0) Memory.Data.Vocab[line[..i].Trim()] = line[(i + 1)..].Trim();
+            }
+            Memory.Save(); vs.Text = $"✓ {Memory.Data.Vocab.Count} words saved";
+        }, true));
+        vr.Controls.Add(vs);
+
+        page.Add(Th.Section("Project map — current revision per document"));
+        var roots = FolderIndex.Roots().Take(3).ToList();
+        if (roots.Count == 0) Note("Search a project folder once and Nova maps its revisions.", Th.Muted);
+        foreach (var root in roots)
+        {
+            var groups = Revisions.Groups(root.Path);
+            Note($"📁 {GDrive.Display(root.Path)} — {groups.Count} documents with several revisions", Th.Text);
+            if (groups.Count > 0)
+            {
+                var box = page.Add(Th.NoSpell(Th.Box(true, Math.Min(8, groups.Count + 1))), true);
+                box.ReadOnly = true; box.Font = Th.F(9);
+                box.Text = string.Join("\r\n", groups.Take(300).Select(g => $"{g.Name}   ← current{(g.Rev.Length > 0 ? " (Rev " + g.Rev + ")" : "")} · {g.Older} older"));
+            }
+        }
+
+        page.Add(Th.Section("My writing style (for ✦ Draft reply)"));
+        Note("Only when you allow it: Nova reads about 40 of your recent sent emails (your own text, not quoted replies), you see exactly what is sent, and your AI writes a short description of how you write. Only that description is kept.", Th.Muted);
+        page.Add(Th.Check("Write ✦ Draft reply in my style", Memory.StyleOn, v => Memory.StyleOn = v));
+        var style = page.Add(Th.Box(true, 4), true);
+        style.Text = m.Style;
+        style.PlaceholderText = "Not learned yet";
+        var ss = Th.L("", 9.5f, Th.Good);
+        var sr = page.Add(Th.Row());
+        sr.Controls.Add(Th.B("✦ Learn my style from sent emails", async () => { ss.Text = "Reading your sent emails…"; ss.Text = await Memory.LearnStyle(this); style.Text = Memory.Data.Style; }, true));
+        sr.Controls.Add(Th.B("Save", () => { Memory.Data.Style = style.Text.Trim(); Memory.Save(); ss.Text = "✓ Saved"; }));
+        sr.Controls.Add(Th.B("Forget my style", () => { Memory.Data.Style = ""; Memory.StyleOn = false; Memory.Save(); style.Text = ""; ss.Text = "✓ Forgotten"; }));
+        sr.Controls.Add(ss);
+
+        page.Add(Th.Section("Start again"));
+        page.Add(Th.B("🗑 Forget everything Nova learned", () =>
+        {
+            if (MessageBox.Show(this, "Delete all remembered answers, vocabulary, file hints and your writing style?", "Nova Enhance", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+            Memory.ForgetAll(); Draw("🧠 What Nova knows");
+        }));
     }
 
     // ------------------------------------------------------------------ Backup
@@ -669,7 +768,7 @@ class SettingsForm : NovaForm
         }
         Fill("");
         search.TextChanged += (_, _) => Fill(search.Text.Trim());
-        var det = page.Add(Th.Box(true, 8), true);
+        var det = page.Add(Th.NoSpell(Th.Box(true, 8)), true);
         det.ReadOnly = true; det.Font = new Font("Consolas", 9);
         det.Text = list.Count == 0 ? "No errors — all good." : "Select an error to see its details.";
         lv.SelectedIndexChanged += (_, _) => { if (lv.SelectedItems.Count > 0) det.Text = Log.Format((LogEntry)lv.SelectedItems[0].Tag); };

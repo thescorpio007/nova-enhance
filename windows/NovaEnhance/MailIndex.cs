@@ -911,6 +911,22 @@ static class MailIndex
         }
         return list;
     }
+
+    /// <summary>Names of the people in your recent emails — the spell checker never marks them.</summary>
+    public static List<string> KnownNames(int limit)
+    {
+        var res = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!File.Exists(DbPath)) return res.ToList();
+        using var c = Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT from_name,to_list,cc_list FROM mail ORDER BY date DESC LIMIT $n";
+        cmd.Parameters.AddWithValue("$n", limit);
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+            for (int i = 0; i < 3; i++)
+                if (!r.IsDBNull(i)) foreach (var n in r.GetString(i).Split(';', StringSplitOptions.RemoveEmptyEntries)) res.Add(n.Trim());
+        return res.ToList();
+    }
 }
 
 /// <summary>Plain text from PDF, Word (.docx) and text attachments, for the search index only.</summary>

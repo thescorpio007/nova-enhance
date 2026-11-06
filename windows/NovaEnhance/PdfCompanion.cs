@@ -206,7 +206,7 @@ class PdfPanel : NovaForm
         status = s.Add(Th.Wrap("", 9, Th.AccentText));
 
         s.Add(Th.Section("Ask about this PDF"));
-        ask = s.Add(Th.Box(false), true);
+        ask = s.Add(Th.Prose(Th.Box(false)), true);
         ask.PlaceholderText = "e.g. What is the fixing detail of the glass balustrade?";
         ask.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; Ask(ask.Text, false); } };
         var r0 = s.Add(Th.Row());
@@ -233,6 +233,18 @@ class PdfPanel : NovaForm
         var r3 = s.Add(Th.Row());
         r3.Controls.Add(Th.B("⧉ Copy", () => { if (lastAnswer.Length > 0) Clipboard.SetText(lastAnswer); }));
         r3.Controls.Add(Th.B("More detail", () => { if (lastQuestion.Length > 0) Ask(lastQuestion, true); else Summary(); }));
+        r3.Controls.Add(Th.B("👍", () =>
+        {
+            if (lastAnswer.Length == 0 || lastQuestion.Length == 0) { status.Text = "Ask a question first"; return; }
+            Memory.Good(lastQuestion, lastAnswer, path, new[] { path }, new[] { lastAnswer }, "pdf");
+            status.Text = "👍 🧠 Nova remembers this answer for similar questions on this PDF";
+        }));
+        r3.Controls.Add(Th.B("👎", () =>
+        {
+            if (lastQuestion.Length == 0) return;
+            Memory.Bad(lastQuestion, path, null, "pdf");
+            status.Text = "👎 Noted — Nova forgets that answer. Try More detail, or 📁 Search the project folder for the right file.";
+        }));
         r3.Controls.Add(Th.B("📌 Save as task", () =>
         {
             if (lastAnswer.Length == 0) { status.Text = "Ask or summarise first, then save it as a task."; return; }
@@ -323,9 +335,12 @@ class PdfPanel : NovaForm
 
     async void Ask(string q, bool detailed)
     {
+        if (q == ask.Text) { Speller.FixBeforeSearch(ask, () => Ask(ask.Text, detailed)); q = ask.Text; }
         q = (q ?? "").Trim();
         if (q.Length == 0) { ask.Focus(); return; }
         cts?.Cancel(); var my = cts = new CancellationTokenSource();
+        var (card, changed) = detailed ? ((KnowCard)null, (List<string>)null) : Memory.Find(q, path, "pdf");
+        if (card != null) ShowAnswer($"🧠 Nova remembers (you liked this on {card.Saved:dd MMM yyyy}):\n{card.A}" + (changed.Count > 0 ? "\n⚠ Changed since: " + string.Join(", ", changed) : "") + "\n↻ Checking again…");
         try
         {
             var all = await Text_();
@@ -339,14 +354,26 @@ class PdfPanel : NovaForm
             var sys = "You answer questions about ONE construction document (specification, drawing, report, letter). Use ONLY the page texts given; each starts with its page as [p.N]. " +
                       "After each fact put its page in square brackets, e.g. [p.3]. Quote exact values (dimensions, materials, ratings, references, revisions). " +
                       (detailed ? "Give a complete, structured answer. " : "Answer in 2 to 6 short lines, the direct answer first. ") +
-                      "If the document does not say, write so plainly. Reply in the language of the question." + Modes.ProfileNote();
+                      "If the document does not say, write so plainly. Reply in the language of the question." + FolderAsk.AdviceRule + Modes.ProfileNote();
             var a = await Ai.Chat(sys, $"Document: {Path.GetFileName(path)}\n\n{Extracts(pick, 60000)}\nQuestion: {q}", !detailed, false, prov, my.Token);
             if (my.IsCancellationRequested) return;
             History.Add("ask", prov.Id, Store.Model(prov.Id), "pdf", Path.GetFileName(path) + " · " + q, a);
             ShowAnswer(a);
-            status.Text = $"✓ Answer from this PDF · {prov.Label} — click a [p.N] to open that page";
+            status.Text = $"✓ Answer from this PDF · {prov.Label} — click a [p.N] to open that page" + Newer();
         }
         catch (Exception e) { if (!my.IsCancellationRequested) status.Text = "⚠ " + e.Message; }
+    }
+
+    /// <summary>"⚠ a newer revision is in the folder: …" when the folder index knows one.</summary>
+    string Newer()
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(path);
+            if (string.IsNullOrEmpty(dir) || !Revisions.Superseded(dir, path)) return "";
+            return " · ⚠ " + Revisions.Tag(dir, path);
+        }
+        catch { return ""; }
     }
 
     async void Summary()
@@ -369,7 +396,7 @@ class PdfPanel : NovaForm
             if (my.IsCancellationRequested) return;
             History.Add("ask", prov.Id, Store.Model(prov.Id), "pdf-check", Path.GetFileName(path), a);
             ShowAnswer(a);
-            status.Text = $"✓ Summary and check · {prov.Label}";
+            status.Text = $"✓ Summary and check · {prov.Label}" + Newer();
         }
         catch (Exception e) { if (!my.IsCancellationRequested) status.Text = "⚠ " + e.Message; }
     }

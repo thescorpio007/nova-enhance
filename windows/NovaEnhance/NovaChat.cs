@@ -217,7 +217,9 @@ class NovaChat
         using var doing = Log.Doing("Nova Chat · " + (text.Length > 60 ? text[..60] : text));
         var sources = new List<Src>();
         var notes = new List<string>();
-        var terms = FolderAsk.LocalTerms(text);
+        // Smart search: the search words are taken from the corrected text (the AI still sees what you typed).
+        var searchText = Speller.Correct(text).Text;
+        var terms = FolderAsk.LocalTerms(searchText);
 
         // Files the user attached: the most relevant parts of each.
         foreach (var f in (ctx["files"] as JsonArray ?? new JsonArray()).Select(x => x?.ToString()).Where(x => !string.IsNullOrEmpty(x)))
@@ -250,8 +252,8 @@ class NovaChat
                 await RunSta(() => FolderIndex.Search(folder, null, null, _ => { }, null, pg, CancellationToken.None, null));
                 tick.Change(Timeout.Infinite, Timeout.Infinite);
                 Post(new JsonObject { ["t"] = "progress", ["text"] = "Finding the right passages…" });
-                var expanded = await FolderAsk.Expand(text, null, CancellationToken.None);
-                var ps = await Task.Run(() => FolderIndex.Retrieve(folder, expanded, 14));
+                var expanded = await FolderAsk.Expand(searchText, null, CancellationToken.None);
+                var ps = await Task.Run(() => FolderIndex.Retrieve(folder, expanded, 14, 4, Memory.Boosts(expanded)));
                 bool send = true;
                 if (ps.Count > 0 && FolderAsk.Sees == "ask")
                 {

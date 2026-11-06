@@ -212,7 +212,7 @@ Rules:
         var body = h.NewPart.Length > 8000 ? h.NewPart[..8000] : h.NewPart;
         var sys = "You write email replies for the user. Write ONLY the reply body: no subject line, no notes. Use the language of the email. " +
                   "Clear, professional and concise, in the user's field terminology. Answer every question asked. If a fact is missing, put a short placeholder in [square brackets]. " +
-                  $"End with a short closing and the user's first name{(Me.FirstName.Length > 0 ? " (" + Me.FirstName + ")" : "")}." + Modes.ProfileNote();
+                  $"End with a short closing and the user's first name{(Me.FirstName.Length > 0 ? " (" + Me.FirstName + ")" : "")}." + Memory.StyleNote() + Modes.ProfileNote();
         var user = $"Email received from {h.FromName} on {h.Date:dd MMM yyyy}:\nSubject: {h.Subject}\n\n{body}" +
                    (string.IsNullOrWhiteSpace(instruction) ? "" : "\n\nThe user's instruction for the reply: " + instruction);
         var draft = await Ai.Chat(sys, user, false, false, null, ct);

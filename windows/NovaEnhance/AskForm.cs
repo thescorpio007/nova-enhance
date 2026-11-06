@@ -448,7 +448,7 @@ class AskForm : NovaForm
         qrow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         qrow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         qrow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        question = Th.Box(false);
+        question = Th.Prose(Th.Box(false));
         question.Font = Th.F(12);
         question.Dock = DockStyle.Fill;
         question.PlaceholderText = "e.g. Did Hamza send an email to Ibrahim while I was in Cc?";
@@ -498,7 +498,7 @@ class AskForm : NovaForm
         pane.OnHandled = MarkHandled;
 
         bottom = listHost.Add(Th.Row());
-        follow = Th.Box(false);
+        follow = Th.Prose(Th.Box(false));
         follow.Width = 360;
         follow.PlaceholderText = "Ask a follow-up… e.g. only with attachments";
         bottom.Controls.Add(follow);
@@ -585,6 +585,9 @@ class AskForm : NovaForm
 
     async void Run(string q, bool followUp)
     {
+        // Smart search: typos are corrected first (↩ under the box searches exactly as typed).
+        var box = followUp ? follow : question;
+        if (q == box.Text) { Speller.FixBeforeSearch(box, () => Run(box.Text, followUp)); q = box.Text; }
         q = (q ?? "").Trim();
         if (q.Length == 0) return;
         if (Store.EmailSource == "m365")

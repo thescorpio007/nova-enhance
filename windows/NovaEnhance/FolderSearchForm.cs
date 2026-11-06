@@ -79,7 +79,7 @@ class FolderSearchForm : NovaForm
         var frow = top.Add(new TableLayoutPanel { ColumnCount = 4, RowCount = 1, AutoSize = false, Height = 38, BackColor = Color.Transparent, Margin = new Padding(0, 6, 0, 2) }, true);
         frow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         for (int i = 0; i < 3; i++) frow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        folder = Th.Box(false); folder.Dock = DockStyle.Fill; folder.PlaceholderText = "Folder to search";
+        folder = Th.NoSpell(Th.Box(false)); folder.Dock = DockStyle.Fill; folder.PlaceholderText = "Folder to search";
         frow.Controls.Add(folder, 0, 0);
         var browse = Th.B("Change…", Browse); browse.Margin = new Padding(8, 0, 0, 0); frow.Controls.Add(browse, 1, 0);
         var recent = Th.B("Recent ▾", null); recent.Margin = new Padding(8, 0, 0, 0);
@@ -90,7 +90,7 @@ class FolderSearchForm : NovaForm
         var qrow = top.Add(new TableLayoutPanel { ColumnCount = 5, RowCount = 1, AutoSize = false, Height = 42, BackColor = Color.Transparent, Margin = new Padding(0, 4, 0, 2) }, true);
         qrow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         for (int i = 0; i < 4; i++) qrow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        query = Th.Box(false); query.Font = Th.F(12.5f); query.Dock = DockStyle.Fill;
+        query = Th.Prose(Th.Box(false)); query.Font = Th.F(12.5f); query.Dock = DockStyle.Fill;
         qrow.Controls.Add(query, 0, 0);
         searchBtn = Th.B("🔍 Search", Start, true); searchBtn.Margin = new Padding(8, 0, 0, 0); qrow.Controls.Add(searchBtn, 1, 0);
         micBtn = Th.B("🎤", ToggleMic); micBtn.Margin = new Padding(8, 0, 0, 0); micBtn.Visible = false; qrow.Controls.Add(micBtn, 2, 0);
@@ -126,9 +126,9 @@ class FolderSearchForm : NovaForm
             cb.SelectedIndexChanged += (_, _) => { Store.SetInt(key, cb.SelectedIndex); ShowRanges(); };
             return cb;
         }
-        fNames = Th.Box(false); fNames.Width = 260; fNames.PlaceholderText = "*.pdf; *.docx; *BOQ*  (empty = all)"; fNames.Text = Store.Str("win_fso_names");
+        fNames = Th.NoSpell(Th.Box(false)); fNames.Width = 260; fNames.PlaceholderText = "*.pdf; *.docx; *BOQ*  (empty = all)"; fNames.Text = Store.Str("win_fso_names");
         fNames.TextChanged += (_, _) => Store.Set("win_fso_names", fNames.Text);
-        fSkip = Th.Box(false); fSkip.Width = 260; fSkip.PlaceholderText = "Superseded; Archive; _old"; fSkip.Text = Store.Str("win_fso_skip");
+        fSkip = Th.NoSpell(Th.Box(false)); fSkip.Width = 260; fSkip.PlaceholderText = "Superseded; Archive; _old"; fSkip.Text = Store.Str("win_fso_skip");
         fSkip.TextChanged += (_, _) => Store.Set("win_fso_skip", fSkip.Text);
         cbModified = Combo("win_fso_mod", new[] { "Any time", "Last 7 days", "Last 30 days", "Last 12 months", "Between dates…" }, 0);
         dAfter = new DateTimePicker { Format = DateTimePickerFormat.Short, Width = 110, Value = DateTime.Today.AddMonths(-1) };
@@ -178,6 +178,8 @@ class FolderSearchForm : NovaForm
         arow.Controls.Add(Th.B("▾ More detail", () => Answer(true), true));
         arow.Controls.Add(Th.B("⧉ Copy", () => { if (answerBox.Text.Length > 0) Clipboard.SetText(answerBox.Text); }));
         arow.Controls.Add(Th.B("⇩ Save with sources", SaveAnswer));
+        arow.Controls.Add(Th.B("👍", Good));
+        arow.Controls.Add(Th.B("👎 Right file is…", Bad));
         arow.Controls.Add(Th.B("✚ New question", () => { history = ""; lastQuestion = ""; query.Text = ""; answerBox.Text = ""; query.Focus(); status.Text = "New question — the conversation was cleared"; }));
         answerPanel.Controls.Add(arow);
 
@@ -570,6 +572,7 @@ class FolderSearchForm : NovaForm
     {
         if (askMode) { AskAi(); return; }
         var root = CurrentRoot();
+        Speller.FixBeforeSearch(query, Start);
         var q = query.Text.Trim();
         if (q.Length == 0) { status.Text = "Type what you're looking for"; query.Focus(); return; }
         if (!CheckRoot(root)) return;
@@ -839,9 +842,14 @@ class FolderSearchForm : NovaForm
         catch (Exception e) { micBtn.Text = "🎤"; micBtn.BackColor = Th.Card2; status.Text = "⚠ Voice: " + e.Message; }
     }
 
+    List<string> lastTerms = new();
+    string searchedNote = "";
+    KnowCard remembered;
+
     async void AskAi()
     {
         var root = CurrentRoot();
+        Speller.FixBeforeSearch(query, AskAi);
         var q = query.Text.Trim();
         if (q.Length == 0) { status.Text = "Type your question"; query.Focus(); return; }
         if (!CheckRoot(root)) return;
@@ -854,12 +862,25 @@ class FolderSearchForm : NovaForm
         stopBtn.Enabled = true;
         ClearResults();
         answerBox.Text = ""; answerPanel.Visible = false;
+        remembered = null;
         try
         {
             using var doing = Log.Doing($"Ask AI “{q}” in {GDrive.Display(root)}");
+
+            // 🧠 Asked before? Show the remembered answer at once, then check the folder again.
+            var (card, changed) = Memory.Find(q, root);
+            if (card != null)
+            {
+                remembered = card;
+                answerPanel.Visible = true;
+                ShowAnswer($"🧠 NOVA REMEMBERS (you liked this answer on {card.Saved:dd MMM yyyy})\n{card.A}\n" +
+                           (changed.Count > 0 ? "⚠ Changed since then: " + string.Join(", ", changed.Take(4)) + " — re-checking now…" : "↻ Re-checking the folder now…"));
+            }
+
             status.Text = Ai.Active() != null ? "✦ Understanding your question…" : "Searching with your words (no AI key)…";
             var terms = await FolderAsk.Expand(q, history.Length > 0 ? lastQuestion : null, my.Token);
-            termsLbl.Text = "Searched for: " + string.Join(" · ", terms);
+            lastTerms = terms;
+            termsLbl.Text = "🔍 What Nova searched: " + string.Join(" · ", terms);
             matcher = new Matcher(string.Join(" ", terms), "any", false, false);
 
             pg = new FolderIndex.Progress();
@@ -871,12 +892,28 @@ class FolderSearchForm : NovaForm
             await OfferVisionAsync(root);
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            passages = await Task.Run(() => FolderIndex.Retrieve(root, terms, 14));
-            answerPanel.Visible = true;
-            top.FitAll();
+            var boosts = Memory.Boosts(terms);
+            passages = await Task.Run(() => FolderIndex.Retrieve(root, terms, 14, 4, boosts));
+            bool deep = false;
             if (passages.Count == 0)
             {
-                answerBox.Text = "Not found in this folder. Try other words, or check that the file types are switched on (⚙ File types & OCR).";
+                // Deep search: wider words, more passages, file and BOQ titles.
+                status.Text = "✦ Nothing yet — deep search with wider words…";
+                terms = await FolderAsk.Expand(q, history.Length > 0 ? lastQuestion : null, my.Token, true);
+                lastTerms = terms; deep = true;
+                matcher = new Matcher(string.Join(" ", terms), "any", false, false);
+                passages = await Task.Run(() => FolderIndex.Retrieve(root, terms, 40, 6, Memory.Boosts(terms), true));
+            }
+            answerPanel.Visible = true;
+            top.FitAll();
+            var superseded = passages.Count(x => Revisions.Superseded(root, x.Path));
+            searchedNote = $"🔍 What Nova searched: {string.Join(" · ", terms)}\n    {p.Files:N0} files in the folder · {passages.Count} passages from {passages.Select(x => x.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count()} files" +
+                           (deep ? " · deep search ✓" : "") + (superseded > 0 ? $" · {superseded} from superseded revisions (ranked last)" : "") +
+                           (boosts.Count > 0 ? " · 🧠 files you confirmed before ranked first" : "");
+            termsLbl.Text = searchedNote;
+            if (passages.Count == 0)
+            {
+                answerBox.Text = "Not found in this folder, even with the deep search. Try other words, or check that the file types are switched on (⚙ File types & OCR).";
                 status.Text = $"✓ Folder read · {p.Files:N0} files · nothing matched";
                 return;
             }
@@ -893,26 +930,88 @@ class FolderSearchForm : NovaForm
                     : "Passages only — Settings → Folder search: the AI doesn't read your files. The best passages are listed below.";
                 return;
             }
-            if (sees == "ask")
-            {
-                var chars = passages.Sum(x => x.Text.Length);
-                var byFile = passages.GroupBy(x => Path.GetFileName(x.Path)).Select(g => $"{g.Key} ({g.Count()})");
-                var choice = ConfirmSend.Ask(this, $"✦ Send {passages.Count} extracts to {Ai.Active().Label}?",
-                    $"To answer, Nova sends {passages.Count} short passages (about {chars:N0} characters) from {nFiles} file{(nFiles == 1 ? "" : "s")} of this folder. Nothing else leaves the PC.\n" + string.Join(" · ", byFile.Take(6)) + (nFiles > 6 ? $" · +{nFiles - 6} files" : ""),
-                    FolderAsk.Extracts(passages), "Send and answer", true);
-                if (choice != ConfirmSend.Choice.Send)
-                {
-                    answerBox.Text = choice == ConfirmSend.Choice.PassagesOnly ? "Passages only — nothing was sent. The best passages are listed below." : "Cancelled — nothing was sent.";
-                    return;
-                }
-            }
+            if (sees == "ask" && !Confirm(nFiles)) return;
             await Answer(false, my.Token);
+
+            // The extracts didn't hold the answer: one deep search with wider words (asked again before sending more).
+            if (!deep && FolderAsk.NotFound(lastAnswer) && !my.IsCancellationRequested)
+            {
+                status.Text = "✦ Not in those passages — deep search with wider words…";
+                terms = await FolderAsk.Expand(q, null, my.Token, true);
+                lastTerms = terms;
+                matcher = new Matcher(string.Join(" ", terms), "any", false, false);
+                var more = await Task.Run(() => FolderIndex.Retrieve(root, terms, 40, 6, Memory.Boosts(terms), true));
+                if (more.Count > passages.Count / 2)
+                {
+                    passages = more;
+                    nFiles = passages.Select(x => x.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+                    termsLbl.Text = searchedNote = $"🔍 What Nova searched (deep search ✓): {string.Join(" · ", terms)}\n    {p.Files:N0} files in the folder · {passages.Count} passages from {nFiles} files, file and BOQ titles included";
+                    ShowSources(Enumerable.Range(0, passages.Count).ToList());
+                    if (sees != "ask" || Confirm(nFiles)) await Answer(false, my.Token);
+                }
+                status.Text = FolderAsk.NotFound(lastAnswer) ? "Not found, even with the deep search — 👎 tells Nova which file is right" : "✓ Found with the deep search";
+            }
         }
         catch (Exception e)
         {
             if (!my.IsCancellationRequested) { status.Text = "⚠ " + e.Message; Log.Error("Ask AI · folder", e); }
         }
         finally { asking = false; stopBtn.Enabled = false; bar.Visible = false; }
+    }
+
+    bool Confirm(int nFiles)
+    {
+        var chars = passages.Sum(x => x.Text.Length);
+        var byFile = passages.GroupBy(x => Path.GetFileName(x.Path)).Select(g => $"{g.Key} ({g.Count()})");
+        var choice = ConfirmSend.Ask(this, $"✦ Send {passages.Count} extracts to {Ai.Active().Label}?",
+            $"To answer, Nova sends {passages.Count} short passages (about {chars:N0} characters) from {nFiles} file{(nFiles == 1 ? "" : "s")} of this folder. Nothing else leaves the PC.\n" + string.Join(" · ", byFile.Take(6)) + (nFiles > 6 ? $" · +{nFiles - 6} files" : ""),
+            FolderAsk.Extracts(passages), "Send and answer", true);
+        if (choice == ConfirmSend.Choice.Send) return true;
+        answerBox.Text = choice == ConfirmSend.Choice.PassagesOnly ? "Passages only — nothing was sent. The best passages are listed below." : "Cancelled — nothing was sent.";
+        return false;
+    }
+
+    /// <summary>👍 Nova remembers this answer, its files and their words.</summary>
+    void Good()
+    {
+        if (lastAnswer.Length == 0 || FolderAsk.NotFound(lastAnswer)) { status.Text = "Ask a question first"; return; }
+        var cited = FolderAsk.CitedOrder(lastAnswer, passages.Count).Take(6).Select(i => passages[i]).ToList();
+        Memory.Good(lastQuestion, FolderAsk.WithSources(lastAnswer, passages), lastRoot, cited.Select(x => x.Path), cited.Select(x => x.Text));
+        status.Text = "👍 Thanks — 🧠 Nova remembers this answer and its files for similar questions (Settings → 🧠 What Nova knows)";
+    }
+
+    /// <summary>👎 Which file has the right answer? Nova ranks it first next time and answers again from it.</summary>
+    async void Bad()
+    {
+        if (lastQuestion.Length == 0) { status.Text = "Ask a question first"; return; }
+        var files = passages.Select(x => x.Path).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var menu = new ContextMenuStrip { Font = Th.F(10), ShowImageMargin = false };
+        menu.Items.Add(new ToolStripLabel("👎 Which file has the right answer?") { Font = Th.F(9, true), ForeColor = Color.Gray });
+        string pick = null;
+        var done = new TaskCompletionSource<bool>();
+        foreach (var f in files.Take(15)) { var ff = f; menu.Items.Add(Path.GetFileName(ff), null, (_, _) => { pick = ff; done.TrySetResult(true); }); }
+        menu.Items.Add("📂 Another file… (browse)", null, (_, _) =>
+        {
+            using var d = new OpenFileDialog { InitialDirectory = Directory.Exists(lastRoot) ? lastRoot : "", Title = "The file with the right answer" };
+            if (d.ShowDialog(this) == DialogResult.OK) pick = d.FileName;
+            done.TrySetResult(true);
+        });
+        menu.Items.Add("Just forget this answer", null, (_, _) => done.TrySetResult(true));
+        menu.Closed += (_, e) => { if (e.CloseReason != ToolStripDropDownCloseReason.ItemClicked) done.TrySetResult(false); };
+        menu.Show(Cursor.Position);
+        if (!await done.Task) return;
+        Memory.Bad(lastQuestion, lastRoot, pick);
+        if (pick == null) { status.Text = "👎 Noted — Nova won't offer that answer again"; return; }
+        status.Text = $"👎 Noted — {Path.GetFileName(pick)} ranks first for questions like this. Answering again from it…";
+        var mine = await Task.Run(() => FolderIndex.Retrieve(lastRoot, lastTerms, 40, 8, new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase) { [pick] = 50 }, true));
+        var fromPick = mine.Where(x => x.Path.Equals(pick, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (fromPick.Count == 0) { status.Text = $"👎 Noted. {Path.GetFileName(pick)} has no readable passages with these words yet (search the folder once so Nova reads it)."; return; }
+        passages = fromPick.Concat(passages.Where(x => !x.Path.Equals(pick, StringComparison.OrdinalIgnoreCase))).Take(18).ToList();
+        ShowSources(Enumerable.Range(0, passages.Count).ToList());
+        if (FolderAsk.Sees == "never" || Ai.Active() == null) return;
+        if (FolderAsk.Sees == "ask" && !Confirm(passages.Select(x => x.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count())) return;
+        history = "";
+        await Answer(false, CancellationToken.None);
     }
 
     async void Answer(bool detailed) => await Answer(detailed, CancellationToken.None);
@@ -927,7 +1026,9 @@ class FolderSearchForm : NovaForm
         {
             var a = await FolderAsk.Answer(lastQuestion, passages, detailed, detailed ? "" : history, ct);
             lastAnswer = a;
-            ShowAnswer((detailed ? "✦ DETAILED ANSWER\n" : "✦ ANSWER\n") + FolderAsk.WithSources(a, passages));
+            var head = detailed ? "✦ DETAILED ANSWER\n" : "✦ ANSWER\n";
+            if (remembered != null && !detailed) head = $"✦ ANSWER (checked again now — 🧠 Nova also remembered an answer from {remembered.Saved:dd MMM yyyy})\n";
+            ShowAnswer(head + FolderAsk.WithSources(a, passages));
             if (!detailed) history += $"Q: {lastQuestion}\nA: {a}\n";
             ShowSources(FolderAsk.CitedOrder(a, passages.Count));
         }
@@ -953,9 +1054,17 @@ class FolderSearchForm : NovaForm
             answerBox.Select(start, line.l.Length);
             answerBox.SelectionColor = Th.Warn;
         }
+        // 🎓 Architect's advice: general knowledge, shown apart from the answer.
+        var adv = answerBox.Text.IndexOf("🎓", StringComparison.Ordinal);
+        if (adv >= 0)
+        {
+            answerBox.Select(adv, answerBox.TextLength - adv);
+            answerBox.SelectionColor = Color.FromArgb(0x8F, 0xD6, 0xB4);
+            answerBox.SelectionFont = Th.F(10f);
+        }
         answerBox.Select(0, 0);
         var lines = answerBox.GetLineFromCharIndex(Math.Max(0, answerBox.TextLength - 1)) + 1;
-        answerBox.Height = Math.Clamp(lines * (answerBox.Font.Height + 3) + 14, 60, 300);
+        answerBox.Height = Math.Clamp(lines * (answerBox.Font.Height + 3) + 14, 60, 380);
         answerBox.Width = Math.Max(300, top.ClientSize.Width - 40);
         top.FitAll();
     }

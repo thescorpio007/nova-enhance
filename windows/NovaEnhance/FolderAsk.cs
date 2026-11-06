@@ -28,17 +28,26 @@ static class FolderAsk
     public static List<string> LocalTerms(string q) =>
         Regex.Matches(q ?? "", @"[\p{L}\p{N}][\p{L}\p{N}\-\./]*").Select(m => m.Value.Trim('.', '-')).Where(w => w.Length > 1 && !Stop.Contains(w)).Distinct(StringComparer.OrdinalIgnoreCase).Take(12).ToList();
 
+    const string DeepSystem =
+        "The first search of the user's project documents found nothing. Give a WIDER set of search terms. Reply with JSON only: {\"terms\":[\"…\"]} with 15 to 28 short terms: " +
+        "the broader element or system, the usual specification section names and numbers (CSI MasterFormat, e.g. 08 71 00 Door Hardware, 32 93 00 Plants), BOQ item descriptions, " +
+        "drawing title words, manufacturer-neutral product names, materials, standards (BS EN, ASTM, NFPA, UAE Fire Code), units and abbreviations. No sentences.";
+
     /// <summary>Only the question (and the previous question for a follow-up) goes to the AI here.</summary>
-    public static async Task<List<string>> Expand(string question, string previousQuestion, CancellationToken ct)
+    public static async Task<List<string>> Expand(string question, string previousQuestion, CancellationToken ct, bool deep = false)
     {
         var local = LocalTerms(question);
-        if (Ai.Active() == null) return local;
+        // 🧠 Project vocabulary: SLV ↔ Sea La Vie, GFRC ↔ Glass Fibre Reinforced Concrete …
+        var vocab = Memory.VocabFor(question);
+        foreach (var (a, f) in vocab) { local.Add(a); local.Add(f); }
+        if (Ai.Active() == null) return local.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         try
         {
-            var user = (string.IsNullOrWhiteSpace(previousQuestion) ? "" : "Previous question (context): " + previousQuestion + "\n") + "Question: " + question;
-            var j = Ai.ParseJson(await Ai.Chat(ExpandSystem, user, true, true, null, ct));
+            var user = (string.IsNullOrWhiteSpace(previousQuestion) ? "" : "Previous question (context): " + previousQuestion + "\n") +
+                       (vocab.Count > 0 ? "Project vocabulary: " + string.Join("; ", vocab.Select(v => v.Abbr + " = " + v.Full)) + "\n" : "") + "Question: " + question;
+            var j = Ai.ParseJson(await Ai.Chat(deep ? DeepSystem : ExpandSystem, user, true, true, null, ct));
             var terms = (j["terms"] as JsonArray)?.Select(x => x?.ToString()?.Trim()).Where(x => !string.IsNullOrEmpty(x)).ToList() ?? new();
-            return terms.Concat(local).Distinct(StringComparer.OrdinalIgnoreCase).Take(24).ToList();
+            return terms.Concat(local).Distinct(StringComparer.OrdinalIgnoreCase).Take(deep ? 36 : 24).ToList();
         }
         catch (Exception e) { Log.Error("ask folder terms", e); return local; }
     }
@@ -49,19 +58,35 @@ static class FolderAsk
         return $"{Path.GetFileName(p.Path)} · {where}";
     }
 
+    /// <summary>[3] Spec.pdf · page 14 — Specification · latest, Rev C of 3</summary>
     public static string Extracts(List<FolderIndex.Passage> ps)
     {
         var sb = new StringBuilder();
         for (int i = 0; i < ps.Count; i++)
-            sb.Append('[').Append(i + 1).Append("] ").Append(Label(ps[i])).Append('\n').Append(ps[i].Text.Trim()).Append("\n\n");
+        {
+            var kind = Revisions.KindOf(ps[i].Path);
+            var rev = ps[i].Root != null ? Revisions.Tag(ps[i].Root, ps[i].Path) : "";
+            var tags = string.Join(" · ", new[] { kind, rev }.Where(x => x.Length > 0));
+            sb.Append('[').Append(i + 1).Append("] ").Append(Label(ps[i])).Append(tags.Length > 0 ? " — " + tags : "").Append('\n').Append(ps[i].Text.Trim()).Append("\n\n");
+        }
         return sb.ToString();
     }
+
+    const string Checks =
+        " Each extract is labelled with its document type (Specification, BOQ, Drawing, RFI, Letter/email, Report) and revision when known. " +
+        "Use the LATEST revision; if you take a value from an extract marked SUPERSEDED, say so on that line starting with ⚠ (e.g. ⚠ from Rev B — superseded by Rev C). " +
+        "Cross-check: when the specification, BOQ, drawings, RFIs or letters give different values for the same item, add a line starting with ⚠ CONFLICT: that names both values and cites both. ";
+
+    public static string AdviceRule => Memory.AdviceOn
+        ? " After the answer, add one empty line, then a line exactly '🎓 ARCHITECT'S ADVICE (general knowledge, not from your documents):' followed by 1 to 3 short practical lines " +
+          "(usual good practice, typical values, standards or a coordination point to check) for an architect in the UAE. Never cite [numbers] in that section and never present it as coming from the documents."
+        : "";
 
     const string ShortRules =
         "You answer questions about project documents using ONLY the numbered extracts given. Reply in the language of the question. " +
         "Answer in 2 to 5 short lines. Give exact values (dimensions, ratings, codes, clause numbers, dates). After each fact put its source number in square brackets, e.g. [3]. " +
         "If two extracts disagree, write that line starting with ⚠ and cite both. " +
-        "If the extracts do not contain the answer, reply with: NOT FOUND — then one short line suggesting other words to search.";
+        "If the extracts do not contain the answer, start your reply with: NOT FOUND — then one short line suggesting other words to search.";
 
     const string DetailRules =
         "You answer questions about project documents using ONLY the numbered extracts given. Reply in the language of the question. " +
@@ -72,13 +97,15 @@ static class FolderAsk
     /// <summary>The extracts go to the AI here — only after the user agreed (or chose "send without asking").</summary>
     public static async Task<string> Answer(string question, List<FolderIndex.Passage> ps, bool detailed, string history, CancellationToken ct)
     {
-        var sys = (detailed ? DetailRules : ShortRules) + Modes.ProfileNote();
+        var sys = (detailed ? DetailRules : ShortRules) + Checks + AdviceRule + Modes.ProfileNote();
         var user = (string.IsNullOrWhiteSpace(history) ? "" : "Earlier in this conversation:\n" + history + "\n\n") +
                    "Extracts:\n" + Extracts(ps) + "Question: " + question;
         var a = await Ai.Chat(sys, user, !detailed, false, null, ct);
         History.Add("ask", Ai.Active()?.Id ?? "", "", detailed ? "folder-detail" : "folder", question, a);
         return a;
     }
+
+    public static bool NotFound(string answer) => Regex.IsMatch(answer ?? "", @"^\W{0,3}NOT FOUND", RegexOptions.IgnoreCase);
 
     /// <summary>[3] → [Specification.pdf · page 14]</summary>
     public static string WithSources(string answer, List<FolderIndex.Passage> ps) =>

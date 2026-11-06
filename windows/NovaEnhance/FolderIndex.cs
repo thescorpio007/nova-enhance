@@ -706,7 +706,7 @@ static class FolderIndex
     }
 
     /// <summary>The most relevant pieces of the folder for these words (full-text ranking), at most 4 per file.</summary>
-    public static List<Passage> Retrieve(string root, List<string> words, int max = 14)
+    public static List<Passage> Retrieve(string root, List<string> words, int max = 14, int perFileMax = 4, Dictionary<string, double> boosts = null, bool deep = false)
     {
         root = NormalRoot(root);
         var pre = Prefix(root);
@@ -723,13 +723,13 @@ static class FolderIndex
                 return toks.Count == 0 ? null : "\"" + string.Join(" ", toks) + "\"";
             }).Where(x => x != null).Distinct());
             cmd.CommandText = "SELECT f.path,f.kind,f.remote,s.loc,s.go,s.text,bm25(segs_fts) AS sc FROM segs_fts JOIN segs s ON s.id=segs_fts.rowid JOIN files f ON f.id=s.file_id " +
-                              "WHERE segs_fts MATCH $q AND lower(substr(f.path,1,$n))=lower($p) ORDER BY sc LIMIT 300";
+                              "WHERE segs_fts MATCH $q AND lower(substr(f.path,1,$n))=lower($p) ORDER BY sc LIMIT " + (deep ? 1200 : 300);
             cmd.Parameters.AddWithValue("$q", q);
         }
         else
         {
             cmd.CommandText = "SELECT f.path,f.kind,f.remote,s.loc,s.go,s.text,0 FROM segs s JOIN files f ON f.id=s.file_id WHERE lower(substr(f.path,1,$n))=lower($p) AND (" +
-                              string.Join(" OR ", terms.Select((t, i) => $"s.text LIKE $w{i}")) + ") LIMIT 300";
+                              string.Join(" OR ", terms.Select((t, i) => $"s.text LIKE $w{i}")) + ") LIMIT " + (deep ? 1200 : 300);
             for (int i = 0; i < terms.Count; i++) cmd.Parameters.AddWithValue("$w" + i, "%" + terms[i] + "%");
         }
         cmd.Parameters.AddWithValue("$n", pre.Length); cmd.Parameters.AddWithValue("$p", pre);
@@ -743,11 +743,16 @@ static class FolderIndex
                 });
         // Prefer pieces that contain more of the different words; at most 4 per file.
         foreach (var p in rows) p.Score -= terms.Count(t => p.Text.Contains(t, StringComparison.OrdinalIgnoreCase)) * 2.0;
+        // 🧠 Files you liked or pointed to for similar questions rank higher; the latest revision ranks before superseded ones.
+        if (boosts != null) foreach (var p in rows) if (boosts.TryGetValue(p.Path, out var b)) p.Score -= Math.Min(12, b * 3);
+        foreach (var p in rows) if (Revisions.Superseded(root, p.Path)) p.Score += 3;
+        // Deep search: file names and titles count too (a BOQ or drawing title that matches).
+        if (deep) foreach (var p in rows) p.Score -= terms.Count(t => System.IO.Path.GetFileName(p.Path).Contains(t, StringComparison.OrdinalIgnoreCase)) * 2.5;
         var perFile = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        foreach (var p in rows.Where(p => p.Loc != "file name").OrderBy(p => p.Score))
+        foreach (var p in rows.Where(p => deep || p.Loc != "file name").OrderBy(p => p.Score))
         {
             perFile.TryGetValue(p.Path, out var n);
-            if (n >= 4) continue;
+            if (n >= perFileMax) continue;
             perFile[p.Path] = n + 1;
             p.Text = Window(p.Text, terms, 750);
             res.Add(p);

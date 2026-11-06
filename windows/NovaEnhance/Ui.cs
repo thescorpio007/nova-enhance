@@ -80,15 +80,20 @@ static class Th
 
     public static TextBox Box(bool multi, int lines = 4, bool password = false)
     {
-        var t = new TextBox
-        {
-            Multiline = multi, BackColor = Card, ForeColor = Text, BorderStyle = BorderStyle.FixedSingle, Font = F(10.5f),
-            ScrollBars = multi ? ScrollBars.Vertical : ScrollBars.None, AcceptsReturn = multi, UseSystemPasswordChar = password,
-            Margin = new Padding(0, 0, 0, 6), WordWrap = true
-        };
+        // Every box spell-checks as you type (red = spelling, blue = grammar), except passwords and keys.
+        TextBox t = password ? new TextBox() : new SpellBox();
+        t.Multiline = multi; t.BackColor = Card; t.ForeColor = Text; t.BorderStyle = BorderStyle.FixedSingle; t.Font = F(10.5f);
+        t.ScrollBars = multi ? ScrollBars.Vertical : ScrollBars.None; t.AcceptsReturn = multi; t.UseSystemPasswordChar = password;
+        t.Margin = new Padding(0, 0, 0, 6); t.WordWrap = true;
         if (multi) t.Height = (int)(t.Font.Height * lines) + 12;
         return t;
     }
+
+    /// <summary>A box for paths or file patterns: no spelling lines.</summary>
+    public static TextBox NoSpell(TextBox t) { if (t is SpellBox s) s.Off = true; return t; }
+
+    /// <summary>A question box: grammar is checked too when you pause.</summary>
+    public static TextBox Prose(TextBox t) { if (t is SpellBox s) s.Prose = true; return t; }
 
     public static CheckBox Check(string s, bool on, Action<bool> changed)
     {

@@ -42,7 +42,7 @@ static class Backup
         root["windows"] = Encrypt(win.ToJsonString(), password);
         var work = new JsonArray();
         try { foreach (var f in Directory.GetFiles(Work.Dir, "*.json")) work.Add(File.ReadAllText(f)); } catch { }
-        var extra = new JsonObject { ["secrets"] = winSecrets, ["originals"] = OriginalsText(), ["work"] = work };
+        var extra = new JsonObject { ["secrets"] = winSecrets, ["originals"] = OriginalsText(), ["work"] = work, ["memory"] = Memory.Export() };
         root["windows_extra"] = Encrypt(extra.ToJsonString(), password);
         return root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
     }
@@ -154,7 +154,8 @@ static class Backup
                         if (!File.Exists(file)) { File.WriteAllText(file, w, new UTF8Encoding(false)); nw++; }
                     }
                     catch { }
-                extraNote = $" · {ns} sign-in(s) restored (Google Drive) · {no} original(s) restored · {nw} task(s) restored (My Work)";
+                int nm = Memory.Import(x["memory"]?.ToString());
+                extraNote = $" · {ns} sign-in(s) restored (Google Drive) · {no} original(s) restored · {nw} task(s) restored (My Work) · {nm} item(s) restored (🧠 Nova Memory)";
             }
             catch { extraNote = " · Google Drive sign-in and originals NOT restored (wrong password)"; }
         }
