@@ -334,11 +334,10 @@ class AskForm : NovaForm
         examples.Controls.Add(Th.Section("Try asking"));
         foreach (var ex in new[]
                  {
-                     "What is still waiting for my reply this week?",
+                     "Which emails addressed to me this week are still awaiting my reply?",
                      "Emails from the consultant about the façade drawings last month, not answered",
                      "Find the RFI where structural asked about the slab openings",
-                     "Which of my emails got no answer after 3 days?",
-                     "هل أرسل حمزة الرسومات المعدلة؟"
+                     "Which of my emails got no answer after 3 days?"
                  })
         {
             var b = Th.B("“" + ex + "”", () => { question.Text = ex; Run(ex, false); });

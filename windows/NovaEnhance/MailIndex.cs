@@ -361,6 +361,7 @@ static class MailIndex
             string sentId = "";
             try { sentId = Outlook.S(() => ns.GetDefaultFolder(5).EntryID); } catch { }
             var cutoff = Store.CutOff;
+            Status = "Preparing the index — checking your mailboxes and archives…";
             // Emails from me filed in other folders count as sent (fixes rows indexed before build 19).
             foreach (var a in Me.Addrs) Exec(c, "UPDATE mail SET sent=1 WHERE sent=0 AND from_addr=$a COLLATE NOCASE", ("$a", a));
             if (Me.Name.Length > 0) Exec(c, "UPDATE mail SET sent=1 WHERE sent=0 AND from_name=$n COLLATE NOCASE", ("$n", Me.Name));
@@ -507,6 +508,7 @@ static class MailIndex
     static void IndexOne(SqliteConnection c, dynamic folder, string id, string name, string path, string storeId, string sentId, DateTime cutoff)
     {
         if (!doneThisPass.Add(id)) return;
+        Status = $"Checking {storeName} › {path}…";
         int total = 0;
         try { total = (int)folder.Items.Count; } catch { }
         // Older rows (before build 19) get their folder id now; no rebuild needed.
