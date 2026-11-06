@@ -52,6 +52,10 @@ Name: "{autodesktop}\Nova Enhance"; Filename: "{app}\NovaEnhance.exe"; Tasks: de
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Nova Enhance"; ValueData: """{app}\NovaEnhance.exe"" --tray"; Flags: uninsdeletevalue
 
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\NovaEnhance.Search"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\NovaEnhance.Search"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Drive\shell\NovaEnhance.Search"; Flags: uninsdeletekey
+
 [Run]
 Filename: "{app}\NovaEnhance.exe"; Description: "Start Nova Enhance"; Flags: nowait postinstall skipifsilent
 Filename: "{app}\NovaEnhance.exe"; Parameters: "--tray"; Flags: nowait; Check: WizardSilent

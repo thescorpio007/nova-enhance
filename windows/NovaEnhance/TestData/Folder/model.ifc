@@ -1,0 +1,5 @@
+ISO-10303-21;
+DATA;
+#10=IFCWALL('2O2Fr$t4X7Zf8NOew3FLOH',#5,'Curtain wall CW-01','Bracket A-201 Rev C',$,#20,#30,$);
+ENDSEC;
+END-ISO-10303-21;

@@ -10,6 +10,7 @@ static class Program
     public static int Build => Assembly.GetExecutingAssembly().GetName().Version?.Build ?? 0;
     public static SynchronizationContext UiContext;
     public static NotifyIcon Tray;
+    public static string StartSearch;
 
     [STAThread]
     static int Main(string[] args)
@@ -17,13 +18,26 @@ static class Program
         if (args.Contains("--smoke")) return Smoke.Run(args);
         if (args.Contains("--update-selftest")) return Updater.SelfTest(args);
 
+        // Right-click a folder → "Search inside with Nova" starts NovaEnhance.exe --search "<folder>".
+        var searchIdx = Array.IndexOf(args, "--search");
+        var searchPath = searchIdx >= 0 && searchIdx + 1 < args.Length ? args[searchIdx + 1] : null;
+
         using var mutex = new Mutex(true, "NovaEnhanceWindows-single", out bool first);
         if (!first)
         {
-            // Already running: ask it to open Settings.
-            try { EventWaitHandle.OpenExisting("NovaEnhanceWindows-show").Set(); } catch { }
+            try
+            {
+                if (searchPath != null)
+                {
+                    File.WriteAllText(Path.Combine(Paths.Cache, "search-request.txt"), searchPath);
+                    EventWaitHandle.OpenExisting("NovaEnhanceWindows-search").Set();
+                }
+                else EventWaitHandle.OpenExisting("NovaEnhanceWindows-show").Set();   // already running: open Settings
+            }
+            catch { }
             return 0;
         }
+        StartSearch = searchPath;
 
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         Application.EnableVisualStyles();
@@ -33,7 +47,7 @@ static class Program
         AppDomain.CurrentDomain.UnhandledException += (_, e) => Log.Write("crash: " + e.ExceptionObject);
         TaskScheduler.UnobservedTaskException += (_, e) => { Log.Error("task", e.Exception); e.SetObserved(); };
 
-        Application.Run(new NovaContext(args.Contains("--tray")));
+        Application.Run(new NovaContext(args.Contains("--tray") || StartSearch != null));
         return 0;
     }
 
@@ -49,7 +63,7 @@ class NovaContext : ApplicationContext
     readonly NotifyIcon tray;
     readonly HotkeyWindow hot;
     readonly System.Windows.Forms.Timer timer;
-    readonly EventWaitHandle showEvt;
+    readonly EventWaitHandle showEvt, searchEvt;
     int ticks;
 
     public NovaContext(bool startedWithWindows)
@@ -58,12 +72,14 @@ class NovaContext : ApplicationContext
         Paths.Ensure();
         Store.Load();
         Startup.Apply();
+        ExplorerMenu.Apply();
 
         tray = new NotifyIcon { Icon = Th.AppIcon, Text = "Nova Enhance", Visible = true };
         Program.Tray = tray;
         var m = new ContextMenuStrip { Font = Th.F(10) };
         m.Items.Add("✦  Enhance selected text      Ctrl+Shift+E", null, (_, _) => Screens.Enhance());
         m.Items.Add("🔍  Ask Nova about my email   Ctrl+Shift+F", null, (_, _) => Screens.Ask());
+        m.Items.Add("📁  Search inside a folder…", null, (_, _) => Screens.FolderSearch(null));
         m.Items.Add("☀  Morning brief", null, (_, _) => Screens.Brief());
         m.Items.Add(new ToolStripSeparator());
         m.Items.Add("⚙  Settings", null, (_, _) => Screens.Settings());
@@ -80,13 +96,25 @@ class NovaContext : ApplicationContext
 
         showEvt = new EventWaitHandle(false, EventResetMode.AutoReset, "NovaEnhanceWindows-show");
         ThreadPool.RegisterWaitForSingleObject(showEvt, (_, _) => Program.UiContext.Post(_ => Screens.Settings(), null), null, -1, false);
+        searchEvt = new EventWaitHandle(false, EventResetMode.AutoReset, "NovaEnhanceWindows-search");
+        ThreadPool.RegisterWaitForSingleObject(searchEvt, (_, _) =>
+        {
+            string p = null;
+            try { var f = Path.Combine(Paths.Cache, "search-request.txt"); p = File.ReadAllText(f); File.Delete(f); } catch { }
+            Program.UiContext.Post(_ => Screens.FolderSearch(p), null);
+        }, null, -1, false);
 
         MailIndex.Start();
 
         timer = new System.Windows.Forms.Timer { Interval = 60_000 };
         timer.Tick += (_, _) => Tick();
         timer.Start();
-        Program.UiContext.Post(_ => { FirstRun(startedWithWindows); Tick(); }, null);
+        Program.UiContext.Post(_ =>
+        {
+            if (Program.StartSearch != null) Screens.FolderSearch(Program.StartSearch);
+            FirstRun(startedWithWindows);
+            Tick();
+        }, null);
     }
 
     void FirstRun(bool startedWithWindows)
@@ -157,6 +185,14 @@ static class Screens
     static AskForm ask;
     static SettingsForm set;
     static BriefForm brief;
+    static FolderSearchForm folder;
+
+    public static void FolderSearch(string path)
+    {
+        if (folder == null || folder.IsDisposed) folder = new FolderSearchForm();
+        Show(folder);
+        folder.Begin(path);
+    }
 
     public static async void Enhance()
     {

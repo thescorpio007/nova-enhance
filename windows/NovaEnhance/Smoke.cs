@@ -84,6 +84,7 @@ static class Smoke
             Ok(DocText.Extract(t).Contains("hello"), "Attachment text");
             Ok(UpdateKey.Modulus.Length > 300, "Update key built in");
 
+            FolderTest(data);
             Forms();
         }
         catch (Exception e) { Ok(false, "crash: " + e); }
@@ -91,6 +92,55 @@ static class Smoke
         try { File.WriteAllText(outFile, text); } catch { }
         try { File.WriteAllText(Path.Combine(Paths.Logs, "smoke.txt"), text); } catch { }
         return fails == 0 ? 0 : 1;
+    }
+
+    static void FolderTest(string data)
+    {
+        var src = Path.Combine(data, "Folder");
+        if (!Directory.Exists(src)) { Ok(false, "folder test files missing"); return; }
+        var root = Path.Combine(Path.GetTempPath(), "Nova folder test");
+        if (Directory.Exists(root)) Directory.Delete(root, true);
+        foreach (var f in Directory.GetFiles(src, "*", SearchOption.AllDirectories))
+        {
+            var dst = Path.Combine(root, Path.GetRelativePath(src, f));
+            Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
+            File.Copy(f, dst);
+        }
+        List<FileHit> Run(string q, string mode, out FolderIndex.Progress pg)
+        {
+            var hits = new List<FileHit>();
+            pg = new FolderIndex.Progress();
+            FolderIndex.Search(root, new Matcher(q, mode, false, false), null, h => { hits.RemoveAll(x => x.Path == h.Path); hits.Add(h); }, p => hits.RemoveAll(x => x.Path == p), pg, CancellationToken.None);
+            return hits;
+        }
+        var first = Run("A-201 Rev C", "phrase", out var pg1);
+        string W(string name) => first.FirstOrDefault(h => h.Name == name) is { } fh ? FolderIndex.Where(fh.Pieces[0]) : "(not found)";
+        Ok(first.Count == 9, $"Folder search found the code in {first.Count} of 9 files: " + string.Join(", ", first.Select(h => h.Name)));
+        Ok(W("Facade report.docx") == "page 2", "Word: " + W("Facade report.docx"));
+        Ok(W("Specification.pdf") == "page 3", "PDF: " + W("Specification.pdf"));
+        Ok(W("Coordination.pptx") == "slide 2", "PowerPoint: " + W("Coordination.pptx"));
+        Ok(W("BOQ.xlsx") == "Sheet \"BOQ\" · D45", "Excel: " + W("BOQ.xlsx"));
+        Ok(W("notes.txt") == "line 3", "Text: " + W("notes.txt"));
+        Ok(W("plan.dxf").Contains("A-ANNO"), "DXF: " + W("plan.dxf"));
+        Ok(W("model.ifc").Contains("IFCWALL"), "IFC: " + W("model.ifc"));
+        Ok(W("mail.eml") == "email", "Email: " + W("mail.eml"));
+        Ok(W("Submission.zip").Contains("notes-copy.txt"), "Zip: " + W("Submission.zip"));
+        var pv = FolderIndex.Preview(first.First(h => h.Name == "Facade report.docx").Pieces[0], 30);
+        Ok(pv.Mid == "A-201 Rev C", $"Preview: …{pv.Pre}[{pv.Mid}]{pv.Post}");
+        var again = Run("A-201 Rev C", "phrase", out var pg2);
+        Ok(again.Count == 9 && pg2.Read == 0, $"Second search instant from the index: {again.Count} files, {pg2.Read} read again, {pg2.Seconds:0.00} s");
+        var notes = Run("Hamza", "phrase", out _);
+        Ok(notes.Any(h => h.Pieces.Any(p => p.Loc.Contains("speaker notes"))) && notes.Any(h => h.Name == "mail.eml"), "Speaker notes and email sender found: " + notes.Count);
+        File.AppendAllText(Path.Combine(root, "notes.txt"), "new line with XYZ-999\n");
+        var changed = Run("XYZ-999", "phrase", out var pg3);
+        Ok(changed.Count == 1 && pg3.Read == 1, $"Changed file read again: {changed.Count} hit, {pg3.Read} read");
+        Ok(FolderIndex.Roots().Any(r => r.Path == root), "Folder remembered");
+        FolderIndex.Forget(root);
+        Ok(!FolderIndex.Roots().Any(r => r.Path == root), "Folder forgotten");
+        ExplorerMenu.Apply();
+        using var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Classes\Directory\shell\NovaEnhance.Search\command");
+        Ok(k?.GetValue("")?.ToString()?.Contains("--search") == true, "Right-click menu registered: " + k?.GetValue(""));
+        Ok(true, "OCR languages on the test PC: " + Ocr.Languages);
     }
 
     static void Pump(int ms)
@@ -110,6 +160,7 @@ static class Smoke
         Ok(s.Visible, "Settings: every section opens"); s.Dispose();
         var a = new AskForm(); a.Show(); Pump(400); Ok(a.Visible, "Ask Nova window opens"); a.Dispose();
         var b = new BriefForm(); b.Show(); b.Reload(); Pump(1500); Ok(b.Visible, "Morning brief opens"); b.Dispose();
+        var f = new FolderSearchForm(); f.Show(); f.Begin(Path.GetTempPath()); Pump(400); Ok(f.Visible, "Folder search window opens"); f.Dispose();
         var errs = Log.Read();
         Ok(!errs.Contains("settings ") || true, "No settings errors");
     }

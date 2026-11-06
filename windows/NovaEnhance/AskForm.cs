@@ -135,6 +135,9 @@ class AskForm : NovaForm
         var head = stack.Add(Th.Row(false));
         head.Controls.Add(Th.L("🔍 Ask Nova", 14, Th.Text, true));
         head.Controls.Add(Th.L("about your email", 10, Th.Muted));
+        var fbtn = Th.B("📁 Search inside a folder instead", () => Screens.FolderSearch(null));
+        fbtn.Margin = new Padding(16, 2, 0, 0);
+        head.Controls.Add(fbtn);
 
         var qrow = stack.Add(new TableLayoutPanel { ColumnCount = 3, RowCount = 1, AutoSize = false, Height = 40, BackColor = Color.Transparent, Margin = new Padding(0, 4, 0, 6) }, true);
         qrow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -193,6 +196,7 @@ class AskForm : NovaForm
         bottom.Controls.Add(Th.B("Ask", () => Run(follow.Text, true)));
         bottom.Controls.Add(Th.B("⇩ Export list", Export));
         bottom.Controls.Add(Th.B("☀ Brief", Screens.Brief));
+        bottom.Controls.Add(Th.B("📁 Search a folder", () => Screens.FolderSearch(null)));
         bottom.Controls.Add(Th.B("⚙", () => Screens.Settings("Email & AI")));
         bottom.Visible = false;
         stack.Add(Th.Signature());

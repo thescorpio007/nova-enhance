@@ -3,7 +3,7 @@ namespace NovaEnhance;
 /// <summary>Settings, split into sections like the phone app.</summary>
 class SettingsForm : NovaForm
 {
-    static readonly string[] Sections = { "AI & API keys", "About me", "Enhancement", "Email & AI", "Shortcuts", "Backup & restore", "Updates", "Error log", "About" };
+    static readonly string[] Sections = { "AI & API keys", "About me", "Enhancement", "Email & AI", "Folder search", "Shortcuts", "Backup & restore", "Updates", "Error log", "About" };
     readonly ListBox nav;
     readonly Panel host;
     Stack page;
@@ -67,6 +67,7 @@ class SettingsForm : NovaForm
                 case "About me": AboutMe(); break;
                 case "Enhancement": Enhancement(); break;
                 case "Email & AI": EmailAi(); break;
+                case "Folder search": FolderSearch(); break;
                 case "Shortcuts": Shortcuts(); break;
                 case "Backup & restore": BackupPage(); break;
                 case "Updates": Updates(); break;
@@ -261,12 +262,57 @@ class SettingsForm : NovaForm
         }
     }
 
+    // ------------------------------------------------------------------ Folder search
+    void FolderSearch()
+    {
+        Note("Right-click any folder in Windows Explorer → \"Search inside with Nova\" (on Windows 11: under \"Show more options\"). Everything is read on this PC.");
+        page.Add(Th.Check("Show \"Search inside with Nova\" when I right-click a folder", FolderIndex.Menu, v => { FolderIndex.Menu = v; ExplorerMenu.Apply(); }));
+        page.Add(Th.Row(false)).Controls.Add(Th.B("📁 Search a folder now…", () => Screens.FolderSearch(null), true));
+
+        page.Add(Th.Section("Read inside these files"));
+        foreach (var (k, label, _) in FileKinds.All)
+        {
+            var kk = k;
+            page.Add(Th.Check($"{k} · {label}", FileKinds.On(k), v => FileKinds.Set(kk, v)));
+        }
+        Note("OCR languages installed in Windows: " + Ocr.Languages + ". To add Arabic or French: Windows Settings → Time & language → Language → add the language (with \"Optical character recognition\").");
+        Note("Old .doc, .ppt and .xls files are read through the Office installed on this PC" + (OfficeConvert.Missing("word") ? " (Word not found)" : "") + ".");
+        var big = page.Add(Th.Row(false));
+        big.Controls.Add(Th.L("Skip files larger than", 10, Th.Text));
+        var mb = new NumericUpDown { Minimum = 5, Maximum = 2000, Value = FolderIndex.MaxMb, Width = 70, BackColor = Th.Card, ForeColor = Th.Text, Font = Th.F(10) };
+        mb.ValueChanged += (_, _) => FolderIndex.MaxMb = (int)mb.Value;
+        big.Controls.Add(mb);
+        big.Controls.Add(Th.L("MB", 10, Th.Text));
+        Note("A changed setting applies to files read from now on; \"Forget\" a folder to read it again completely.");
+
+        page.Add(Th.Section("Remembered folders (instant search)"));
+        var roots = FolderIndex.Roots();
+        var list = page.Add(new ListBox { Height = 160, BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.FixedSingle, Font = Th.F(9.5f), IntegralHeight = false }, true);
+        foreach (var (p, last, files) in roots) list.Items.Add($"{p}   ·  {files:N0} files · searched {last:dd MMM yyyy}");
+        if (roots.Count == 0) list.Items.Add("(none yet)");
+        Note($"Folder index: {FolderIndex.SizeMb():N0} MB · encrypted, locked to your Windows account · {FolderIndex.DirPath}");
+        var fr = page.Add(Th.Row(false));
+        fr.Controls.Add(Th.B("Forget selected", () =>
+        {
+            var i = list.SelectedIndex;
+            if (i < 0 || i >= roots.Count) return;
+            FolderIndex.Forget(roots[i].Path);
+            Draw("Folder search");
+        }));
+        fr.Controls.Add(Th.B("Forget all", () =>
+        {
+            if (MessageBox.Show("Forget every remembered folder? (Your files are not touched.)", "Nova Enhance", MessageBoxButtons.YesNo) == DialogResult.Yes) { FolderIndex.ForgetAll(); Draw("Folder search"); }
+        }));
+        page.Add(Th.Check("Keep the folder index on this PC only (not in Documents / OneDrive) — takes effect for new searches", FolderIndex.Local, v => { FolderIndex.Local = v; }));
+    }
+
     // ------------------------------------------------------------------ Shortcuts
     void Shortcuts()
     {
         page.Add(Th.Section("Everywhere in Windows"));
         Note("Ctrl + Shift + E — enhance the selected text in any program (Word, Outlook, browser, AutoCAD/Revit text boxes…), then ⇄ Replace.", Th.Text);
-        Note("Ctrl + Shift + F — Ask Nova about your email.", Th.Text);
+        Note("Ctrl + Shift + F — Ask Nova about your email (with a button to search inside a folder).", Th.Text);
+        Note("Right-click a folder → Search inside with Nova — find codes, references and sentences inside its files.", Th.Text);
         Note("Left-click the ✦ icon near the clock = Ask Nova · right-click = menu.", Th.Text);
         page.Add(Th.Section("Start"));
         page.Add(Th.Check("Start Nova Enhance with Windows", Store.Autostart, v => { Store.Autostart = v; Startup.Apply(); }));
