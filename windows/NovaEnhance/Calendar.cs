@@ -107,6 +107,7 @@ static class Calendar
     public static void Prepare(List<Meeting> meetings, List<MailHit> waiting)
     {
         waiting ??= new();
+        foreach (var m in meetings) m.Advice.Clear();   // drawn again when the brief window changes size
         foreach (var m in meetings.Where(x => x.IsMeeting && !x.Cancelled))
         {
             var words = Words(m.Subject);

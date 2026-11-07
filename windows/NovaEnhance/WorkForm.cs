@@ -28,9 +28,18 @@ class WorkForm : NovaForm
         left.Controls.Add(list);
         left.Controls.Add(top);
         detail = new Stack();
-        Controls.Add(detail);
+        // Wide window: the task on the left, its emails previewed on the right (◀ ▶ through them).
+        split = new SplitContainer { Dock = DockStyle.Fill, BackColor = Th.Bg, Panel2Collapsed = true, SplitterWidth = 6, FixedPanel = FixedPanel.Panel2 };
+        split.Panel1.BackColor = split.Panel2.BackColor = Th.Bg;
+        split.Panel1.Controls.Add(detail);
+        split.Panel2.Padding = new Padding(0, 6, 8, 8);
+        Controls.Add(split);
         Controls.Add(left);
-        Shown += (_, _) => Reload(currentId);
+        var lt = new System.Windows.Forms.Timer { Interval = 200 };
+        lt.Tick += (_, _) => { lt.Stop(); Relayout(); };
+        Resize += (_, _) => { lt.Stop(); lt.Start(); };
+        split.SplitterMoved += (_, _) => { if (wide) Store.SetInt("win_work_pane", split.Panel2.Width); };
+        Shown += (_, _) => { Relayout(); Reload(currentId); };
         Activated += (_, _) => { if (Visible) DrawList(); };
     }
 
@@ -226,12 +235,43 @@ class WorkForm : NovaForm
         foreach (var l in t.Log.OrderByDescending(l => l.T).Take(60)) detail.Add(Th.Wrap($"{l.T:ddd dd MMM yyyy HH:mm}   {l.Text}", 9, Th.Muted));
         detail.Add(Th.Signature());
         detail.ResumeLayout();
+        if (wide && inside != null && !inside.IsDisposed)
+        {
+            var first = t.Items.Where(i => i.Kind == "mail").OrderBy(i => i.State == "open" ? (i.IsNew ? 1 : 0) : 2).ThenByDescending(i => i.Date).FirstOrDefault();
+            if (first != null) inside.ShowTask(t, first); else inside.Clear();
+        }
+    }
+
+    readonly SplitContainer split;
+    MailPreviewForm inside;
+    bool wide;
+
+    /// <summary>1500 px and wider: the email preview sits beside the task instead of in its own window.</summary>
+    void Relayout()
+    {
+        var w = ClientSize.Width >= 1500;
+        if (w == wide) return;
+        wide = w;
+        split.Panel2Collapsed = !wide;
+        if (wide)
+        {
+            if (inside == null || inside.IsDisposed)
+            {
+                inside = new MailPreviewForm { TopLevel = false, FormBorderStyle = FormBorderStyle.None, Dock = DockStyle.Fill, Embedded = true };
+                inside.Changed = () => { if (!IsDisposed) Reload(currentId); };
+                split.Panel2.Controls.Add(inside);
+                inside.Show();
+            }
+            try { split.SplitterDistance = Math.Max(420, split.Width - Math.Clamp(Store.Int("win_work_pane", 620), 460, split.Width / 2) - split.SplitterWidth); } catch { }
+        }
+        DrawDetail();
     }
 
     MailPreviewForm preview;
 
     void OpenPreview(WorkTask t, WorkItem i)
     {
+        if (wide && inside != null && !inside.IsDisposed) { inside.ShowTask(t, i); return; }
         if (preview == null || preview.IsDisposed)
         {
             preview = new MailPreviewForm();
@@ -272,6 +312,9 @@ class MailPreviewForm : NovaForm
     int index;
     string taskId = "", taskTitle = "";
     public Action Changed;
+    public bool Embedded;
+
+    public void Clear() { items = new(); pane.Show(null); pos.Text = "This task has no emails."; }
 
     public MailPreviewForm()
     {
@@ -290,11 +333,11 @@ class MailPreviewForm : NovaForm
         pane.OnHandled = Handled;
         KeyDown += (_, e) =>
         {
-            if (e.KeyCode == Keys.Escape) Close();
+            if (e.KeyCode == Keys.Escape) { if (!Embedded) Close(); }
             else if (e.KeyCode is Keys.Down or Keys.PageDown) { Go(1); e.Handled = true; }
             else if (e.KeyCode is Keys.Up or Keys.PageUp) { Go(-1); e.Handled = true; }
         };
-        ResizeEnd += (_, _) => { if (WindowState == FormWindowState.Normal) { Store.SetInt("win_mprev_w", Width); Store.SetInt("win_mprev_h", Height); } };
+        ResizeEnd += (_, _) => { if (!Embedded && WindowState == FormWindowState.Normal) { Store.SetInt("win_mprev_w", Width); Store.SetInt("win_mprev_h", Height); } };
     }
 
     public void ShowTask(WorkTask t, WorkItem start)
@@ -322,7 +365,7 @@ class MailPreviewForm : NovaForm
         if (h == null) { pane.Show(null); pos.Text = ""; return; }
         if (h.Summary.Length == 0) h.Summary = items[index].Summary ?? "";
         h.Status = items[index].State == "open" ? (h.DaysWaiting > 3 ? "needs" : "week") : "";
-        Text = $"Nova Enhance · 👁 Preview · {taskTitle} · email {index + 1} of {items.Count}";
+        if (!Embedded) Text = $"Nova Enhance · 👁 Preview · {taskTitle} · email {index + 1} of {items.Count}";
         pos.Text = $"{index + 1} of {items.Count}" + (items[index].State != "open" ? "  ·  ✓ " + (items[index].Why.Length > 0 ? items[index].Why : "done") : "") + "  ·  ↑ ↓ keys work too";
         pane.Show(h);
     }

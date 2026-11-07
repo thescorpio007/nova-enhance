@@ -66,6 +66,13 @@ class MailList : FlowLayoutPanel
         if (Parent is ScrollableControl sc) try { sc.ScrollControlIntoView(cards[h]); } catch { }
     }
 
+    public void Unselect()
+    {
+        var old = Selected;
+        Selected = null;
+        if (old != null) PaintCard(old);
+    }
+
     public void MoveBy(int d)
     {
         if (Order.Count == 0) return;
@@ -121,6 +128,13 @@ class MailList : FlowLayoutPanel
             var sl = Th.L("✦ " + h.Summary, 9.5f, textColor);
             sl.MaximumSize = new Size(width - 24, 0);
             card.Controls.Add(sl);
+        }
+        // Compact cards (beside the reading pane): one or two lines of the email, so you can judge it without opening it.
+        if (Compact && width >= 360)
+        {
+            var fl = Th.L(h.FirstLines(Math.Clamp(width / 3, 120, 260)), 8.5f, Color.FromArgb(0x8A, 0x93, 0xA5));
+            fl.AutoSize = false; fl.AutoEllipsis = true; fl.Width = width - 24; fl.Height = 32; fl.UseMnemonic = false;
+            card.Controls.Add(fl);
         }
         // Wider window: the first lines of the email, read on this PC only.
         if (!Compact && width >= 900)
@@ -769,23 +783,51 @@ class AskForm : NovaForm
 /// <summary>Morning brief: waiting for your reply, and your emails with no answer.</summary>
 class BriefForm : NovaForm
 {
-    readonly Stack stack;
-    readonly Label head, info, needsTitle, followTitle, message, calTitle;
+    readonly Stack top, one, colA, colB, colC;
+    readonly Label head, info, needsTitle, followTitle, fyiTitle, message, calTitle;
     readonly FlowLayoutPanel calBox;
-    readonly MailList needs, follow;
+    readonly MailList needs, follow, fyi;
+    readonly SplitContainer split;
+    readonly TableLayoutPanel cols;
+    readonly ReadPane pane;
+    readonly Control sign;
+    readonly System.Windows.Forms.Timer layoutTimer;
     List<MailHit> lastNeeds = new(), lastFollow = new();
+    List<Meeting> lastMeetings;
     bool busy;
+    int mode = -1;   // 0 = one column · 1 = list + reading pane (1300 px +) · 2 = columns + reading pane (1800 px +)
+    int lastW;
 
     public BriefForm()
     {
         Text = "Nova Enhance · Morning brief";
-        Width = 820; Height = 780;
+        Width = Math.Max(820, Store.Int("win_brief_w", 820)); Height = Math.Max(600, Store.Int("win_brief_h", 780));
         MinimumSize = new Size(620, 500);
-        stack = new Stack();
-        Controls.Add(stack);
-        head = stack.Add(Th.L("☀ Good morning", 15, Th.Text, true));
-        info = stack.Add(Th.Wrap("", 9.5f));
-        var row = stack.Add(Th.Row());
+        KeyPreview = true;
+
+        // Top: greeting, counts and buttons. Below: one column, or the list + reading pane, or columns + reading pane.
+        top = new Stack { Dock = DockStyle.Top, AutoScroll = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(16, 12, 16, 4) };
+        split = new SplitContainer { Dock = DockStyle.Fill, BackColor = Th.Bg, Panel2Collapsed = true, SplitterWidth = 6, FixedPanel = FixedPanel.Panel2 };
+        split.Panel1.BackColor = split.Panel2.BackColor = Th.Bg;
+        one = new Stack { Padding = new Padding(16, 4, 8, 8) };
+        cols = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, BackColor = Th.Bg, Visible = false, Padding = new Padding(8, 0, 0, 0) };
+        for (int i = 0; i < 3; i++) cols.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.3f));
+        cols.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        colA = new Stack { Padding = new Padding(8, 4, 8, 8), Margin = new Padding(0) };
+        colB = new Stack { Padding = new Padding(8, 4, 8, 8), Margin = new Padding(0) };
+        colC = new Stack { Padding = new Padding(8, 4, 8, 8), Margin = new Padding(0) };
+        cols.Controls.Add(colA, 0, 0); cols.Controls.Add(colB, 1, 0); cols.Controls.Add(colC, 2, 0);
+        split.Panel1.Controls.Add(one);
+        split.Panel1.Controls.Add(cols);
+        pane = new ReadPane { Dock = DockStyle.Fill };
+        split.Panel2.Padding = new Padding(0, 4, 12, 12);
+        split.Panel2.Controls.Add(pane);
+        Controls.Add(split);
+        Controls.Add(top);
+
+        head = top.Add(Th.L("☀ Good morning", 15, Th.Text, true));
+        info = top.Add(Th.Wrap("", 9.5f), true);
+        var row = top.Add(Th.Row());
         row.Controls.Add(Th.B("↻ Refresh", Reload, true));
         row.Controls.Add(Th.B("📌 Save as task", () => { if (lastNeeds.Count > 0) Screens.Saved(NovaEnhance.Work.FromMail("What is waiting for my reply (morning brief)", null, "outstanding", lastNeeds, "brief")); }));
         row.Controls.Add(Th.B("📌 My Work", () => Screens.Work(null)));
@@ -793,42 +835,159 @@ class BriefForm : NovaForm
         row.Controls.Add(Th.B("📁 Briefs folder", () => Shell.Open(Paths.Briefs)));
         row.Controls.Add(Th.B("🔍 Ask Nova", Screens.Ask));
         row.Controls.Add(Th.B("⚙ Rules", () => Screens.Settings("Email & AI")));
-        message = stack.Add(Th.Wrap("", 10, Th.Text));
+        message = top.Add(Th.Wrap("", 10, Th.Text), true);
         message.BackColor = Th.Card; message.Padding = new Padding(8); message.Visible = false;
-        calTitle = stack.Add(Th.Section("📅 Today and tomorrow"));
-        calBox = stack.Add(new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = Color.Transparent, Margin = new Padding(0) });
-        needsTitle = stack.Add(Th.Section("Waiting for your reply"));
-        needs = stack.Add(new MailList());
-        followTitle = stack.Add(Th.Section("Your emails with no answer"));
-        follow = stack.Add(new MailList());
-        foreach (var l in new[] { needs, follow })
+
+        calTitle = Th.Section("📅 Today and tomorrow");
+        calBox = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = Color.Transparent, Margin = new Padding(0) };
+        needsTitle = Th.Section("Waiting for your reply");
+        needs = new MailList();
+        fyiTitle = Th.Section("⚪ FYI");
+        fyi = new MailList();
+        followTitle = Th.Section("Your emails with no answer");
+        follow = new MailList();
+        sign = Th.Signature();
+
+        foreach (var l in new[] { needs, follow, fyi })
         {
-            l.OnSummary = h => Screens.Ask();
-            l.OnDraft = h => Screens.Ask();
-        }
-        needs.OnSummary = follow.OnSummary = async h =>
-        {
-            message.Visible = true;
-            message.Text = Store.AiSeesFull ? "✦ Summarising…" : h.FirstLines(600) + "\n\n(AI summary needs Settings → Email & AI → C or D.)";
-            if (Store.AiSeesFull) try { message.Text = "✦ " + h.Subject + "\n\n" + await Assistant.Summarize(h, CancellationToken.None); } catch (Exception e) { message.Text = "⚠ " + e.Message; }
-        };
-        needs.OnDraft = follow.OnDraft = async h =>
-        {
-            message.Visible = true;
-            if (!Store.AiSeesFull) { message.Text = "✦ Draft reply needs Settings → Email & AI → C or D."; return; }
-            var instr = Prompt.Ask(this, "✦ Draft", "Anything to include? (optional)");
-            if (instr == null) return;
-            message.Text = "✦ Writing…";
-            try
+            var me = l;
+            l.OnSummary = Summary;
+            l.OnDraft = Draft;
+            l.OnHandled = Handled;
+            l.OnSelect = h =>
             {
-                var d = await Assistant.Draft(h, (h.Sent ? "This is a polite follow-up to my own email that got no answer. " : "") + instr, CancellationToken.None);
-                Outlook.Reply(h.Entry, h.StoreId, d, false);
-                message.Text = "✓ The draft is open in Outlook — check it, then press Send.";
+                foreach (var o in new[] { needs, follow, fyi }) if (o != me) o.Unselect();
+                pane.Show(h);
+            };
+        }
+        pane.OnSummary = Summary;
+        pane.OnDraft = Draft;
+        pane.OnHandled = Handled;
+
+        layoutTimer = new System.Windows.Forms.Timer { Interval = 180 };
+        layoutTimer.Tick += (_, _) => { layoutTimer.Stop(); Relayout(false); };
+        Resize += (_, _) => { layoutTimer.Stop(); layoutTimer.Start(); };
+        ResizeEnd += (_, _) => { if (WindowState == FormWindowState.Normal) { Store.SetInt("win_brief_w", Width); Store.SetInt("win_brief_h", Height); } };
+        split.SplitterMoved += (_, _) => { if (mode > 0) { Store.SetInt("win_brief_pane", split.Panel2.Width); Relayout(true); } };
+        KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.Escape) Hide();
+            else if (mode > 0 && (e.KeyCode == Keys.Down || e.KeyCode == Keys.Up))
+            {
+                var l = new[] { needs, fyi, follow }.FirstOrDefault(x => x.Selected != null) ?? needs;
+                l.MoveBy(e.KeyCode == Keys.Down ? 1 : -1); e.Handled = true;
             }
-            catch (Exception e) { message.Text = "⚠ " + e.Message; }
         };
-        stack.Add(Th.Signature());
+        Shown += (_, _) => Relayout(true);
         FormClosing += (_, e) => { if (e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Hide(); } };
+        Relayout(true);
+    }
+
+    /// <summary>Wider window = more detail: reading pane from 1300 px, columns from 1800 px.</summary>
+    void Relayout(bool force)
+    {
+        var w = ClientSize.Width;
+        int m = w >= 1800 ? 2 : w >= 1300 ? 1 : 0;
+        if (m != mode)
+        {
+            mode = m;
+            force = true;
+            split.Panel2Collapsed = mode == 0;
+            if (mode > 0)
+            {
+                var pw = Math.Clamp(Store.Int("win_brief_pane", mode == 2 ? 620 : 640), 420, Math.Max(440, w / 2));
+                try { split.SplitterDistance = Math.Max(300, split.Width - pw - split.SplitterWidth); } catch { }
+            }
+            // Put each section where it belongs for this layout.
+            foreach (var c in new Control[] { calTitle, calBox, needsTitle, needs, fyiTitle, fyi, followTitle, follow, sign }) c.Parent?.Controls.Remove(c);
+            if (mode == 2)
+            {
+                colA.Add(calTitle); colA.Add(calBox); colA.Add(followTitle); colA.Add(follow);
+                colB.Add(needsTitle); colB.Add(needs);
+                colC.Add(fyiTitle); colC.Add(fyi); colC.Add(sign);
+            }
+            else
+            {
+                one.Add(calTitle); one.Add(calBox); one.Add(needsTitle); one.Add(needs); one.Add(fyiTitle); one.Add(fyi); one.Add(followTitle); one.Add(follow); one.Add(sign);
+            }
+            one.Visible = mode != 2;
+            cols.Visible = mode == 2;
+        }
+        top.FitAll();
+        var lw = ListWidth(colB);
+        if (!force && Math.Abs(lw - lastW) < 24) return;
+        Draw();
+    }
+
+    int ListWidth(Stack col) => mode == 2 ? Math.Max(280, col.ClientSize.Width - col.Padding.Horizontal - 22) : Math.Max(300, one.ClientSize.Width - one.Padding.Horizontal - 22);
+
+    /// <summary>Draws the lists for the current layout (no new search).</summary>
+    void Draw()
+    {
+        var w = ListWidth(colB);
+        lastW = w;
+        var compact = mode > 0;
+        needs.Compact = follow.Compact = fyi.Compact = compact;
+        var sel = new[] { needs, fyi, follow }.Select(l => l.Selected).FirstOrDefault(x => x != null);
+        // FYI gets its own section when the window is wide; otherwise it stays in the main list as before.
+        var main = mode == 0 ? lastNeeds : lastNeeds.Where(h => h.Status != "fyi").ToList();
+        var fy = mode == 0 ? new List<MailHit>() : lastNeeds.Where(h => h.Status == "fyi").ToList();
+        needsTitle.Text = mode == 0 ? $"WAITING FOR YOUR REPLY ({lastNeeds.Count})" : $"🔴🟠 WAITING FOR YOUR REPLY ({main.Count})";
+        fyiTitle.Text = $"⚪ FYI — FOR YOUR INFORMATION ({fy.Count})";
+        fyiTitle.Visible = fyi.Visible = mode > 0 && fy.Count > 0;
+        followTitle.Text = Store.FollowUps ? $"↩ YOUR EMAILS WITH NO ANSWER AFTER {Store.FollowDays} DAYS ({lastFollow.Count})" : "FOLLOW-UPS ARE OFF (SETTINGS → EMAIL & AI)";
+        needs.Show(main, w);
+        fyi.Show(fy, mode == 2 ? ListWidth(colC) : w);
+        follow.Show(lastFollow, mode == 2 ? ListWidth(colA) : w);
+        if (lastMeetings != null || calBox.Controls.Count > 0) _ = DrawCalendar(lastNeeds, false);
+        foreach (var s in new[] { one, colA, colB, colC }) s.FitAll();
+        if (mode > 0)
+        {
+            var target = sel != null ? new[] { needs, fyi, follow }.FirstOrDefault(l => l.Order.Contains(sel)) : null;
+            if (target != null) target.Select(sel);
+            else if (needs.Order.Count > 0) needs.Select(needs.Order[0]);
+            else if (fyi.Order.Count > 0) fyi.Select(fyi.Order[0]);
+            else if (follow.Order.Count > 0) follow.Select(follow.Order[0]);
+            else pane.Show(null);
+        }
+    }
+
+    void Say(MailHit h, string text)
+    {
+        if (mode > 0 && pane.Mail == h) { pane.ShowAi(text); return; }
+        message.Visible = true; message.Text = text; top.FitAll();
+    }
+
+    async void Summary(MailHit h)
+    {
+        if (!Store.AiSeesFull) { Say(h, h.FirstLines(600) + "\n\n(AI summary needs Settings → Email & AI → C or D.)"); return; }
+        Say(h, "✦ Summarising…");
+        try { Say(h, "✦ " + h.Subject + "\n\n" + await Assistant.Summarize(h, CancellationToken.None)); } catch (Exception e) { Say(h, "⚠ " + e.Message); }
+    }
+
+    async void Draft(MailHit h)
+    {
+        if (!Store.AiSeesFull) { Say(h, "✦ Draft reply needs Settings → Email & AI → C or D."); return; }
+        var instr = Prompt.Ask(this, "✦ Draft", "Anything to include? (optional)");
+        if (instr == null) return;
+        Say(h, "✦ Writing…");
+        try
+        {
+            var d = await Assistant.Draft(h, (h.Sent ? "This is a polite follow-up to my own email that got no answer. " : "") + instr, CancellationToken.None);
+            Outlook.Reply(h.Entry, h.StoreId, d, false);
+            Say(h, "✓ The draft is open in Outlook — check it, then press Send.");
+        }
+        catch (Exception e) { Say(h, "⚠ " + e.Message); }
+    }
+
+    void Handled(MailHit h)
+    {
+        Outstanding.MarkHandled(h, true);
+        NovaEnhance.Work.LogMail(h, "✓ Handled");
+        lastNeeds.Remove(h); lastFollow.Remove(h);
+        Draw();
+        message.Visible = true; message.Text = $"✓ “{h.Subject}” marked as handled — it won't show as waiting again.";
+        top.FitAll();
     }
 
     public async void Reload()
@@ -842,16 +1001,12 @@ class BriefForm : NovaForm
         {
             var (n, f) = await BriefLogic.Build(CancellationToken.None);
             lastNeeds = n; lastFollow = f;
-            await DrawCalendar(n);
-            int red = n.Count(h => h.Status == "needs"), orange = n.Count(h => h.Status == "week"), fyi = n.Count(h => h.Status == "fyi");
+            await DrawCalendar(n, true);
+            int red = n.Count(h => h.Status == "needs"), orange = n.Count(h => h.Status == "week"), fy = n.Count(h => h.Status == "fyi");
             var wk = NovaEnhance.Work.All();
             int wDue = wk.Count(t => t.DueToday), wOver = wk.Count(t => t.Overdue), wWait = wk.Count(t => t.Status == "waiting");
-            info.Text = (wDue + wOver + wWait > 0 ? $"📌 My Work: {wDue} due today · {wOver} overdue · {wWait} waiting for others\n" : "") + $"{DateTime.Now:dddd dd MMMM} · 🔴 {red} overdue · 🟠 {orange} this week · ⚪ {fyi} FYI · ↩ {f.Count} follow-ups · last {Store.BriefDays} days · Index: {MailIndex.Status}";
-            needsTitle.Text = $"WAITING FOR YOUR REPLY ({n.Count})";
-            followTitle.Text = Store.FollowUps ? $"YOUR EMAILS WITH NO ANSWER AFTER {Store.FollowDays} DAYS ({f.Count})" : "FOLLOW-UPS ARE OFF (SETTINGS → EMAIL & AI)";
-            var w = Math.Max(300, stack.ClientSize.Width - 50);
-            needs.Show(n, w);
-            follow.Show(f, w);
+            info.Text = (wDue + wOver + wWait > 0 ? $"📌 My Work: {wDue} due today · {wOver} overdue · {wWait} waiting for others\n" : "") + $"{DateTime.Now:dddd dd MMMM} · 🔴 {red} overdue · 🟠 {orange} this week · ⚪ {fy} FYI · ↩ {f.Count} follow-ups · last {Store.BriefDays} days · Index: {MailIndex.Status}";
+            Draw();
             if (n.Count == 0 && f.Count == 0)
             {
                 message.Visible = true;
@@ -860,20 +1015,21 @@ class BriefForm : NovaForm
                     : "✓ Nothing is waiting for you. Enjoy your day!";
             }
             else message.Visible = false;
+            top.FitAll();
         }
         catch (Exception e) { info.Text = "⚠ " + e.Message; Log.Error("brief", e); }
         finally { busy = false; }
     }
 
     /// <summary>Meetings today and tomorrow (with clashes, open emails, last file, advice), invitations waiting, your reminders.</summary>
-    async Task DrawCalendar(List<MailHit> waiting)
+    async Task DrawCalendar(List<MailHit> waiting, bool read)
     {
         calBox.SuspendLayout();
         foreach (Control c in calBox.Controls) c.Dispose();
         calBox.Controls.Clear();
         calTitle.Visible = calBox.Visible = Calendar.InBrief;
         if (!Calendar.InBrief) { calBox.ResumeLayout(); return; }
-        var w = Math.Max(300, stack.ClientSize.Width - 50);
+        var w = mode == 2 ? ListWidth(colA) : ListWidth(colB);
         void Line(string text, Color color, float size = 9.5f, bool bold = false, int indent = 0)
         {
             var l = Th.L(text, size, color, bold); l.MaximumSize = new Size(w - indent, 0); l.Margin = new Padding(indent, 2, 0, 1); calBox.Controls.Add(l);
@@ -881,8 +1037,12 @@ class BriefForm : NovaForm
         try
         {
             var today = DateTime.Today;
-            var all = await Task.Run(() => Calendar.Read(today, today.AddDays(14)));
-            if (Outlook.Running() == null) { Line("Open Outlook to see your calendar here.", Th.Muted); return; }
+            if (read || lastMeetings == null)
+            {
+                if (Outlook.Running() == null) { lastMeetings = null; Line("Open Outlook to see your calendar here.", Th.Muted); return; }
+                lastMeetings = await Task.Run(() => Calendar.Read(today, today.AddDays(14)));
+            }
+            var all = lastMeetings;
             var two = all.Where(x => x.Start < today.AddDays(2)).ToList();
             Calendar.Prepare(two, waiting);
             foreach (var day in new[] { today, today.AddDays(1) })
