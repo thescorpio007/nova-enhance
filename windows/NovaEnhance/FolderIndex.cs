@@ -453,7 +453,8 @@ static class FolderIndex
 
         // Readers (several files at once; each on its own STA thread for Office/Outlook/OCR), one writer: this thread.
         var queue = new System.Collections.Concurrent.ConcurrentQueue<Item>(todo);
-        using var results = new System.Collections.Concurrent.BlockingCollection<ReadResult>(64);
+        // Not "using": a reader still busy with a slow file when the search is stopped must never find it disposed (that closed Nova).
+        var results = new System.Collections.Concurrent.BlockingCollection<ReadResult>(64);
         int workers = todo.Count == 0 ? 0 : opt.Gentle ? 1 : Math.Clamp(System.Environment.ProcessorCount, 2, 8);
         workers = Math.Min(workers, Math.Max(1, todo.Count));
         pg.Workers = workers;
@@ -472,23 +473,26 @@ static class FolderIndex
                         pg.Current = it.Name;
                         FileText.PageProgress = (i, n) => pg.Current = $"{it.Name} · page {i:N0} of {n:N0}";
                         var res = ReadOne(it, maxBytes, ct);
-                        results.Add(res, ct);
+                        if (ct.IsCancellationRequested || results.IsAddingCompleted) break;
+                        try { results.Add(res, ct); }
+                        catch (Exception x) when (x is ObjectDisposedException or InvalidOperationException) { break; }   // search stopped meanwhile
                         if (opt.Gentle) Thread.Sleep(40);
                     }
                 }
                 catch (OperationCanceledException) { }
+                catch (Exception e) when (e is ObjectDisposedException or InvalidOperationException) { }
                 catch (Exception e) { Log.Error("Folder search · reader", e); }
                 finally
                 {
                     FileText.PageProgress = null;
                     try { OfficeConvert.CloseAll(); } catch { }
-                    if (Interlocked.Decrement(ref alive) == 0) results.CompleteAdding();
+                    if (Interlocked.Decrement(ref alive) == 0) try { results.CompleteAdding(); } catch { }
                 }
             }) { IsBackground = true, Priority = opt.Gentle ? ThreadPriority.Lowest : ThreadPriority.BelowNormal, Name = "Nova reader" };
             t.SetApartmentState(ApartmentState.STA);
             t.Start();
         }
-        if (workers == 0) results.CompleteAdding();
+        if (workers == 0) try { results.CompleteAdding(); } catch { }
 
         var tx = c.BeginTransaction();
         int batch = 0;
@@ -553,10 +557,13 @@ static class FolderIndex
     static ReadResult ReadOne(Item it, long maxBytes, CancellationToken ct)
     {
         var r = new ReadResult { It = it, Segs = new List<Seg> { new("file name", it.Name) } };
-        string local = it.LocalPath, temp = null;
+        string local = it.LocalPath, temp = null, temp2 = null;
+        bool image = IsImage(it.Ext);
         try
         {
             bool content = FileKinds.ReadContent(it.Ext);
+            // Logos and icons (small images) have no useful text: not sent to OCR.
+            if (content && image && it.Size < 30 * 1024) { content = false; r.Note = "small image — not read"; }
             if (content && it.Size > maxBytes)
             {
                 r.Note = $"skipped: larger than {MaxMb} MB"; content = false;
@@ -579,6 +586,28 @@ static class FolderIndex
                     : !content && it.RemoteId == null ? ShellProps.Get(local) : "";
                 if (props.Length > 0) r.Segs.Add(new Seg("file properties", props));
             }
+            // A ".pdf" that is really an image, a web page, or a cloud file not downloaded yet.
+            if (content && local != null && it.Ext == ".pdf")
+            {
+                var real = Sniff(local);
+                if (real.StartsWith("."))
+                {
+                    temp2 = Path.Combine(Paths.Cache, Guid.NewGuid().ToString("N") + real);
+                    File.Copy(local, temp2, true);
+                    local = temp2; image = true;
+                    r.Segs.Add(new Seg("file properties", "an image saved with a .pdf name — read with text recognition"));
+                }
+                else if (real == "html")
+                {
+                    content = false;
+                    r.Problem = new Problem { Path = it.Key, Name = it.Name, Reason = "Not a real PDF — it is a web page saved with a .pdf name", Action = "open the file to check, download it again" };
+                }
+                else if (real == "empty")
+                {
+                    content = false;
+                    r.Problem = new Problem { Path = it.Key, Name = it.Name, Reason = "Empty, or not downloaded to this PC yet (cloud file)", Action = "right-click → Always keep on this device" };
+                }
+            }
             if (content && local != null)
             {
                 FileText.LastError = null;
@@ -593,6 +622,8 @@ static class FolderIndex
                         Reason = err.Contains("password", StringComparison.OrdinalIgnoreCase) || err.Contains("encrypt", StringComparison.OrdinalIgnoreCase) ? "Password protected — can't be read" : "Could not read: " + err,
                         Action = "open the file"
                     };
+                else if ((segs.Count == 0 || segs.All(sg => sg.Text.Trim().Length == 0)) && image && FileKinds.On("E"))
+                    r.Note = "photo — no text";   // photos and renders: nothing to find, not a problem
                 else if (segs.Count == 0 || segs.All(sg => sg.Text.Trim().Length == 0))
                 {
                     var scanned = it.Ext is ".pdf" or ".jpg" or ".jpeg" or ".png" or ".tif" or ".tiff" or ".bmp";
@@ -610,9 +641,38 @@ static class FolderIndex
             Log.Error("Folder search · " + it.Name, e);
             r.Problem = new Problem { Path = it.Key, Name = it.Name, Reason = "Could not read: " + e.Message, Action = "open the file" };
         }
-        finally { if (temp != null) try { File.Delete(temp); } catch { } }
+        finally
+        {
+            if (temp != null) try { File.Delete(temp); } catch { }
+            if (temp2 != null) try { File.Delete(temp2); } catch { }
+        }
         if (r.Problem != null) Log.Warn("Folder search", $"{r.Problem.Reason} · {it.Name}");
         return r;
+    }
+
+    static bool IsImage(string ext) => ext is ".jpg" or ".jpeg" or ".png" or ".tif" or ".tiff" or ".bmp" or ".gif" or ".webp";
+
+    /// <summary>What a file really is, from its first bytes: "pdf", ".png"/".jpg"/".tif"/".bmp"/".gif", "html", "empty" or "unknown".</summary>
+    static string Sniff(string path)
+    {
+        try
+        {
+            var b = new byte[1024];
+            int n;
+            using (var f = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)) n = f.Read(b, 0, b.Length);
+            if (n == 0 || b.Take(n).All(x => x == 0)) return "empty";
+            var head = System.Text.Encoding.ASCII.GetString(b, 0, n);
+            if (head.Contains("%PDF")) return "pdf";
+            if (n > 4 && b[0] == 0x89 && b[1] == 0x50 && b[2] == 0x4E && b[3] == 0x47) return ".png";
+            if (n > 3 && b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF) return ".jpg";
+            if (n > 4 && ((b[0] == 0x49 && b[1] == 0x49 && b[2] == 0x2A) || (b[0] == 0x4D && b[1] == 0x4D && b[3] == 0x2A))) return ".tif";
+            if (head.StartsWith("GIF8")) return ".gif";
+            if (head.StartsWith("BM")) return ".bmp";
+            var t = head.TrimStart('\uFEFF', ' ', '\r', '\n', '\t', '\u00EF', '\u00BB', '\u00BF');
+            if (t.StartsWith("<")) return "html";
+            return "unknown";
+        }
+        catch { return "unknown"; }
     }
 
     // ================================================================== Gemini vision for unclear scanned pages

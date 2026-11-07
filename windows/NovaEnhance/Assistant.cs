@@ -192,6 +192,7 @@ Rules:
                     if (o["needs_reply"]?.ToString() is "true" or "false") hits[i].NeedsReply = o["needs_reply"].ToString() == "true";
                 }
         }
+        catch (OperationCanceledException) { }   // you asked again before the summaries finished
         catch (Exception e) { Log.Error("summaries", e); }
     }
 
