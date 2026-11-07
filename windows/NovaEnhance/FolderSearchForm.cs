@@ -97,6 +97,26 @@ class FolderSearchForm : NovaForm
         pauseBtn = Th.B("⏸ Pause", Pause); pauseBtn.Margin = new Padding(8, 0, 0, 0); pauseBtn.Enabled = false; qrow.Controls.Add(pauseBtn, 3, 0);
         stopBtn = Th.B("■ Stop", Stop); stopBtn.Margin = new Padding(8, 0, 0, 0); stopBtn.Enabled = false; qrow.Controls.Add(stopBtn, 4, 0);
 
+        // ✎ More instructions for my AI (Ask AI mode) · ⭐ My prompts
+        instrRow = top.Add(Th.Row(false));
+        var il = new LinkLabel { Text = "✎ More instructions for my AI ▾", AutoSize = true, LinkColor = Th.AccentText, ActiveLinkColor = Th.Accent, Font = Th.F(9.5f, true), Margin = new Padding(0, 7, 14, 0) };
+        instrRow.Controls.Add(il);
+        var fp = Th.B("⭐ My prompts ▾", null);
+        fp.Click += (_, _) => Prompts.Menu(fp, "folder|" + CurrentRoot(), sp =>
+        {
+            if (sp.Where.StartsWith("folder|")) folder.Text = sp.Where[7..];
+            query.Text = sp.Question; fInstr.Text = sp.Instructions;
+            if (sp.Instructions.Length > 0) fInstr.Visible = true;
+            top.FitAll(); AskAi();
+        });
+        instrRow.Controls.Add(fp);
+        fInstr = top.Add(Th.Prose(Th.Box(true, 3)), true);
+        fInstr.PlaceholderText = "Optional — e.g. Only from the IFC specification and the BOQ · ignore superseded revisions · give a table: item, value, source · in Arabic · export to Word";
+        fInstr.Visible = Prompts.ShowMore && Store.Str("win_fs_instr").Length > 0;
+        fInstr.Text = Store.Str("win_fs_instr");
+        fInstr.Leave += (_, _) => Store.Set("win_fs_instr", fInstr.Text);
+        il.LinkClicked += (_, _) => { fInstr.Visible = !fInstr.Visible; il.Text = fInstr.Visible ? "✎ More instructions for my AI ▴" : "✎ More instructions for my AI ▾"; if (fInstr.Visible) fInstr.Focus(); top.FitAll(); };
+
         optRow = top.Add(Th.Row());
         var mode = Store.Str("win_fs_mode", "phrase");
         rPhrase = Th.Radio("Exact phrase", mode == "phrase", () => Store.Set("win_fs_mode", "phrase"));
@@ -178,6 +198,12 @@ class FolderSearchForm : NovaForm
         arow.Controls.Add(Th.B("▾ More detail", () => Answer(true), true));
         arow.Controls.Add(Th.B("⧉ Copy", () => { if (answerBox.Text.Length > 0) Clipboard.SetText(answerBox.Text); }));
         arow.Controls.Add(Th.B("⇩ Save with sources", SaveAnswer));
+        arow.Controls.Add(Th.B("⭐ Save prompt", () =>
+        {
+            if (lastQuestion.Length == 0) { status.Text = "Ask a question first"; return; }
+            var sp = Prompts.AskSave(this, new SavedPrompt { Name = lastQuestion.Length > 40 ? lastQuestion[..40] : lastQuestion, Question = lastQuestion, Instructions = fInstr.Text.Trim(), Where = "folder|" + lastRoot });
+            if (sp != null) status.Text = $"⭐ Saved “{sp.Name}” — find it under ⭐ My prompts";
+        }));
         arow.Controls.Add(Th.B("👍", Good));
         arow.Controls.Add(Th.B("👎 Right file is…", Bad));
         arow.Controls.Add(Th.B("✚ New question", () => { history = ""; lastQuestion = ""; query.Text = ""; answerBox.Text = ""; query.Focus(); status.Text = "New question — the conversation was cleared"; }));
@@ -541,6 +567,8 @@ class FolderSearchForm : NovaForm
         askMode = ask;
         Th.SetChip(tabFind, !ask); Th.SetChip(tabAsk, ask);
         optRow.Visible = !ask;
+        instrRow.Visible = ask;
+        if (!ask) fInstr.Visible = false;
         if (ask) morePanel.Visible = false; else morePanel.Visible = Store.Bool("win_fso_open", false);
         micBtn.Visible = ask;
         answerPanel.Visible = ask && answerBox.Text.Length > 0;
@@ -842,6 +870,8 @@ class FolderSearchForm : NovaForm
         catch (Exception e) { micBtn.Text = "🎤"; micBtn.BackColor = Th.Card2; status.Text = "⚠ Voice: " + e.Message; }
     }
 
+    FlowLayoutPanel instrRow;
+    TextBox fInstr;
     List<string> lastTerms = new();
     string searchedNote = "";
     KnowCard remembered;
@@ -1024,13 +1054,17 @@ class FolderSearchForm : NovaForm
         answerBox.Text = detailed ? "✦ Writing the detailed answer…" : "✦ Writing the answer…";
         try
         {
-            var a = await FolderAsk.Answer(lastQuestion, passages, detailed, detailed ? "" : history, ct);
+            var ins = fInstr.Text.Trim();
+            var qq = lastQuestion + (ins.Length > 0 ? "\n\nInstructions from the user (follow them for what to include or exclude, the format, the length and the language): " + ins : "");
+            var a = await FolderAsk.Answer(qq, passages, detailed, detailed ? "" : history, ct);
             lastAnswer = a;
             var head = detailed ? "✦ DETAILED ANSWER\n" : "✦ ANSWER\n";
             if (remembered != null && !detailed) head = $"✦ ANSWER (checked again now — 🧠 Nova also remembered an answer from {remembered.Saved:dd MMM yyyy})\n";
             ShowAnswer(head + FolderAsk.WithSources(a, passages));
             if (!detailed) history += $"Q: {lastQuestion}\nA: {a}\n";
             ShowSources(FolderAsk.CitedOrder(a, passages.Count));
+            // "… export to Word" in the question or the instructions: saved at once.
+            if (Prompts.Local(ins + "\n" + Prompts.Split(lastQuestion).Extra).Export.Length > 0 && !FolderAsk.NotFound(a)) SaveAnswer();
         }
         catch (Exception e) { answerBox.Text = "⚠ " + e.Message; Log.Error("Ask AI · answer", e); }
     }

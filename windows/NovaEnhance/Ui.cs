@@ -121,15 +121,45 @@ static class Th
         Margin = new Padding(0, 14, 0, 4), BackColor = Color.Transparent
     };
 
-    static Icon icon;
+    static Icon icon, big, small;
+
+    /// <summary>The ✦ icon, built into the app (all sizes 16–256), so windows and the taskbar never fall back to the generic picture.</summary>
+    static Icon Load(int size)
+    {
+        try
+        {
+            using var s = typeof(Th).Assembly.GetManifestResourceStream("nova.ico");
+            if (s != null) return size > 0 ? new Icon(s, size, size) : new Icon(s);
+        }
+        catch { }
+        return null;
+    }
+
     public static Icon AppIcon
     {
         get
         {
             if (icon != null) return icon;
-            try { icon = Icon.ExtractAssociatedIcon(Environment.ProcessPath ?? Application.ExecutablePath); } catch { }
+            icon = Load(0);
+            if (icon == null) try { icon = Icon.ExtractAssociatedIcon(Environment.ProcessPath ?? Application.ExecutablePath); } catch { }
             return icon ??= SystemIcons.Application;
         }
+    }
+
+    [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, IntPtr l);
+    [DllImport("user32.dll")] static extern int GetSystemMetrics(int i);
+
+    /// <summary>Gives a window the right big (taskbar, Alt+Tab) and small (title bar) ✦ icons for the screen's scale.</summary>
+    public static void SetIcons(Form f)
+    {
+        try
+        {
+            big ??= Load(Math.Max(32, GetSystemMetrics(11)));    // SM_CXICON
+            small ??= Load(Math.Max(16, GetSystemMetrics(49)));  // SM_CXSMICON
+            if (big != null) SendMessage(f.Handle, 0x0080, (IntPtr)1, big.Handle);     // WM_SETICON, ICON_BIG
+            if (small != null) SendMessage(f.Handle, 0x0080, (IntPtr)0, small.Handle); // ICON_SMALL
+        }
+        catch { }
     }
 
     [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr h, int attr, ref int v, int size);
@@ -149,7 +179,7 @@ class NovaForm : Form
         try { Icon = Th.AppIcon; } catch { }
     }
 
-    protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); Th.DarkTitle(this); }
+    protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); Th.DarkTitle(this); Th.SetIcons(this); }
 }
 
 /// <summary>Top-to-bottom panel. Controls tagged "s" stretch to the width; "w" wrap at the width.</summary>
@@ -191,6 +221,26 @@ class Stack : FlowLayoutPanel
 /// <summary>A one-line question box (used for "Type any language" and passwords).</summary>
 static class Prompt
 {
+    /// <summary>A bigger box for instructions to your AI (several lines; Ctrl+Enter = OK).</summary>
+    public static string AskLong(IWin32Window owner, string title, string label, string placeholder = "")
+    {
+        using var f = new NovaForm { Text = title, Width = 620, Height = 330, FormBorderStyle = FormBorderStyle.Sizable, MaximizeBox = false, MinimizeBox = false, TopMost = true, MinimumSize = new Size(480, 300) };
+        var s = new Stack();
+        f.Controls.Add(s);
+        s.Add(Th.Wrap(label, 10, Th.Text));
+        var box = s.Add(Th.Prose(Th.Box(true, 6)), true);
+        box.PlaceholderText = placeholder;
+        var row = s.Add(Th.Row());
+        string result = null;
+        var ok = Th.B("✦ OK", () => { result = box.Text; f.DialogResult = DialogResult.OK; }, true);
+        row.Controls.Add(ok);
+        row.Controls.Add(Th.B("Cancel", () => f.DialogResult = DialogResult.Cancel));
+        row.Controls.Add(Th.L("Ctrl+Enter = OK", 8.5f, Th.Muted));
+        box.KeyDown += (_, e) => { if (e.Control && e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; result = box.Text; f.DialogResult = DialogResult.OK; } };
+        f.Shown += (_, _) => box.Focus();
+        return f.ShowDialog(owner) == DialogResult.OK ? result : null;
+    }
+
     public static string Ask(IWin32Window owner, string title, string label, string value = "", bool password = false)
     {
         using var f = new NovaForm { Text = title, Width = 460, Height = 210, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, TopMost = true };

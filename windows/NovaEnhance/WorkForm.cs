@@ -32,6 +32,9 @@ class WorkForm : NovaForm
         split = new SplitContainer { Dock = DockStyle.Fill, BackColor = Th.Bg, Panel2Collapsed = true, SplitterWidth = 6, FixedPanel = FixedPanel.Panel2 };
         split.Panel1.BackColor = split.Panel2.BackColor = Th.Bg;
         split.Panel1.Controls.Add(detail);
+        // ⏳ The remaining number for this task, fixed at the top while you scroll.
+        workCount = new Label { Dock = DockStyle.Top, AutoSize = false, Height = 34, BackColor = Color.FromArgb(0x1A, 0x1F, 0x2C), ForeColor = Th.Text, Font = Th.F(10.5f, true), Padding = new Padding(12, 0, 0, 0), TextAlign = ContentAlignment.MiddleLeft, Visible = false, UseMnemonic = false };
+        split.Panel1.Controls.Add(workCount);
         split.Panel2.Padding = new Padding(0, 6, 8, 8);
         Controls.Add(split);
         Controls.Add(left);
@@ -112,7 +115,8 @@ class WorkForm : NovaForm
         detail.SuspendLayout();
         foreach (Control c in detail.Controls) c.Dispose();
         detail.Controls.Clear();
-        if (t == null) { detail.Add(Th.Wrap("Choose a task on the left.", 10, Th.Muted)); detail.ResumeLayout(); return; }
+        if (t == null) { workCount.Visible = false; detail.Add(Th.Wrap("Choose a task on the left.", 10, Th.Muted)); detail.ResumeLayout(); return; }
+        WorkCount(t);
 
         var title = detail.Add(Th.Wrap(t.Title, 15, Th.Text));
         title.Font = Th.F(15, true); title.Cursor = Cursors.Hand;
@@ -166,6 +170,7 @@ class WorkForm : NovaForm
                 i.Why = v ? $"ticked by you {DateTime.Now:ddd HH:mm}" : "";
                 t.Add((v ? "☑ " : "☐ ") + i.Subject);
                 Work.Save(t); Work.SyncOutlook(t);
+                WorkCount(t);
             };
             row.Controls.Add(cb, 0, 0);
             var text = Th.L((i.Kind == "mail" ? $"{i.Subject} — {i.From} · {i.Date:dd MMM HH:mm}" : $"📄 {i.Subject}  {i.Loc}") + (i.IsNew ? "   ➕ new" : ""), 10, i.State == "open" ? Th.Text : Th.Muted);
@@ -243,6 +248,15 @@ class WorkForm : NovaForm
     }
 
     readonly SplitContainer split;
+    readonly Label workCount;
+
+    void WorkCount(WorkTask t)
+    {
+        var openN = t.Items.Count(i => i.Kind != "text" && i.State == "open");
+        var doneN = t.Items.Count(i => i.Kind != "text" && i.State != "open");
+        workCount.Text = $"⏳ {openN} still open · ✓ {doneN} done" + (t.Mail ? $" · ↻ checked {t.Refreshed:ddd HH:mm}" : "") + (t.Due != null ? $" · 📅 due {t.Due:ddd dd MMM}" : "");
+        workCount.Visible = t.Items.Any(i => i.Kind != "text");
+    }
     MailPreviewForm inside;
     bool wide;
 
@@ -388,7 +402,7 @@ class MailPreviewForm : NovaForm
     async void Draft(MailHit h)
     {
         if (!Store.AiSeesFull) { pane.ShowAi("✦ Draft reply needs Settings → Email & AI → C or D: the full email goes to the AI only when you tap Draft."); return; }
-        var instr = Prompt.Ask(this, "✦ Draft reply", "Anything to include? (optional — e.g. \"agree, send revised drawings by Thursday\")");
+        var instr = Prompt.AskLong(this, "✦ Draft reply", "✎ Instructions for your AI (optional) — what to say, tone, length, language, who to copy…", "e.g. Agree with the GA, but ask them to coordinate the lift door finishes with ID spec 14 21 00 and resubmit by Thursday. Firm but polite, short.");
         if (instr == null) return;
         pane.ShowAi($"✦ Writing a reply to “{h.Subject}”…");
         try

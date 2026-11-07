@@ -156,6 +156,7 @@ class NovaContext : ApplicationContext
             BriefLogic.MaybeShow();
             Calendar.Tick();
             Work.Tick();
+            Prompts.Tick();
             if (ticks++ % 60 == 0 && Updater.Due) { await Updater.Check(); Updater.Offer(false); }
         }
         catch (Exception e) { Log.Error("tick", e); }

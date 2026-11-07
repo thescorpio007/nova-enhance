@@ -5,6 +5,7 @@ namespace NovaEnhance;
 /// <summary>Ctrl+Shift+E: the selected text, enhanced, and put back into the same program.</summary>
 class EnhanceForm : NovaForm
 {
+    TextBox eInstr;
     IntPtr target;
     string targetName = "";
     readonly Stack stack;
@@ -55,8 +56,16 @@ class EnhanceForm : NovaForm
         langBtn.Click += (_, _) => LangMenu().Show(langBtn, new Point(0, langBtn.Height));
         modeRow.Controls.Add(langBtn);
 
+        // ✎ More instructions for my AI (kept until you change them)
+        eInstr = stack.Add(Th.Prose(Th.Box(true, 2)), true);
+        eInstr.PlaceholderText = "✎ More instructions (optional) — e.g. British English · keep it under 80 words · formal, to a client · keep the bullet points";
+        eInstr.Text = Store.Str("win_enh_instr");
+        eInstr.Visible = eInstr.Text.Length > 0;
+        eInstr.Leave += (_, _) => Store.Set("win_enh_instr", eInstr.Text);
+
         var go = stack.Add(Th.Row(false));
         go.Controls.Add(Th.B("✦ Enhance again", () => Run(Store.Mode), true));
+        go.Controls.Add(Th.B("✎", () => { eInstr.Visible = !eInstr.Visible; if (eInstr.Visible) eInstr.Focus(); stack.FitAll(); }));
         status = Th.L("", 9.5f, Th.Muted);
         status.Margin = new Padding(4, 8, 0, 0);
         go.Controls.Add(status);
@@ -152,7 +161,8 @@ class EnhanceForm : NovaForm
         var sw = Stopwatch.StartNew();
         try
         {
-            var outText = await Ai.Enhance(p, mode, text, my.Token);
+            Store.Set("win_enh_instr", eInstr.Text);
+            var outText = await Ai.Enhance(p, mode, text, my.Token, eInstr.Visible ? eInstr.Text.Trim() : "");
             if (my.IsCancellationRequested) return;
             result.Text = Crlf(outText);
             History.SaveOriginal(mode, text, outText);

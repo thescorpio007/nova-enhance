@@ -3,7 +3,7 @@ namespace NovaEnhance;
 /// <summary>Settings, split into sections like the phone app.</summary>
 class SettingsForm : NovaForm
 {
-    static readonly string[] Sections = { "AI & API keys", "About me", "Enhancement", "Email & AI", "Folder search", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "About" };
+    static readonly string[] Sections = { "AI & API keys", "About me", "Enhancement", "Email & AI", "Folder search", "✦ Prompts", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "About" };
     readonly ListBox nav;
     readonly Panel host;
     Stack page;
@@ -73,6 +73,7 @@ class SettingsForm : NovaForm
                 case "Browser add-on": BrowserPage(); break;
                 case "AI window": AiWindowPage(); break;
                 case "🧠 What Nova knows": KnowsPage(); break;
+                case "✦ Prompts": PromptsPage(); break;
                 case "Spelling & grammar": SpellPage(); break;
                 case "Backup & restore": BackupPage(); break;
                 case "Updates": Updates(); break;
@@ -509,6 +510,63 @@ class SettingsForm : NovaForm
         Note("◫ Side by side shows two tabs at once; type in \"Same question to both\" to compare two AIs (or Nova Chat and a website).", Th.Text);
         Note("Right-click a website tab to rename, reload, open it in your browser or remove it. ＋ Add a site for any other AI.", Th.Text);
         Note("Nova Chat keeps your chats in Documents\\Nova Enhance\\Nova Chat. Your privacy choices still apply: Folder search (Never / Ask / Send) and Email & AI (first lines or full email).");
+    }
+
+    void Opt((string Value, string Label)[] items, string current, Action<string> set)
+    {
+        foreach (var (v, l) in items) { var vv = v; Opt(l, "", current == v, () => set(vv)); }
+    }
+
+    // ------------------------------------------------------------------ ✦ Prompts
+    void PromptsPage()
+    {
+        Note("Write what you want in your own words under any question (✎ More instructions): Nova turns it into rules on this PC, an optional AI check of each email, grouping and an Excel / Word / CSV file. Choose here what suits you — every question can still change the level.");
+        page.Add(Th.Section("Default filter level"));
+        Opt(new[] { ("A", "A · Rules on this PC only — exclude, only, from, attachments, days, group, export. Fast; nothing extra is sent."),
+                    ("B", "B · A + AI check of each email — for instructions a rule can't judge (\"only where the contractor asks for my approval\")") },
+            Prompts.Level, v => Prompts.Level = v);
+        var mx = new NumericUpDown { Minimum = 10, Maximum = 300, Value = Math.Clamp(Prompts.MaxAi, 10, 300), Width = 70, BackColor = Th.Card, ForeColor = Th.Text, Font = Th.F(10) };
+        mx.ValueChanged += (_, _) => Prompts.MaxAi = (int)mx.Value;
+        var r1 = page.Add(Th.Row(false)); r1.Controls.Add(Th.L("AI check: at most", 10, Th.Text)); r1.Controls.Add(mx); r1.Controls.Add(Th.L("emails per question", 10, Th.Text));
+
+        page.Add(Th.Section("What the AI check may read"));
+        Opt(new[] { ("lines", "Subject and first lines of each email"), ("whole", "The whole email text (no attachments) — most accurate") }, Prompts.AiSends, v => Prompts.AiSends = v);
+        var ao = new NumericUpDown { Minimum = 0, Maximum = 300, Value = Math.Clamp(Prompts.AskOver, 0, 300), Width = 70, BackColor = Th.Card, ForeColor = Th.Text, Font = Th.F(10) };
+        ao.ValueChanged += (_, _) => Prompts.AskOver = (int)ao.Value;
+        var r2 = page.Add(Th.Row(false)); r2.Controls.Add(Th.L("Ask me before sending more than", 10, Th.Text)); r2.Controls.Add(ao); r2.Controls.Add(Th.L("emails (0 = always ask)", 10, Th.Text));
+
+        page.Add(Th.Section("When my AI is busy"));
+        Opt(new[] { ("other", "Use my other AI key automatically (Gemini busy → Groq / OpenAI / Claude…)"), ("tell", "Just tell me") }, Store.Str("win_ai_busy", "other"), v => Store.Set("win_ai_busy", v));
+        if (Ai.WithKeys.Length < 2) Note("You have one AI key — add a second in AI & API keys (Groq is free) so a busy AI never stops you.", Th.Warn);
+
+        page.Add(Th.Section("Output"));
+        Opt(new[] { ("xlsx", "\"Export\" without a format = Excel (.xlsx)"), ("docx", "= Word (.docx)"), ("csv", "= CSV") }, Prompts.DefaultExport, v => Prompts.DefaultExport = v);
+        var fr = page.Add(Th.Row(false));
+        var fl = Th.L("Files go to: " + Prompts.Folder, 9.5f, Th.Muted);
+        fr.Controls.Add(fl);
+        fr.Controls.Add(Th.B("Change…", () => { using var d = new FolderBrowserDialog { SelectedPath = Prompts.Folder }; if (d.ShowDialog(this) == DialogResult.OK) { Prompts.Folder = d.SelectedPath; fl.Text = "Files go to: " + d.SelectedPath; } }));
+        fr.Controls.Add(Th.B("📁 Open", () => Shell.Open(Prompts.Folder)));
+        page.Add(Th.Check("Show ✎ More instructions open in Ask Nova", Prompts.ShowMore, v => Prompts.ShowMore = v));
+        page.Add(Th.Check("Show the ✦ Nova understood chips", Prompts.ShowChips, v => Prompts.ShowChips = v));
+
+        page.Add(Th.Section("⭐ Saved prompts and schedules"));
+        var all = Prompts.All();
+        if (all.Count == 0) Note("None yet — ask a question with instructions, then press ⭐ Save this prompt.", Th.Muted);
+        foreach (var sp in all.OrderBy(x => x.Name))
+        {
+            var p0 = sp;
+            var row = page.Add(Th.Row(false));
+            var lbl = Th.L($"⭐ {sp.Name}  ·  {Prompts.Describe(sp)}" + (sp.LastRun > DateTime.MinValue ? $"  ·  last run {sp.LastRun:ddd dd MMM HH:mm}: {sp.LastNote}" : ""), 9.5f, Th.Text);
+            lbl.MaximumSize = new Size(620, 0);
+            row.Controls.Add(lbl);
+            row.Controls.Add(Th.B("▶", async () =>
+            {
+                if (p0.Where == "ask") { lbl.Text = $"⭐ {p0.Name} · running…"; try { lbl.Text = $"⭐ {p0.Name} · ✓ {await Prompts.RunSaved(p0, this)}"; } catch (Exception e) { lbl.Text = "⚠ " + e.Message; } }
+                else Screens.FolderSearch(p0.Where.StartsWith("folder|") ? p0.Where[7..] : null);
+            }, true));
+            row.Controls.Add(Th.B("✎", () => { if (Prompts.AskSave(this, p0) != null) Draw("✦ Prompts"); }));
+            row.Controls.Add(Th.B("🗑", () => { if (MessageBox.Show(this, $"Delete “{p0.Name}”?", "Nova Enhance", MessageBoxButtons.YesNo) == DialogResult.Yes) { Prompts.Delete(p0.Id); Draw("✦ Prompts"); } }));
+        }
     }
 
     // ------------------------------------------------------------------ Spelling & grammar

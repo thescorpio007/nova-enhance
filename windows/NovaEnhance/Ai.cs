@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
@@ -40,6 +41,23 @@ static class Ai
 
     /// <summary>One question, one answer. Retries busy/connection errors twice.</summary>
     public static async Task<string> Chat(string system, string user, bool fast = true, bool json = false, Provider p = null, CancellationToken ct = default)
+    {
+        if (p != null || Store.Str("win_ai_busy", "other") != "other" || WithKeys.Length < 2) return await ChatOne(system, user, fast, json, p, ct);
+        // Your AI is busy? Settings → ✦ Prompts: use my other AI key.
+        var first = Active();
+        try { return await ChatOne(system, user, fast, json, first, ct); }
+        catch (AiException e) when (!ct.IsCancellationRequested && Regex.IsMatch(e.Message, "busy|too long|429|503|500|overloaded|quota|rate", RegexOptions.IgnoreCase))
+        {
+            foreach (var other in WithKeys.Where(x => x.Id != first?.Id))
+            {
+                try { var r = await ChatOne(system, user, fast, json, other, ct); Log.Warn("ai", $"{first?.Label} busy — answered by {other.Label}"); return r; }
+                catch (AiException) { }
+            }
+            throw;
+        }
+    }
+
+    static async Task<string> ChatOne(string system, string user, bool fast, bool json, Provider p, CancellationToken ct)
     {
         p ??= Active() ?? throw new AiException("No AI key yet — add one in Settings → AI & API keys");
         var key = Store.Key(p.Id);
@@ -204,13 +222,14 @@ static class Ai
     }
 
     /// <summary>Enhancement with the phone's instructions and the user's profile. Long texts are split and joined back.</summary>
-    public static async Task<string> Enhance(Provider p, string modeId, string text, CancellationToken ct)
+    public static async Task<string> Enhance(Provider p, string modeId, string text, CancellationToken ct, string extra = "")
     {
         var mode = Modes.ById(modeId);
         var parts = Split(text.Replace("\r\n", "\n"), 6000);
         var outs = new List<string>();
+        var sys = Modes.System() + (string.IsNullOrWhiteSpace(extra) ? "" : " Also follow these instructions from the user: " + extra.Trim());
         foreach (var part in parts)
-            outs.Add(await Chat(Modes.System(), Modes.FirstMessage(mode, part), true, false, p, ct));
+            outs.Add(await Chat(sys, Modes.FirstMessage(mode, part), true, false, p, ct));
         return string.Join("\n\n", outs);
     }
 

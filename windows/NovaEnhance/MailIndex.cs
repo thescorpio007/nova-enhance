@@ -152,6 +152,8 @@ class MailHit
     public string MaybeAnswered = "";
     /// <summary>Outstanding lists: how many earlier emails of the same conversation/topic are folded into this card.</summary>
     public int Earlier;
+    /// <summary>✦ Prompts: the AI check's short reason for keeping this email.</summary>
+    public string Why = "";
 
     public string NewPart => MailIndex.NewPart(Body ?? "");
     public string FirstLines(int n = 300) { var t = Regex.Replace(NewPart, @"\s+", " ").Trim(); return t.Length > n ? t[..n] + "…" : t; }

@@ -13,6 +13,9 @@ class MailList : FlowLayoutPanel
 {
     public Action<MailHit> OnSummary, OnDraft, OnSelect, OnHandled;
     public bool Compact;
+    /// <summary>✦ Prompts: group the list (project / sender / day), and the emails your instructions hid (shown on request).</summary>
+    public Func<MailHit, string> GroupKey;
+    public List<(string Why, MailHit Hit)> HiddenShown;
     readonly Dictionary<MailHit, Control> cards = new();
     public MailHit Selected { get; private set; }
     public List<MailHit> Order { get; } = new();
@@ -34,13 +37,28 @@ class MailList : FlowLayoutPanel
         var all = hits.ToList();
         var main = all.Where(h => h.MaybeAnswered.Length == 0).ToList();
         var maybe = all.Where(h => h.MaybeAnswered.Length > 0).ToList();
-        foreach (var h in main) Add(h, width, false);
+        if (GroupKey == null) foreach (var h in main) Add(h, width, false);
+        else
+            foreach (var g in main.GroupBy(GroupKey).OrderBy(g => g.Key == "Other" ? 1 : 0).ThenBy(g => g.Key))
+            {
+                var t = Th.Section($"🏷 {(g.Key.Length > 0 ? g.Key : "Other")} ({g.Count()})");
+                t.Margin = new Padding(0, Controls.Count == 0 ? 0 : 12, 0, 6);
+                Controls.Add(t);
+                foreach (var h in g) Add(h, width, false);
+            }
         if (maybe.Count > 0)
         {
             var t = Th.Section($"Probably answered ({maybe.Count}) — check before replying");
             t.Margin = new Padding(0, 14, 0, 6);
             Controls.Add(t);
             foreach (var h in maybe) Add(h, width, true);
+        }
+        if (HiddenShown is { Count: > 0 })
+        {
+            var t = Th.Section($"Hidden by your instructions ({HiddenShown.Count})");
+            t.Margin = new Padding(0, 14, 0, 6);
+            Controls.Add(t);
+            foreach (var (why, h) in HiddenShown) { var c = RowFor(h, width, true, "⛔ " + why); cards[h] = c; Order.Add(h); Controls.Add(c); }
         }
         ResumeLayout();
         if (Selected != null && !cards.ContainsKey(Selected)) Selected = null;
@@ -83,13 +101,13 @@ class MailList : FlowLayoutPanel
     void PaintCard(MailHit h)
     {
         if (!cards.TryGetValue(h, out var c)) return;
-        var back = h == Selected && Compact ? SelColor : h.MaybeAnswered.Length > 0 ? GreyCard : Th.Card;
+        var back = h == Selected && Compact ? SelColor : h.MaybeAnswered.Length > 0 || (HiddenShown?.Any(x => x.Hit == h) ?? false) ? GreyCard : Th.Card;
         c.BackColor = back;
     }
 
     static Color DotColor(string s) => s switch { "needs" => Th.Bad, "week" => Th.Warn, "follow" => Th.AccentText, "fyi" => Color.FromArgb(0x6B, 0x73, 0x85), _ => Th.Accent };
 
-    Control RowFor(MailHit h, int width, bool grey)
+    Control RowFor(MailHit h, int width, bool grey, string hiddenWhy = null)
     {
         var card = new FlowLayoutPanel
         {
@@ -99,7 +117,7 @@ class MailList : FlowLayoutPanel
         };
         var textColor = grey ? Th.Muted : Th.Text;
         var top = Th.Row(false);
-        top.Controls.Add(Th.L("●", 11, grey ? Th.Muted : DotColor(h.Status), true));
+        top.Controls.Add(new Dot(grey ? Color.FromArgb(0x6B, 0x73, 0x85) : DotColor(h.Status)));
         var subjText = string.IsNullOrWhiteSpace(h.Subject) ? "(no subject)" : h.Subject;
         var subj = Th.L(subjText, Compact ? 10 : 10.5f, textColor, true);
         if (Compact) { subj.AutoSize = false; subj.AutoEllipsis = true; subj.Width = width - 60; subj.Height = 22; }
@@ -119,9 +137,15 @@ class MailList : FlowLayoutPanel
         card.Controls.Add(ml);
         if (grey)
         {
-            var why = Th.L("↩ " + h.MaybeAnswered, 9, Th.AccentText);
+            var why = Th.L(hiddenWhy ?? "↩ " + h.MaybeAnswered, 9, Th.AccentText);
             why.MaximumSize = new Size(width - 24, 0);
             card.Controls.Add(why);
+        }
+        if (h.Why.Length > 0)
+        {
+            var wl = Th.L("✦ " + h.Why, 9.5f, Color.FromArgb(0x8F, 0xD6, 0xB4));
+            wl.MaximumSize = new Size(width - 24, 0);
+            card.Controls.Add(wl);
         }
         if (h.Summary.Length > 0)
         {
@@ -410,6 +434,28 @@ class Voice
     }
 }
 
+/// <summary>The status circle on each email card: red overdue · orange this week · grey FYI / answered — drawn, with a dark ring.</summary>
+class Dot : Control
+{
+    readonly Color color;
+    public Dot(Color c)
+    {
+        color = c;
+        Size = new Size(18, 18); Margin = new Padding(0, 3, 8, 0);
+        SetStyle(ControlStyles.SupportsTransparentBackColor | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint, true);
+        BackColor = Color.Transparent;
+    }
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        using var b = new SolidBrush(color);
+        using var ring = new Pen(Color.FromArgb(0x0E, 0x11, 0x17), 2f);
+        var r = new Rectangle(1, 1, Width - 3, Height - 3);
+        e.Graphics.FillEllipse(b, r);
+        e.Graphics.DrawEllipse(ring, r);
+    }
+}
+
 /// <summary>Ctrl+Shift+F: ask about your email in your own words.</summary>
 class AskForm : NovaForm
 {
@@ -432,6 +478,21 @@ class AskForm : NovaForm
     string lastQuestion = "";
     CancellationTokenSource cts;
     readonly System.Windows.Forms.Timer idxTimer;
+    // ✦ Prompts
+    readonly TextBox instr;
+    readonly FlowLayoutPanel planBox, resultRow;
+    readonly Label resultLbl, countBar;
+    readonly LinkLabel hiddenLink, moreLink;
+    readonly Button levelA, levelB, myPrompts;
+    string level = Prompts.Level;
+    PromptPlan plan;
+    List<MailHit> rawHits = new();
+    List<(string Why, MailHit Hit)> hidden = new();
+    bool showHidden;
+    string lastIntent = "", lastInstr = "", lastExport;
+    DateTime lastCheck = DateTime.Now;
+    readonly System.Windows.Forms.Timer liveTimer;
+    bool rechecking;
 
     public AskForm()
     {
@@ -475,6 +536,31 @@ class AskForm : NovaForm
         askBtn.Margin = new Padding(8, 0, 0, 0);
         qrow.Controls.Add(askBtn, 2, 0);
 
+        // ✎ More instructions for my AI · filter level · ⭐ My prompts
+        var prow = stack.Add(Th.Row(false));
+        moreLink = new LinkLabel { Text = Prompts.ShowMore ? "✎ More instructions for my AI ▴" : "✎ More instructions for my AI ▾", AutoSize = true, LinkColor = Th.AccentText, ActiveLinkColor = Th.Accent, Font = Th.F(9.5f, true), Margin = new Padding(0, 7, 14, 0) };
+        prow.Controls.Add(moreLink);
+        prow.Controls.Add(Th.L("Filter:", 9, Th.Muted));
+        levelA = Th.Chip("A · PC rules", level == "A", () => SetLevel("A"));
+        levelB = Th.Chip("B · + AI check", level != "A", () => SetLevel("B"));
+        levelA.Font = levelB.Font = Th.F(9);
+        prow.Controls.Add(levelA); prow.Controls.Add(levelB);
+        myPrompts = Th.B("⭐ My prompts ▾", null);
+        myPrompts.Click += (_, _) => Prompts.Menu(myPrompts, "ask", UsePrompt);
+        myPrompts.Margin = new Padding(14, 0, 0, 0);
+        prow.Controls.Add(myPrompts);
+        instr = stack.Add(Th.Prose(Th.Box(true, 3)), true);
+        instr.PlaceholderText = "Optional — e.g. Exclude emails that start with \"proceed\" · ignore reminders from Eric · only SLV and Nouran projects · keep only where the contractor asks for my approval · group by project · export to Excel   (Ctrl+Enter = Ask)";
+        instr.Visible = Prompts.ShowMore;
+        instr.KeyDown += (_, e) => { if (e.Control && e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; Run(question.Text, false); } };
+        moreLink.LinkClicked += (_, _) =>
+        {
+            instr.Visible = !instr.Visible;
+            moreLink.Text = instr.Visible ? "✎ More instructions for my AI ▴" : "✎ More instructions for my AI ▾";
+            if (instr.Visible) instr.Focus();
+            stack.FitAll();
+        };
+
         chips = stack.Add(Th.Row());
         idx = stack.Add(Th.Wrap("", 8.5f));
 
@@ -498,7 +584,17 @@ class AskForm : NovaForm
         }
 
         understood = stack.Add(Th.Wrap("", 9.5f, Th.Text));
+        planBox = stack.Add(new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, BackColor = Color.Transparent, Margin = new Padding(0, 2, 0, 2), Visible = false });
         info = stack.Add(Th.Wrap("", 9, Th.AccentText));
+        resultRow = stack.Add(Th.Row());
+        resultRow.Visible = false;
+        resultLbl = Th.L("", 9.5f, Th.Text);
+        resultLbl.Margin = new Padding(0, 7, 8, 0);
+        hiddenLink = new LinkLabel { AutoSize = true, LinkColor = Th.Muted, ActiveLinkColor = Th.Accent, Font = Th.F(9), Margin = new Padding(0, 7, 8, 0), Visible = false };
+        hiddenLink.LinkClicked += (_, _) => { showHidden = !showHidden; ShowList(); UpdateHiddenLink(); };
+        // ⏳ The remaining number: fixed at the top, updated on every change.
+        countBar = stack.Add(Th.Wrap("", 10.5f, Th.Text), true);
+        countBar.BackColor = Color.FromArgb(0x1A, 0x1F, 0x2C); countBar.Padding = new Padding(10, 6, 10, 6); countBar.Font = Th.F(10.5f, true); countBar.Visible = false;
         message = stack.Add(Th.Wrap("", 10, Th.Text));
         message.BackColor = Th.Card;
         message.Padding = new Padding(8);
@@ -554,7 +650,27 @@ class AskForm : NovaForm
         idxTimer = new System.Windows.Forms.Timer { Interval = 3000 };
         idxTimer.Tick += (_, _) => { if (Visible) idx.Text = "Index: " + MailIndex.Status; };
         idxTimer.Start();
+        liveTimer = new System.Windows.Forms.Timer { Interval = 180_000 };
+        liveTimer.Tick += (_, _) => { if (Visible) Recheck(); };
+        liveTimer.Start();
+        Activated += (_, _) => { if (DateTime.Now - lastCheck > TimeSpan.FromSeconds(45)) Recheck(); };
         DrawChips();
+    }
+
+    void SetLevel(string l)
+    {
+        level = l;
+        Th.SetChip(levelA, l == "A"); Th.SetChip(levelB, l != "A");
+        if (plan != null && rawHits.Count > 0) _ = ApplyPlan(false);
+    }
+
+    void UsePrompt(SavedPrompt p)
+    {
+        question.Text = p.Question;
+        instr.Text = p.Instructions;
+        if (p.Instructions.Length > 0 && !instr.Visible) { instr.Visible = true; moreLink.Text = "✎ More instructions for my AI ▴"; stack.FitAll(); }
+        SetLevel(p.Level);
+        Run(p.Question, false);
     }
 
     public void FocusQuestion() { question.Focus(); question.SelectAll(); }
@@ -616,9 +732,12 @@ class AskForm : NovaForm
         message.Visible = false;
         understood.Text = "🔍 " + q;
         info.Text = Ai.Active() != null ? "Understanding your question…" : "Searching (no AI key — simple word search)…";
+        // ✦ Prompts: the question goes to the search; "exclude … / only … / group … / export …" become your instructions.
+        var (mainQ, extraQ) = Prompts.Split(q);
+        var instructions = ((followUp ? lastInstr : instr.Text) + "\n" + extraQ).Trim();
         try
         {
-            var ans = await Assistant.Ask(q, followUp ? lastFilter : null, hits, my.Token);
+            var ans = await Assistant.Ask(mainQ, followUp ? lastFilter : null, hits, my.Token);
             if (my.IsCancellationRequested) return;
             if (ans.Intent is "summarize" or "draft")
             {
@@ -629,8 +748,27 @@ class AskForm : NovaForm
             }
             lastFilter = ans.Filter;
             lastQuestion = q;
+            lastIntent = ans.Intent;
+            lastInstr = instructions;
+            rawHits = ans.Hits;
             hits = ans.Hits;
+            hidden = new(); showHidden = false; lastExport = null;
             understood.Text = "Understood as: " + ans.Explain;
+            lastCheck = DateTime.Now;
+            if (instructions.Length > 0)
+            {
+                info.Text = "✦ Reading your instructions…";
+                plan = await Prompts.Understand(mainQ, instructions, my.Token);
+                if (my.IsCancellationRequested) return;
+                await ApplyPlan(true);
+                bottom.Visible = true;
+                follow.Text = "";
+                History.Add("ask", Ai.Active()?.Id ?? "", "", "ask-mail", q + " ✎ " + instructions, $"{hits.Count} results · {ans.Explain}");
+                return;
+            }
+            plan = null;
+            planBox.Visible = resultRow.Visible = false;
+            list.GroupKey = null; list.HiddenShown = null;
             var mainCount = hits.Count(h => h.MaybeAnswered.Length == 0);
             var maybeCount = hits.Count - mainCount;
             var count = hits.Count == 0 ? "No emails found" : $"{mainCount} email{(mainCount == 1 ? "" : "s")} found" + (maybeCount > 0 ? $" · {maybeCount} probably answered (grey, at the bottom)" : "");
@@ -656,6 +794,147 @@ class AskForm : NovaForm
     {
         message.Text = s;
         message.Visible = true;
+    }
+
+    /// <summary>Your instructions on the list: rules on this PC, the AI check (level B), grouping, and the file.</summary>
+    async Task ApplyPlan(bool export)
+    {
+        if (plan == null) return;
+        var ct = cts?.Token ?? CancellationToken.None;
+        var main = rawHits.Where(h => h.MaybeAnswered.Length == 0).ToList();
+        var maybe = rawHits.Where(h => h.MaybeAnswered.Length > 0).ToList();
+        var (kept, hid) = Prompts.Apply(main, plan);
+        var afterRules = kept.Count;
+        int read = 0; var note = plan.Note;
+        if (level != "A" && plan.AiCheck.Length > 0)
+        {
+            info.Text = $"✦ {Ai.Active()?.Label ?? "Your AI"} is checking {Math.Min(kept.Count, Prompts.MaxAi)} emails: “{plan.AiCheck}”…";
+            try
+            {
+                var r = await Prompts.AiFilter(this, kept, plan.AiCheck, ct);
+                kept = r.Kept; hid.AddRange(r.Hidden); read = r.Read;
+                if (r.Note.Length > 0) note = (note.Length > 0 ? note + " · " : "") + r.Note;
+            }
+            catch (OperationCanceledException) { return; }
+        }
+        hidden = hid;
+        hits = kept.Concat(Prompts.Apply(maybe, plan).Kept).ToList();
+        list.GroupKey = plan.Group.Length > 0 ? (Func<MailHit, string>)(h => Prompts.GroupKey(h, plan)) : null;
+        ShowList();
+        var label = Ai.Active()?.Label ?? "AI";
+        resultLbl.Text = $"✓ {kept.Count} email{(kept.Count == 1 ? "" : "s")} · {main.Count} found → {afterRules} after your rules" +
+                         (level != "A" && plan.AiCheck.Length > 0 ? $" → {kept.Count} after the AI check ({label} · {read} read)" : "") + (note.Length > 0 ? " · " + note : "");
+        info.Text = "";
+        if (export && plan.Export.Length > 0)
+        {
+            try { lastExport = Prompts.Export(kept, plan, lastIntent == "outstanding" ? "Waiting for my reply" : Prompts.Split(lastQuestion).Main, lastQuestion, lastInstr); }
+            catch (Exception e) { lastExport = null; note = "⚠ file not saved: " + e.Message; }
+        }
+        resultRow.Controls.Clear();
+        resultRow.Controls.Add(resultLbl);
+        if (lastExport != null)
+        {
+            var fl = Th.L("⇩ " + Path.GetFileName(lastExport) + " saved", 9.5f, Color.FromArgb(0xFF, 0xD2, 0x7A), true);
+            fl.Margin = new Padding(0, 7, 8, 0);
+            resultRow.Controls.Add(fl);
+            resultRow.Controls.Add(Th.B("Open file", () => Shell.Open(lastExport), true));
+            resultRow.Controls.Add(Th.B("📁 Folder", () => Shell.Select(lastExport)));
+        }
+        else resultRow.Controls.Add(Th.B("⇩ Export (" + (plan.Export.Length > 0 ? plan.Export : Prompts.DefaultExport) + ")", () =>
+        {
+            var p2 = plan;
+            if (p2.Export.Length == 0) p2.Export = Prompts.DefaultExport;
+            lastExport = Prompts.Export(hits.Where(h => h.MaybeAnswered.Length == 0).ToList(), p2, lastIntent == "outstanding" ? "Waiting for my reply" : Prompts.Split(lastQuestion).Main, lastQuestion, lastInstr);
+            Shell.Open(lastExport);
+        }));
+        resultRow.Controls.Add(Th.B("⭐ Save this prompt", () =>
+        {
+            var nm = Prompts.Split(lastQuestion).Main;
+            if (nm.Length > 40) nm = nm[..40];
+            var sp = Prompts.AskSave(this, new SavedPrompt { Name = nm, Question = lastQuestion, Instructions = instr.Text.Trim(), Level = level, Where = "ask" });
+            if (sp != null) info.Text = $"⭐ Saved “{sp.Name}” · {Prompts.RunText(sp)} — find it under ⭐ My prompts";
+        }));
+        resultRow.Controls.Add(hiddenLink);
+        UpdateHiddenLink();
+        resultRow.Visible = true;
+        DrawPlan();
+        stack.FitAll();
+    }
+
+    void UpdateHiddenLink()
+    {
+        hiddenLink.Visible = hidden.Count > 0;
+        hiddenLink.Text = "Hidden by your instructions: " + Prompts.Hidden(hidden) + (showHidden ? " · hide them" : " · show them");
+    }
+
+    /// <summary>✦ Nova understood: one chip per rule — ✕ removes it and the list updates at once.</summary>
+    void DrawPlan()
+    {
+        planBox.SuspendLayout();
+        foreach (Control c in planBox.Controls) c.Dispose();
+        planBox.Controls.Clear();
+        planBox.MaximumSize = new Size(Math.Max(400, stack.ClientSize.Width - 40), 0);
+        if (plan == null || !Prompts.ShowChips) { planBox.Visible = false; planBox.ResumeLayout(); return; }
+        planBox.Controls.Add(Th.L("✦ NOVA UNDERSTOOD", 8.5f, Th.Muted, true));
+        Color pc = Color.FromArgb(0xB9, 0xB0, 0xFF), ai = Color.FromArgb(0x8F, 0xD6, 0xB4), outc = Color.FromArgb(0xFF, 0xD2, 0x7A);
+        void Chip(string text, Color c, Action remove)
+        {
+            var b = Th.Chip(text + "  ✕", false, async () => { remove(); await ApplyPlan(false); });
+            b.Font = Th.F(9); b.ForeColor = c;
+            planBox.Controls.Add(b);
+        }
+        foreach (var x in plan.ExStarts.ToList()) Chip($"⛔ starts with “{x}”", pc, () => plan.ExStarts.Remove(x));
+        foreach (var x in plan.ExContains.ToList()) Chip($"⛔ mentions “{x}”", pc, () => plan.ExContains.Remove(x));
+        foreach (var x in plan.ExFrom.ToList()) Chip($"⛔ from {x}", pc, () => plan.ExFrom.Remove(x));
+        foreach (var x in plan.OnlyFrom.ToList()) Chip($"👤 only from {x}", pc, () => plan.OnlyFrom.Remove(x));
+        foreach (var x in plan.OnlyWords.ToList()) Chip($"🏷 only {x}", pc, () => plan.OnlyWords.Remove(x));
+        if (plan.NeedAttach) Chip("📎 with attachments", pc, () => plan.NeedAttach = false);
+        if (plan.MinDays > 0) Chip($"⏳ waiting {plan.MinDays}+ days", pc, () => plan.MinDays = 0);
+        if (plan.AiCheck.Length > 0) Chip((level == "A" ? "✦ AI check (off — level A): " : "✦ AI check: ") + plan.AiCheck, ai, () => plan.AiCheck = "");
+        if (plan.Group.Length > 0) Chip("▦ group by " + plan.Group, outc, () => plan.Group = "");
+        if (plan.Export.Length > 0) Chip("⇩ " + (plan.Export == "xlsx" ? "Excel" : plan.Export == "docx" ? "Word" : "CSV"), outc, () => plan.Export = "");
+        var add = Th.Chip("＋ add", false, () => { if (!instr.Visible) { instr.Visible = true; stack.FitAll(); } instr.Focus(); instr.SelectionStart = instr.TextLength; });
+        add.Font = Th.F(9); add.ForeColor = Th.Muted;
+        planBox.Controls.Add(add);
+        planBox.Visible = true;
+        planBox.ResumeLayout();
+    }
+
+    /// <summary>⏳ still waiting · 🔴 overdue · 🟠 this week · ⚪ FYI · ✓ handled today · ↻ checked — always at the top.</summary>
+    void UpdateCounts()
+    {
+        var main = hits.Where(h => h.MaybeAnswered.Length == 0).ToList();
+        var maybe = hits.Count - main.Count;
+        if (lastQuestion.Length == 0) { countBar.Visible = false; return; }
+        countBar.Text = lastIntent == "outstanding"
+            ? $"⏳ {main.Count} still waiting · 🔴 {main.Count(h => h.Status == "needs")} overdue · 🟠 {main.Count(h => h.Status == "week")} this week · ⚪ {main.Count(h => h.Status == "fyi")} FYI" +
+              (maybe > 0 ? $" · {maybe} probably answered" : "") + $" · ✓ {Outstanding.HandledToday()} handled today · ↻ checked {lastCheck:HH:mm}"
+            : $"✉ {main.Count} email{(main.Count == 1 ? "" : "s")}" + (maybe > 0 ? $" · {maybe} probably answered" : "") + (hidden.Count > 0 ? $" · {hidden.Count} hidden by your instructions" : "");
+        countBar.Visible = true;
+    }
+
+    /// <summary>Every 3 minutes (and when you come back to the window): emails you answered in Outlook leave the list.</summary>
+    async void Recheck()
+    {
+        if (rechecking || lastIntent != "outstanding" || hits.Count == 0 || Outlook.Running() == null) return;
+        rechecking = true;
+        try
+        {
+            var before = hits.Where(h => h.MaybeAnswered.Length == 0).ToList();
+            var after = await Task.Run(() => Outstanding.Check(before.ToList()));
+            var still = after.Where(h => h.MaybeAnswered.Length == 0).ToHashSet();
+            var gone = before.Where(h => !still.Contains(h)).ToList();
+            foreach (var h in gone) if (h.MaybeAnswered.Length == 0) h.MaybeAnswered = Outstanding.IsHandled(h) ? "marked as handled" : "you replied (checked live in Outlook)";
+            lastCheck = DateTime.Now;
+            if (gone.Count > 0)
+            {
+                ShowList();
+                info.Text = $"✓ {gone.Count} answered in Outlook — moved to “Probably answered” ({DateTime.Now:HH:mm})";
+            }
+            else UpdateCounts();
+        }
+        catch (Exception e) { Log.Warn("recheck", e.Message); }
+        finally { rechecking = false; }
     }
 
     /// <summary>Medium window: cards stretch. Wide (≥ 1300 px) or maximised: list on the left, the email on the right.</summary>
@@ -685,8 +964,10 @@ class AskForm : NovaForm
         list.Compact = wide;
         lastWidth = ListWidth();
         var sel = list.Selected;
+        list.HiddenShown = showHidden && hidden.Count > 0 ? hidden : null;
         list.Show(hits, lastWidth);
         listHost.FitAll();
+        UpdateCounts();
         if (wide)
         {
             if (sel != null && hits.Contains(sel)) list.Select(sel);
@@ -708,7 +989,7 @@ class AskForm : NovaForm
         NovaEnhance.Work.LogMail(h, "✓ Handled");
         lastHandled = h;
         var i = list.Order.IndexOf(h);
-        hits.Remove(h);
+        hits.Remove(h); rawHits.Remove(h);
         ShowList();
         if (wide && list.Order.Count > 0) list.Select(list.Order[Math.Clamp(i, 0, list.Order.Count - 1)]);
         info.Text = $"✓ “{h.Subject}” marked as handled — it won't show as waiting again (↩ Undo handled at the bottom).";
@@ -719,7 +1000,7 @@ class AskForm : NovaForm
     {
         if (lastHandled == null) return;
         Outstanding.MarkHandled(lastHandled, false);
-        hits.Insert(0, lastHandled);
+        hits.Insert(0, lastHandled); rawHits.Insert(0, lastHandled);
         info.Text = $"↩ “{lastHandled.Subject}” is back in the list.";
         lastHandled = null;
         undoBtn.Visible = false;
@@ -746,7 +1027,7 @@ class AskForm : NovaForm
             ShowMessage("✦ Draft reply needs Settings → Email & AI → C or D: the full email goes to the AI only when you tap Draft.");
             return;
         }
-        var instr = Prompt.Ask(this, "✦ Draft reply", "Anything to include? (optional — e.g. \"agree, send revised drawings by Thursday\")");
+        var instr = Prompt.AskLong(this, "✦ Draft reply", "✎ Instructions for your AI (optional) — what to say, tone, length, language, who to copy…", "e.g. Agree with the GA, but ask them to coordinate the lift door finishes with ID spec 14 21 00 and resubmit by Thursday. Firm but polite, short.");
         if (instr == null) return;
         ShowMessage($"✦ Writing a reply to “{h.Subject}”…");
         try
@@ -880,6 +1161,10 @@ class BriefForm : NovaForm
         };
         Shown += (_, _) => Relayout(true);
         FormClosing += (_, e) => { if (e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Hide(); } };
+        var live = new System.Windows.Forms.Timer { Interval = 180_000 };
+        live.Tick += (_, _) => { if (Visible) Recheck(); };
+        live.Start();
+        Activated += (_, _) => { if (DateTime.Now - lastCheck > TimeSpan.FromSeconds(45)) Recheck(); };
         Relayout(true);
     }
 
@@ -922,10 +1207,54 @@ class BriefForm : NovaForm
     int ListWidth(Stack col) => mode == 2 ? Math.Max(280, col.ClientSize.Width - col.Padding.Horizontal - 22) : Math.Max(300, one.ClientSize.Width - one.Padding.Horizontal - 22);
 
     /// <summary>Draws the lists for the current layout (no new search).</summary>
+    DateTime lastCheck = DateTime.Now;
+    bool rechecking;
+
+    /// <summary>⏳ The numbers at the top, recounted on every change (handled, answered in Outlook, refresh).</summary>
+    void Counts()
+    {
+        var n = lastNeeds.Where(h => h.MaybeAnswered.Length == 0).ToList();
+        int red = n.Count(h => h.Status == "needs"), orange = n.Count(h => h.Status == "week"), fy = n.Count(h => h.Status == "fyi");
+        var wk = NovaEnhance.Work.All();
+        int wDue = wk.Count(t => t.DueToday), wOver = wk.Count(t => t.Overdue), wWait = wk.Count(t => t.Status == "waiting");
+        info.Text = $"⏳ {n.Count} still waiting · 🔴 {red} overdue · 🟠 {orange} this week · ⚪ {fy} FYI · ↩ {lastFollow.Count} follow-ups · ✓ {Outstanding.HandledToday()} handled today · ↻ checked {lastCheck:HH:mm}\n" +
+                    (wDue + wOver + wWait > 0 ? $"📌 My Work: {wDue} due today · {wOver} overdue · {wWait} waiting for others · " : "") +
+                    $"{DateTime.Now:dddd dd MMMM} · last {Store.BriefDays} days · Index: {MailIndex.Status}";
+        info.Font = Th.F(10, true);
+        top.FitAll();
+    }
+
+    /// <summary>Every 3 minutes while the brief is open (and when you come back to it): answered emails leave the list.</summary>
+    async void Recheck()
+    {
+        if (rechecking || busy || lastNeeds.Count == 0 || Outlook.Running() == null) return;
+        rechecking = true;
+        try
+        {
+            var before = lastNeeds.Where(h => h.MaybeAnswered.Length == 0).ToList();
+            var after = await Task.Run(() => Outstanding.Check(before.ToList()));
+            var still = after.Where(h => h.MaybeAnswered.Length == 0).ToHashSet();
+            var gone = before.Where(h => !still.Contains(h)).ToList();
+            lastCheck = DateTime.Now;
+            if (gone.Count > 0)
+            {
+                foreach (var h in gone) lastNeeds.Remove(h);
+                Draw();
+                message.Visible = true;
+                message.Text = $"✓ {gone.Count} answered in Outlook — removed from the list ({DateTime.Now:HH:mm})";
+                top.FitAll();
+            }
+            else Counts();
+        }
+        catch (Exception e) { Log.Warn("brief recheck", e.Message); }
+        finally { rechecking = false; }
+    }
+
     void Draw()
     {
         var w = ListWidth(colB);
         lastW = w;
+        if (lastNeeds.Count + lastFollow.Count > 0 || !busy) Counts();
         var compact = mode > 0;
         needs.Compact = follow.Compact = fyi.Compact = compact;
         var sel = new[] { needs, fyi, follow }.Select(l => l.Selected).FirstOrDefault(x => x != null);
@@ -968,7 +1297,7 @@ class BriefForm : NovaForm
     async void Draft(MailHit h)
     {
         if (!Store.AiSeesFull) { Say(h, "✦ Draft reply needs Settings → Email & AI → C or D."); return; }
-        var instr = Prompt.Ask(this, "✦ Draft", "Anything to include? (optional)");
+        var instr = Prompt.AskLong(this, "✦ Draft", "✎ Instructions for your AI (optional) — what to say, tone, length, language…", "e.g. Polite reminder, ask for the revised shop drawing by Sunday.");
         if (instr == null) return;
         Say(h, "✦ Writing…");
         try
@@ -1002,11 +1331,9 @@ class BriefForm : NovaForm
             var (n, f) = await BriefLogic.Build(CancellationToken.None);
             lastNeeds = n; lastFollow = f;
             await DrawCalendar(n, true);
-            int red = n.Count(h => h.Status == "needs"), orange = n.Count(h => h.Status == "week"), fy = n.Count(h => h.Status == "fyi");
-            var wk = NovaEnhance.Work.All();
-            int wDue = wk.Count(t => t.DueToday), wOver = wk.Count(t => t.Overdue), wWait = wk.Count(t => t.Status == "waiting");
-            info.Text = (wDue + wOver + wWait > 0 ? $"📌 My Work: {wDue} due today · {wOver} overdue · {wWait} waiting for others\n" : "") + $"{DateTime.Now:dddd dd MMMM} · 🔴 {red} overdue · 🟠 {orange} this week · ⚪ {fy} FYI · ↩ {f.Count} follow-ups · last {Store.BriefDays} days · Index: {MailIndex.Status}";
+            lastCheck = DateTime.Now;
             Draw();
+            Counts();
             if (n.Count == 0 && f.Count == 0)
             {
                 message.Visible = true;

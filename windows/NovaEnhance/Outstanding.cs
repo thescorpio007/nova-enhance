@@ -25,6 +25,13 @@ static class Outstanding
         return handled;
     }
 
+    /// <summary>How many emails you marked as handled today.</summary>
+    public static int HandledToday()
+    {
+        try { var d = DateTime.Now.ToString("yyyy-MM-dd"); return (JsonNode.Parse(Store.Str("win_handled", "[]"))?.AsArray() ?? new JsonArray()).Count(x => x?["d"]?.ToString() == d); }
+        catch { return 0; }
+    }
+
     public static bool IsHandled(MailHit h) => Handled().Contains(h.Entry ?? "");
 
     public static void MarkHandled(MailHit h, bool on)

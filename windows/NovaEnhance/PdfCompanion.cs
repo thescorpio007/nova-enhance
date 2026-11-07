@@ -184,6 +184,7 @@ class PdfPanel : NovaForm
     readonly TextBox ask, find;
     readonly NumericUpDown page;
     readonly LinkLabel answer;
+    readonly TextBox pInstr;
     readonly FlowLayoutPanel hits;
     string path = "";
     List<Seg> segs;
@@ -209,9 +210,13 @@ class PdfPanel : NovaForm
         ask = s.Add(Th.Prose(Th.Box(false)), true);
         ask.PlaceholderText = "e.g. What is the fixing detail of the glass balustrade?";
         ask.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; Ask(ask.Text, false); } };
+        pInstr = s.Add(Th.Prose(Th.Box(true, 3)), true);
+        pInstr.PlaceholderText = "✎ More instructions (optional) — e.g. answer as a table: item · value · page · only the IFC notes · in Arabic";
+        pInstr.Visible = false;
         var r0 = s.Add(Th.Row());
         r0.Controls.Add(Th.B("🔍 Ask", () => Ask(ask.Text, false), true));
         r0.Controls.Add(Th.B("✦ Summary / check drawing", Summary));
+        r0.Controls.Add(Th.B("✎", () => { pInstr.Visible = !pInstr.Visible; if (pInstr.Visible) pInstr.Focus(); s.FitAll(); }));
 
         var r1 = s.Add(Th.Row());
         r1.Controls.Add(Th.B("🔤 OCR this PDF", Ocr));
@@ -355,7 +360,7 @@ class PdfPanel : NovaForm
                       "After each fact put its page in square brackets, e.g. [p.3]. Quote exact values (dimensions, materials, ratings, references, revisions). " +
                       (detailed ? "Give a complete, structured answer. " : "Answer in 2 to 6 short lines, the direct answer first. ") +
                       "If the document does not say, write so plainly. Reply in the language of the question." + FolderAsk.AdviceRule + Modes.ProfileNote();
-            var a = await Ai.Chat(sys, $"Document: {Path.GetFileName(path)}\n\n{Extracts(pick, 60000)}\nQuestion: {q}", !detailed, false, prov, my.Token);
+            var a = await Ai.Chat(sys, $"Document: {Path.GetFileName(path)}\n\n{Extracts(pick, 60000)}\nQuestion: {q}" + (pInstr.Text.Trim().Length > 0 ? "\nInstructions from the user (follow them for content, format, length and language): " + pInstr.Text.Trim() : ""), !detailed, false, prov, my.Token);
             if (my.IsCancellationRequested) return;
             History.Add("ask", prov.Id, Store.Model(prov.Id), "pdf", Path.GetFileName(path) + " · " + q, a);
             ShowAnswer(a);

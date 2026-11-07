@@ -47,6 +47,7 @@
     <EmbeddedResource Include="Browser\**" />
     <None Remove="Chat\**" />
     <EmbeddedResource Include="Chat\**" />
+    <EmbeddedResource Include="nova.ico" LogicalName="nova.ico" />
   </ItemGroup>
 
 </Project>
