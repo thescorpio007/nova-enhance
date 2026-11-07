@@ -264,6 +264,32 @@ static class MailIndex
     static void Put(SqliteConnection c, string k, string v) => Exec(c, "INSERT INTO state(k,v) VALUES($k,$v) ON CONFLICT(k) DO UPDATE SET v=$v", ("$k", k), ("$v", v));
     static long GetL(SqliteConnection c, string k, long def) => long.TryParse(Get(c, k), out var x) ? x : def;
 
+    /// <summary>For the progress line: emails indexed, and emails in the folders Nova reads (left-out folders not counted).</summary>
+    public static (long Done, long Total) Totals()
+    {
+        try
+        {
+            if (!File.Exists(DbPath)) return (0, 0);
+            using var c = Open();
+            var left = LeftOut();
+            long done = 0, total = 0;
+            using (var cmd = c.CreateCommand())
+            {
+                cmd.CommandText = "SELECT fid, COUNT(*) FROM mail GROUP BY fid";
+                using var r = cmd.ExecuteReader();
+                while (r.Read()) if (r.IsDBNull(0) || !left.Contains(r.GetString(0))) done += r.GetInt64(1);
+            }
+            using (var cmd = c.CreateCommand())
+            {
+                cmd.CommandText = "SELECT fid, total FROM folders";
+                using var r = cmd.ExecuteReader();
+                while (r.Read()) if (!left.Contains(r.GetString(0)) && !r.IsDBNull(1)) total += r.GetInt64(1);
+            }
+            return (done, total);
+        }
+        catch { return (0, 0); }
+    }
+
     public static long Count()
     {
         try { using var c = Open(); return Convert.ToInt64(Scalar(c, "SELECT COUNT(*) FROM mail")); } catch { return 0; }
@@ -310,7 +336,9 @@ static class MailIndex
                 continue;
             }
             catch (Exception e) { Status = "⚠ " + e.Message; Log.Error("index", e); }
-            wake.WaitOne(TimeSpan.FromMinutes(10));
+            IndexProgress.PassEnded();
+            // ⚡ Index now: the next pass starts at once until everything is in.
+            wake.WaitOne(IndexProgress.Rushing && !(Complete && !Deferred) ? TimeSpan.FromSeconds(5) : TimeSpan.FromMinutes(10));
         }
     }
 

@@ -244,11 +244,14 @@ class SettingsForm : NovaForm
         page.Add(Th.Row(false)).Controls.Add(Th.B("☀ Open the brief now", Screens.Brief));
 
         page.Add(Th.Section("Email index"));
-        liveIndex = Note(MailIndex.Status, Th.Text);
+        var line = page.Add(new IndexLine(true), true);
+        line.Height = 32;
+        liveIndex = Note(MailIndex.Status, Th.Muted);
         page.Add(Th.Check("Index attachments (PDF, Word, text) so Ask Nova finds words inside them", Store.IndexAttachments, v => Store.IndexAttachments = v));
         page.Add(Th.Check("Keep the index on this PC only (not in Documents / OneDrive)", Store.IndexLocal, v => MailIndex.Move(v)));
         Note("The index holds copies of your email text, encrypted and locked to your Windows account.");
         var ir = page.Add(Th.Row(false));
+        ir.Controls.Add(Th.B("⚡ Index now", () => IndexProgress.Ask(this), true));
         ir.Controls.Add(Th.B("↻ Update now", MailIndex.Now));
         ir.Controls.Add(Th.B("Rebuild index", () =>
         {

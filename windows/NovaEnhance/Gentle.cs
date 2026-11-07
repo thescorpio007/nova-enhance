@@ -45,12 +45,14 @@ static class Gentle
     }
 
     /// <summary>True when older mail (dated <paramref name="d"/>) should wait: working hours, not idle, older than 14 days.</summary>
-    public static bool HoldBacklog(DateTime d) => On && WorkingNow && Idle < TimeSpan.FromMinutes(2) && d < DateTime.Now.AddDays(-14);
+    public static bool HoldBacklog(DateTime d) => On && !IndexProgress.Rushing && WorkingNow && Idle < TimeSpan.FromMinutes(2) && d < DateTime.Now.AddDays(-14);
 
     /// <summary>Called every 25 emails while indexing.</summary>
     public static void Pause()
     {
         if (!On) { Thread.Sleep(3); return; }
+        // ⚡ Index now: full speed (a little slower on battery).
+        if (IndexProgress.Rushing) { Thread.Sleep(OnBattery ? 150 : 3); return; }
         bool idle = Idle >= TimeSpan.FromMinutes(2);
         int ms = OnBattery ? (idle ? 400 : 1200) : idle ? 3 : WorkingNow ? 700 : 300;
         Thread.Sleep(ms);

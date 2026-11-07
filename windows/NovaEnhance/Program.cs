@@ -76,6 +76,11 @@ class NovaContext : ApplicationContext
 
         tray = new NotifyIcon { Icon = Th.AppIcon, Text = "Nova Enhance", Visible = true };
         Program.Tray = tray;
+        // ⏳ Pointing at the tray icon shows the email index progress.
+        IndexProgress.Start();
+        var trayTip = new System.Windows.Forms.Timer { Interval = 5000 };
+        trayTip.Tick += (_, _) => { try { tray.Text = IndexProgress.Tray(); } catch { } };
+        trayTip.Start();
         var m = new ContextMenuStrip { Font = Th.F(10) };
         m.Items.Add("✦  Enhance selected text      Ctrl+Shift+E", null, (_, _) => Screens.Enhance());
         m.Items.Add("🔍  Ask Nova about my email   Ctrl+Shift+F", null, (_, _) => Screens.Ask());

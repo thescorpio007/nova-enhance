@@ -436,6 +436,7 @@ class AskForm : NovaForm
         split.Panel2.Controls.Add(pane);
         Controls.Add(split);
         Controls.Add(stack);
+        Controls.Add(new IndexLine { Dock = DockStyle.Bottom });
 
         var head = stack.Add(Th.Row(false));
         head.Controls.Add(Th.L("🔍 Ask Nova", 14, Th.Text, true));
