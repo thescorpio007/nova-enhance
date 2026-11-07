@@ -562,8 +562,8 @@ static class FolderIndex
         try
         {
             bool content = FileKinds.ReadContent(it.Ext);
-            // Logos and icons (small images) have no useful text: not sent to OCR.
-            if (content && image && it.Size < 30 * 1024) { content = false; r.Note = "small image — not read"; }
+            // Logos and icons (small pictures, under 300 × 300 pixels) have no useful text: not sent to OCR.
+            if (content && image && it.LocalPath != null && SmallPicture(it.LocalPath)) { content = false; r.Note = "small image — not read"; }
             if (content && it.Size > maxBytes)
             {
                 r.Note = $"skipped: larger than {MaxMb} MB"; content = false;
@@ -622,8 +622,6 @@ static class FolderIndex
                         Reason = err.Contains("password", StringComparison.OrdinalIgnoreCase) || err.Contains("encrypt", StringComparison.OrdinalIgnoreCase) ? "Password protected — can't be read" : "Could not read: " + err,
                         Action = "open the file"
                     };
-                else if ((segs.Count == 0 || segs.All(sg => sg.Text.Trim().Length == 0)) && image && FileKinds.On("E"))
-                    r.Note = "photo — no text";   // photos and renders: nothing to find, not a problem
                 else if (segs.Count == 0 || segs.All(sg => sg.Text.Trim().Length == 0))
                 {
                     var scanned = it.Ext is ".pdf" or ".jpg" or ".jpeg" or ".png" or ".tif" or ".tiff" or ".bmp";
@@ -646,8 +644,20 @@ static class FolderIndex
             if (temp != null) try { File.Delete(temp); } catch { }
             if (temp2 != null) try { File.Delete(temp2); } catch { }
         }
-        if (r.Problem != null) Log.Warn("Folder search", $"{r.Problem.Reason} · {it.Name}");
+        // Photos with no text stay on the ⚠ Problems tab (Gemini vision can still read them) but don't fill the error log.
+        if (r.Problem != null && !(image && r.Problem.Reason.StartsWith("Scanned"))) Log.Warn("Folder search", $"{r.Problem.Reason} · {it.Name}");
         return r;
+    }
+
+    static bool SmallPicture(string path)
+    {
+        try
+        {
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var img = System.Drawing.Image.FromStream(fs, false, false);
+            return img.Width < 300 && img.Height < 300 || img.Width * (long)img.Height < 300L * 300;
+        }
+        catch { return false; }
     }
 
     static bool IsImage(string ext) => ext is ".jpg" or ".jpeg" or ".png" or ".tif" or ".tiff" or ".bmp" or ".gif" or ".webp";
