@@ -280,6 +280,16 @@ static class Screens
         catch (Exception e) { Log.Error("enhance window", e); }
     }
 
+    static MailAskForm mailAsk;
+
+    /// <summary>✦ Ask Nova about this email (h = an email from a Nova list; null = the email selected in Outlook).</summary>
+    public static void MailAsk(MailHit h, string subjectHint = "")
+    {
+        if (mailAsk == null || mailAsk.IsDisposed) mailAsk = new MailAskForm();
+        Show(mailAsk);
+        if (h != null) mailAsk.ShowMail(h); else mailAsk.LoadCurrent(subjectHint ?? "");
+    }
+
     public static void Ask()
     {
         if (ask == null || ask.IsDisposed) ask = new AskForm();

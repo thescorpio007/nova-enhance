@@ -679,9 +679,11 @@ static class Server
             case "/api/open":
             {
                 var what = S(r, "what");
+                var subj = S(r, "subject");
                 Program.UiContext?.Post(_ =>
                 {
-                    if (what == "ask") Screens.Ask();
+                    if (what == "askmail") Screens.MailAsk(null, subj);
+                    else if (what == "ask") Screens.Ask();
                     else if (what == "folder") Screens.FolderSearch(null);
                     else if (what == "brief") Screens.Brief();
                     else if (what == "hub") Screens.Hub(null);

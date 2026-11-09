@@ -10,6 +10,7 @@
 </head>
 <body>
 <div class="head"><span class="logo">✦</span> <b>Nova Enhance</b> <span id="ai" class="pill"></span></div>
+<div id="subj" class="small muted"></div>
 <div id="status" class="status">Connecting to Nova Enhance on this PC…</div>
 
 <div id="doc" class="hide">
@@ -50,9 +51,9 @@
     <button id="sum" class="primary">✦ Summarise</button>
     <button id="draft">✦ Draft reply</button>
     <button id="trmail">🌐 Translate</button>
-    <button id="asknova">🔍 Ask Nova</button>
+    <button id="asknova">✦ Ask Nova about this email</button>
   </div>
-  <input id="instr" placeholder="For the reply (optional): e.g. agree, send drawings by Thursday">
+  <textarea id="instr" rows="3" placeholder="✎ For the reply (optional) — write anything: what to say, tone, length, language…"></textarea>
   <div class="small muted">The email text goes to your AI only when you click a button.</div>
 </div>
 
@@ -76,9 +77,11 @@
     <button id="replace" class="primary">⇄ Replace</button>
     <button id="insert">＋ Insert</button>
     <button id="copy">⧉ Copy</button>
+    <button id="clear">🧹 Clear</button>
   </div>
 </div>
 
+<div class="row"><button id="clear2">🧹 Clear</button></div>
 <div class="sec">📄 Original</div>
 <div id="orig" class="orig small muted">The text before each enhancement is kept here and in Documents\Nova Enhance\Originals.</div>
 <div class="row"><button id="putback">↩ Put back original</button> <button id="older">🕘 Older</button></div>

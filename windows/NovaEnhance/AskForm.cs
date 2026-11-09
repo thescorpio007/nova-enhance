@@ -179,6 +179,7 @@ class MailList : FlowLayoutPanel
             }));
             btns.Controls.Add(Th.B("Summary", () => OnSummary?.Invoke(h)));
             btns.Controls.Add(Th.B(h.Sent ? "✦ Draft follow-up" : "✦ Draft reply", () => OnDraft?.Invoke(h), true));
+        btns.Controls.Add(Th.B("✦ Ask about this email", () => Screens.MailAsk(h)));
             if (!h.Sent && OnHandled != null) btns.Controls.Add(Th.B("✓ Handled", () => OnHandled(h)));
             btns.Controls.Add(Th.B("💾 Save as…", () => MailFile.SaveAs(h, FindForm())));
             btns.Controls.Add(Th.B("⧉ Copy as file", () => MailFile.Copy(h, FindForm())));
@@ -329,6 +330,7 @@ class ReadPane : Panel
         btns.Controls.Add(Th.B("Open in Outlook", () => { try { Outlook.Open(h.Entry, h.StoreId); } catch (Exception e) { MessageBox.Show("Could not open it in Outlook: " + e.Message, "Nova Enhance"); } }));
         btns.Controls.Add(Th.B("Summary", () => OnSummary?.Invoke(h)));
         btns.Controls.Add(Th.B(h.Sent ? "✦ Draft follow-up" : "✦ Draft reply", () => OnDraft?.Invoke(h), true));
+        btns.Controls.Add(Th.B("✦ Ask about this email", () => Screens.MailAsk(h)));
         if (!h.Sent) btns.Controls.Add(Th.B("✓ Mark as handled", () => OnHandled?.Invoke(h)));
         btns.Controls.Add(Th.B("💾 Save as…", () => MailFile.SaveAs(h, FindForm())));
         btns.Controls.Add(Th.B("⧉ Copy as file", () => MailFile.Copy(h, FindForm())));

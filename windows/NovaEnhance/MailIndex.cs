@@ -101,16 +101,52 @@ static class Outlook
         item.Display(false);
     }
 
-    /// <summary>Opens a reply in Outlook with the draft on top. Nothing is sent: the user checks and sends.</summary>
+    /// <summary>The email selected (or open) in Outlook right now — from the index when it is there, else read from Outlook.</summary>
+    public static MailHit CurrentMail()
+    {
+        dynamic app = Running();
+        if (app == null) throw new InvalidOperationException("Outlook is not open");
+        dynamic item = null;
+        try { dynamic w = app.ActiveWindow(); try { item = w.CurrentItem; } catch { item = null; } } catch { }
+        if (item == null) { try { dynamic sel = app.ActiveExplorer().Selection; if ((int)sel.Count > 0) item = sel.Item(1); } catch { } }
+        if (item == null) return null;
+        string entry = S(() => item.EntryID), store = S(() => item.Parent.StoreID);
+        var h = entry.Length > 0 ? MailIndex.ByEntry(entry) : null;
+        if (h != null) { if (string.IsNullOrEmpty(h.StoreId)) h.StoreId = store; return h; }
+        var atts = new List<string>();
+        try { dynamic a = item.Attachments; int n = (int)a.Count; for (int i = 1; i <= n; i++) { dynamic x = a.Item(i); atts.Add(S(() => x.FileName)); } } catch { }
+        DateTime date = DateTime.Now;
+        try { date = (DateTime)item.ReceivedTime; } catch { try { date = (DateTime)item.SentOn; } catch { } }
+        var from = S(() => item.SenderEmailAddress);
+        return new MailHit
+        {
+            Entry = entry, StoreId = store, Conv = S(() => item.ConversationID), Folder = S(() => item.Parent.Name), Subject = S(() => item.Subject),
+            FromName = S(() => item.SenderName), FromAddr = from, To = S(() => item.To), Cc = S(() => item.CC), Body = S(() => item.Body),
+            AttNames = string.Join(";", atts.Where(x => x.Length > 0)), Date = date, Sent = Me.IsMe(from)
+        };
+    }
+
+    /// <summary>The whole text of an email (the index keeps a shorter copy).</summary>
+    public static string FullBody(string entry, string store)
+    {
+        dynamic app = Get();
+        dynamic ns = app.GetNamespace("MAPI");
+        dynamic item = ns.GetItemFromID(entry, store);
+        try { var b = S(() => item.Body); return b.Length > 20000 ? b[..20000] : b; } finally { Release(item); Release(ns); }
+    }
+
+    /// <summary>Opens a reply in Outlook with the draft on top. Nothing is sent: the user checks and sends.
+    /// Your signature and the earlier emails below stay exactly as Outlook made them; the AI's own closing is dropped when you have a signature.</summary>
     public static void Reply(string entry, string store, string draft, bool all)
     {
         dynamic app = Get();
         dynamic ns = app.GetNamespace("MAPI");
         dynamic item = ns.GetItemFromID(entry, store);
         dynamic reply = all ? item.ReplyAll() : item.Reply();
-        var html = System.Net.WebUtility.HtmlEncode(draft ?? "").Replace("\r\n", "\n").Replace("\n", "<br>");
         reply.Display(false);
         string existing = Convert.ToString(reply.HTMLBody) ?? "";
+        if (Sig.HasSignature(existing)) draft = Sig.StripClosing(draft);
+        var html = System.Net.WebUtility.HtmlEncode(draft ?? "").Replace("\r\n", "\n").Replace("\n", "<br>");
         var div = "<div style=\"font-family:Calibri,Arial,sans-serif;font-size:11pt\">" + html + "</div>";
         var m = Regex.Match(existing, "<body[^>]*>", RegexOptions.IgnoreCase);
         reply.HTMLBody = m.Success ? existing.Insert(m.Index + m.Length, div) : div + existing;
@@ -919,6 +955,21 @@ static class MailIndex
             };
         }
         catch { return null; }
+    }
+
+    /// <summary>The emails of one Outlook conversation, newest first.</summary>
+    public static List<MailHit> ByConv(string conv, int limit)
+    {
+        var res = new List<MailHit>();
+        if (string.IsNullOrEmpty(conv)) return res;
+        using var c = Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT entry FROM mail WHERE conv=$c ORDER BY date DESC LIMIT $n";
+        cmd.Parameters.AddWithValue("$c", conv); cmd.Parameters.AddWithValue("$n", limit);
+        var entries = new List<string>();
+        using (var r = cmd.ExecuteReader()) while (r.Read()) entries.Add(r.GetString(0));
+        foreach (var e in entries) { var h = ByEntry(e); if (h != null) res.Add(h); }
+        return res;
     }
 
     public static List<MailHit> SentAfter(DateTime after, int limit = 5000)

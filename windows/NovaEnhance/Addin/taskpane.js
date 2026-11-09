@@ -30,7 +30,12 @@
       Office.context.mailbox.item.getSelectedDataAsync(Office.CoercionType.Text, function (r) {
         var t = r.status === Office.AsyncResultStatus.Succeeded && r.value ? (r.value.data || "") : "";
         if (t.replace(/\s/g, "").length > 0) { cb(t, false); return; }
-        Office.context.mailbox.item.body.getAsync(Office.CoercionType.Text, function (b) { cb(b.status === Office.AsyncResultStatus.Succeeded ? b.value : "", true); });
+        // Nothing selected: only YOUR text — not the signature, not the earlier emails below.
+        Office.context.mailbox.item.body.getAsync(Office.CoercionType.Html, function (b) {
+          if (b.status !== Office.AsyncResultStatus.Succeeded) { cb("", true); return; }
+          var parts = splitHtml(b.value || "");
+          cb(htmlText(parts.own), true);
+        });
       });
       return;
     }
@@ -39,10 +44,63 @@
     });
   }
 
+  // ---------------------------------------------------------------- your text / your signature / the earlier emails
+  var SIG_MARKS = ['name="_mailautosig"', 'name=_mailautosig', 'id="signature"', 'id=signature', 'id="divrplyfwdmsg"', 'id=divrplyfwdmsg',
+                   'id="appendonsend"', 'id=appendonsend', 'border-top:solid #e1e1e1', 'border-top:solid #b5c4df', '<hr'];
+  var CLOSING = /^\s*((best|kind|warm|warmest|with best|many)\s+regards|regards|thanks?( you)?( and regards| & regards)?|thank you( very much)?|sincerely|yours (sincerely|faithfully)|cordialement|bien à vous)\b[\s,.!]*$/i;
+
+  function splitHtml(html) {
+    var low = html.toLowerCase();
+    var bm = /<body[^>]*>/i.exec(html);
+    var start = bm ? bm.index + bm[0].length : 0;
+    var endBody = low.lastIndexOf("</body>"); if (endBody < start) endBody = html.length;
+    var cut = -1, i, k;
+    for (k = 0; k < SIG_MARKS.length; k++) { i = low.indexOf(SIG_MARKS[k], start); if (i >= 0 && (cut < 0 || i < cut)) cut = i; }
+    var rm = /(best|kind|warm|warmest|with best|many)\s+regards|>\s*regards\s*,/i.exec(html.slice(start));
+    if (rm && (cut < 0 || start + rm.index < cut)) cut = start + rm.index;
+    if (cut >= 0) {
+      var b = Math.max(low.lastIndexOf("<p", cut), low.lastIndexOf("<div", cut), low.lastIndexOf("<table", cut));
+      if (b >= start) cut = b;
+    }
+    var found = cut >= 0 && cut < endBody;
+    return { pre: html.slice(0, start), own: html.slice(start, found ? cut : endBody), rest: html.slice(found ? cut : endBody), found: found };
+  }
+
+  function htmlText(h) { var d = document.createElement("div"); d.innerHTML = h; return (d.innerText || d.textContent || "").replace(/\u00a0/g, " ").replace(/\n{3,}/g, "\n\n").replace(/^\s+|\s+$/g, ""); }
+
+  function stripClosing(t) {
+    var lines = String(t || "").replace(/\r\n/g, "\n").replace(/\s+$/, "").split("\n"), seen = 0;
+    for (var i = lines.length - 1; i >= 0 && seen < 6; i--) {
+      if (!lines[i].replace(/\s/g, "")) continue;
+      seen++;
+      if (CLOSING.test(lines[i])) return lines.slice(0, i).join("\n").replace(/\s+$/, "");
+    }
+    return lines.join("\n");
+  }
+
+  function esc(t) { return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+
+  /// Replaces only your text: the signature and the earlier emails below stay exactly as they are.
+  function replaceOwn(text, done) {
+    var item = Office.context.mailbox.item;
+    item.body.getAsync(Office.CoercionType.Html, function (b) {
+      if (b.status !== Office.AsyncResultStatus.Succeeded) { done(b); return; }
+      var parts = splitHtml(b.value || "");
+      if (parts.found) text = stripClosing(text);
+      var fm = /font-family:\s*([^;"]+)/i.exec(parts.own), sm = /font-size:\s*([^;"]+)/i.exec(parts.own);
+      var style = (fm ? "font-family:" + fm[1] + ";" : "") + (sm ? "font-size:" + sm[1] + ";" : "");
+      var lines = String(text).replace(/\r\n/g, "\n").split("\n"), out = "";
+      for (var i = 0; i < lines.length; i++)
+        out += '<p class="MsoNormal" style="margin:0">' + (style ? '<span style="' + style + '">' : "") + (lines[i].length ? esc(lines[i]) : "&nbsp;") + (style ? "</span>" : "") + "</p>";
+      out += '<p class="MsoNormal" style="margin:0">&nbsp;</p>';
+      item.body.setAsync(parts.pre + out + parts.rest, { coercionType: Office.CoercionType.Html }, done);
+    });
+  }
+
   function putText(text, whole, insert, cb) {
     var done = function (r) { cb(r.status === Office.AsyncResultStatus.Succeeded, r.error ? r.error.message : ""); };
     if (host === "compose") {
-      if (whole && !insert) Office.context.mailbox.item.body.setAsync(text, { coercionType: Office.CoercionType.Text }, done);
+      if (whole && !insert) replaceOwn(text, done);
       else Office.context.mailbox.item.body.setSelectedDataAsync(text, { coercionType: Office.CoercionType.Text }, done);
       return;
     }
@@ -270,6 +328,21 @@
     return true;
   }
 
+  function resetPane() {
+    lastOriginal = ""; lastWasWhole = false; origIdx = 0;
+    $("result").value = ""; show("out", false);
+    if ($("instr")) $("instr").value = "";
+    var o = $("orig"); o.innerHTML = ""; o.appendChild(document.createTextNode("The text before each enhancement is kept here and in Documents\\Nova Enhance\\Originals."));
+    if ($("replace")) $("replace").style.display = "";
+  }
+
+  function showSubject() {
+    var it = Office.context.mailbox && Office.context.mailbox.item, e = $("subj");
+    if (!e) return;
+    e.innerHTML = "";
+    if (it && typeof it.subject === "string") e.appendChild(document.createTextNode("✉ " + it.subject));
+  }
+
   function setOrig(t) { var o = $("orig"); o.innerHTML = ""; o.appendChild(document.createTextNode(t)); }
 
   function mailInfo(cb) {
@@ -303,7 +376,7 @@
       var setTr = function () { $("tr").innerHTML = ""; $("tr").appendChild(document.createTextNode("🌐 → " + sel.options[sel.selectedIndex].text)); };
       sel.onchange = setTr; setTr();
     });
-    api("originals", null, function (r) { originals = r.originals || []; if (originals.length) setOrig(originals[0].text); });
+    // The Original box starts empty for every email; 🕘 Older still shows earlier ones on request.
 
     each("button[data-mode]", function (b) { b.onclick = function () { enhance(b.getAttribute("data-mode")); }; });
     if (isExcel) {
@@ -315,7 +388,7 @@
 
     $("replace").onclick = function () {
       var t = $("result").value;
-      if (host === "read") { Office.context.mailbox.item.displayReplyForm(t.replace(/\n/g, "<br>")); return; }
+      if (host === "read") { Office.context.mailbox.item.displayReplyForm(esc(stripClosing(t)).replace(/\n/g, "<br>")); return; }
       putText(t, lastWasWhole, false, function (ok, err) { status(ok ? "✓ Replaced — Ctrl + Z in Office to undo" : "⚠ " + err, ok ? "good" : "bad"); });
     };
     $("insert").onclick = function () { putText($("result").value, false, true, function (ok, err) { status(ok ? "✓ Inserted" : "⚠ " + err, ok ? "good" : "bad"); }); };
@@ -336,12 +409,25 @@
       });
     };
     $("settings").onclick = function () { api("open", { what: "settings" }, function () { }); return false; };
+    $("clear").onclick = $("clear2").onclick = function () { resetPane(); status("🧹 Cleared", "good"); };
+    // Pinned pane: another email selected → everything from the previous one is cleared.
+    try {
+      if (Office.context.mailbox && Office.context.mailbox.addHandlerAsync && Office.EventType.ItemChanged)
+        Office.context.mailbox.addHandlerAsync(Office.EventType.ItemChanged, function () {
+          resetPane();
+          var mb = Office.context.mailbox;
+          if (mb.item) { host = typeof mb.item.subject === "string" ? "read" : "compose"; show("mailread", host === "read"); show("mailcompose", host === "compose"); }
+          showSubject();
+          status(mb.item ? "Ready — this email." : "Select an email.");
+        });
+    } catch (e) { }
+    showSubject();
 
     if (host === "read") {
       $("sum").onclick = function () { status("✦ Summarising…"); mailInfo(function (m) { api("summarize", m, function (r) { if (r.error) { status("⚠ " + r.error, "bad"); return; } $("result").value = r.result; $("outlabel").innerHTML = "Summary"; show("out", true); $("replace").style.display = "none"; status("✓ Summary ready", "good"); }); }); };
       $("draft").onclick = function () { status("✦ Writing the reply…"); mailInfo(function (m) { m.instruction = $("instr").value; api("draft", m, function (r) { if (r.error) { status("⚠ " + r.error, "bad"); return; } $("result").value = r.result; $("outlabel").innerHTML = "Draft reply — check it"; show("out", true); $("replace").style.display = ""; status("✓ Draft ready — ↩ Reply with this opens the reply", "good"); }); }); };
       $("trmail").onclick = function () { status("🌐 Translating…"); mailInfo(function (m) { api("enhance", { mode: "translate", text: m.text, lang: $("lang") ? $("lang").value : "", host: "read" }, function (r) { if (r.error) { status("⚠ " + r.error, "bad"); return; } $("result").value = r.result; $("outlabel").innerHTML = ""; $("outlabel").appendChild(document.createTextNode(r.label)); show("out", true); $("replace").style.display = "none"; status("✓ Translated", "good"); }); }); };
-      $("asknova").onclick = function () { api("open", { what: "ask" }, function () { status("🔍 Ask Nova opened on your desktop"); }); };
+      $("asknova").onclick = function () { api("open", { what: "askmail", subject: Office.context.mailbox.item.subject || "" }, function () { status("✦ Ask Nova about this email opened on your desktop"); }); };
       // Opened from the ✦ Nova tab: ✦ Summary / ✦ Draft reply start by themselves.
       var want = /[?&]do=(summary|draft)/.exec(location.search || "");
       if (want) setTimeout(function () { $(want[1] === "summary" ? "sum" : "draft").click(); }, 300);
