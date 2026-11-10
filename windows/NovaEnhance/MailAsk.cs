@@ -298,7 +298,7 @@ class MailAskForm : NovaForm
             var dest = Path.GetFullPath(Path.Combine(to, e.FullName));
             if (!dest.StartsWith(root, StringComparison.OrdinalIgnoreCase)) continue;
             Directory.CreateDirectory(Path.GetDirectoryName(dest));
-            if (!File.Exists(dest) || new FileInfo(dest).Length != e.Length) e.ExtractToFile(dest, true);
+            if (!File.Exists(dest) || new FileInfo(dest).Length != e.Length) System.IO.Compression.ZipFileExtensions.ExtractToFile(e, dest, true);
             res.Add((e.FullName.Replace('/', ' ').Trim() is var nm && nm.Length > 0 ? e.FullName.Replace('/', '›') : e.Name, dest));
         }
         return res;
