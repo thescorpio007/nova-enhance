@@ -23,7 +23,7 @@ sealed class PdfPreview : IPreviewDoc
 
     public PdfPreview(string path)
     {
-        var file = Windows.Storage.StorageFile.GetFileFromPathAsync(path).AsTask().Result;
+        var file = Windows.Storage.StorageFile.GetFileFromPathAsync(LongPath.Usable(path)).AsTask().Result;
         doc = Windows.Data.Pdf.PdfDocument.LoadFromFileAsync(file).AsTask().Result;
         try { pig = UglyToad.PdfPig.PdfDocument.Open(path); } catch { pig = null; }
     }

@@ -40,14 +40,89 @@ static class Shell
         {
             // A Nova folder that hasn't been used yet (e.g. Search Results before the first export) is created instead of failing.
             if (path.StartsWith(Paths.Root, StringComparison.OrdinalIgnoreCase) && !File.Exists(path) && !Directory.Exists(path)) Directory.CreateDirectory(path);
-            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+            Process.Start(new ProcessStartInfo(LongPath.Short(path)) { UseShellExecute = true });
         }
         catch (Exception e) { Log.Error("open " + path, e); }
     }
 
+    /// <summary>
+    /// 📁 Show in folder: opens the file's folder with the file selected — also for paths longer than 260 characters
+    /// (deep project folders), which "explorer /select" can't handle (it opened the Desktop instead).
+    /// </summary>
     public static void Select(string file)
     {
-        try { Process.Start(new ProcessStartInfo("explorer.exe", "/select,\"" + file + "\"") { UseShellExecute = true }); } catch { }
+        if (string.IsNullOrEmpty(file)) return;
+        try
+        {
+            var shortP = LongPath.Short(file);
+            var pidl = ILCreateFromPathW(shortP);
+            if (pidl != IntPtr.Zero)
+                try { if (SHOpenFolderAndSelectItems(pidl, 0, null, 0) == 0) return; }
+                finally { ILFree(pidl); }
+            if (shortP.Length < 260) { Process.Start(new ProcessStartInfo("explorer.exe", "/select,\"" + shortP + "\"") { UseShellExecute = true }); return; }
+            // Still too long: open the folder itself (or the deepest parent Explorer can open).
+            var dir = LongPath.Short(Path.GetDirectoryName(file) ?? "");
+            while (dir.Length >= 248 && Path.GetDirectoryName(dir) is { Length: > 0 } up) dir = up;
+            Process.Start(new ProcessStartInfo("explorer.exe", "\"" + dir + "\"") { UseShellExecute = true });
+        }
+        catch (Exception e) { Log.Warn("show in folder", file + ": " + e.Message); }
+    }
+
+    [System.Runtime.InteropServices.DllImport("shell32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    static extern IntPtr ILCreateFromPathW(string path);
+    [System.Runtime.InteropServices.DllImport("shell32.dll")]
+    static extern void ILFree(IntPtr pidl);
+    [System.Runtime.InteropServices.DllImport("shell32.dll")]
+    static extern int SHOpenFolderAndSelectItems(IntPtr pidlFolder, uint cidl, IntPtr[] apidl, uint flags);
+}
+
+/// <summary>
+/// Paths longer than 260 characters (deep project folders with long drawing names): .NET reads them, but Explorer,
+/// the PDF renderer and some apps don't. Short (8.3) names when the drive has them; otherwise a temporary copy to draw from.
+/// </summary>
+static class LongPath
+{
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+    static extern uint GetShortPathNameW(string longPath, StringBuilder shortPath, uint size);
+
+    public static bool IsLong(string p) => (p ?? "").Length >= 248;
+
+    /// <summary>The 8.3 form of a long path (same file), or the path unchanged.</summary>
+    public static string Short(string p)
+    {
+        if (!IsLong(p) || p.StartsWith(@"\\?\")) return p;
+        try
+        {
+            var unc = p.StartsWith(@"\\") ? @"\\?\UNC\" + p[2..] : @"\\?\" + p;
+            var sb = new StringBuilder(1024);
+            var n = GetShortPathNameW(unc, sb, (uint)sb.Capacity);
+            if (n == 0 || n >= sb.Capacity) return p;
+            var r = sb.ToString();
+            if (r.StartsWith(@"\\?\UNC\")) r = @"\\" + r[8..];
+            else if (r.StartsWith(@"\\?\")) r = r[4..];
+            return r.Length < p.Length ? r : p;
+        }
+        catch { return p; }
+    }
+
+    /// <summary>A path every Windows component can open: the short form, else a temporary copy (kept while unchanged).</summary>
+    public static string Usable(string p)
+    {
+        if (!IsLong(p)) return p;
+        var s = Short(p);
+        if (!IsLong(s)) return s;
+        try
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "Nova Enhance", "long");
+            Directory.CreateDirectory(dir);
+            var key = Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes(p.ToLowerInvariant())))[..16];
+            var copy = Path.Combine(dir, key + Path.GetExtension(p));
+            var src = new FileInfo(p);
+            if (!File.Exists(copy) || File.GetLastWriteTimeUtc(copy) < src.LastWriteTimeUtc || new FileInfo(copy).Length != src.Length)
+                File.Copy(p, copy, true);
+            return copy;
+        }
+        catch { return p; }
     }
 }
 

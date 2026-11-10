@@ -129,7 +129,7 @@ class FileFinderForm : NovaForm
         var s = Sel();
         var m = new ContextMenuStrip { Font = Th.F(10), ShowImageMargin = false };
         m.Items.Add("Open", null, (_, _) => OpenSel());
-        m.Items.Add("Show in folder", null, (_, _) => System.Diagnostics.Process.Start("explorer.exe", "/select,\"" + s[0].Path + "\""));
+        m.Items.Add("Show in folder", null, (_, _) => Shell.Select(s[0].Path));
         m.Items.Add("⧉ Copy the file(s) — paste into an email or a folder", null, (_, _) =>
         {
             var c = new StringCollection();

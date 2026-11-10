@@ -1104,6 +1104,7 @@ static class Opener
 
     static void OpenPdf(string path, int page)
     {
+        path = LongPath.Short(path);   // deep project folders: 8.3 form when the path is over 260 characters
         var exe = ExeFor(".pdf");
         var low = exe.ToLowerInvariant();
         if (low.Contains("acro")) { Process.Start(exe, $"/A \"page={page}\" \"{path}\""); return; }

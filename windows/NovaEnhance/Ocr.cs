@@ -107,7 +107,7 @@ static class Ocr
         if (Engines().Count == 0) return "";
         try
         {
-            var file = Windows.Storage.StorageFile.GetFileFromPathAsync(path).AsTask().Result;
+            var file = Windows.Storage.StorageFile.GetFileFromPathAsync(LongPath.Usable(path)).AsTask().Result;
             using var stream = file.OpenAsync(Windows.Storage.FileAccessMode.Read).AsTask().Result;
             var dec = BitmapDecoder.CreateAsync(stream).AsTask().Result;
             var lines = new List<string>(); var seen = new HashSet<string>();
@@ -126,7 +126,7 @@ static class Ocr
         if (Engines().Count == 0) return res;
         try
         {
-            var file = Windows.Storage.StorageFile.GetFileFromPathAsync(path).AsTask().Result;
+            var file = Windows.Storage.StorageFile.GetFileFromPathAsync(LongPath.Usable(path)).AsTask().Result;
             var doc = Windows.Data.Pdf.PdfDocument.LoadFromFileAsync(file).AsTask().Result;
             var pages = only ?? Enumerable.Range(1, (int)doc.PageCount).ToList();
             foreach (var p in pages.Take(maxPages))
@@ -173,7 +173,7 @@ static class Ocr
     /// <summary>A page or image as a picture for Gemini vision (PNG/JPEG, at most ~3000 px wide).</summary>
     public static (byte[] Data, string Mime) Picture(string path, int page)
     {
-        var file = Windows.Storage.StorageFile.GetFileFromPathAsync(path).AsTask().Result;
+        var file = Windows.Storage.StorageFile.GetFileFromPathAsync(LongPath.Usable(path)).AsTask().Result;
         using var ras = new Windows.Storage.Streams.InMemoryRandomAccessStream();
         if (page > 0)
         {
