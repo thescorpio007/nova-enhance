@@ -582,6 +582,14 @@ class SettingsForm : NovaForm
         Note("Ctrl + Shift + A — send the selected text to the AI window (Nova Chat or the AI website you used last).", Th.Text);
         Note("Ctrl + Shift + D — Nova for the PDF in front (PDF-XChange, Acrobat, Bluebeam, Foxit, Edge): ask, summary / check drawing, OCR, search, translate.", Th.Text);
         page.Add(Th.Check("Show the small ✦ button on PDF viewers (click it to open Nova for that PDF)", PdfCompanion.Button, v => PdfCompanion.Button = v));
+        var hr = page.Add(Th.Row(false));
+        hr.Controls.Add(Th.L("Ctrl + Alt +", 10, Th.Text));
+        var hk = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 60, BackColor = Th.Card, ForeColor = Th.Text, Font = Th.F(10) };
+        foreach (var c in "QWJKLMNOPUYZ") hk.Items.Add(c.ToString());
+        hk.SelectedItem = Store.Str("win_hk_mailask", "Q");
+        hk.SelectedIndexChanged += (_, _) => { Store.Set("win_hk_mailask", hk.SelectedItem?.ToString() ?? "Q"); Program.Balloon("Shortcut changed", "It works after Nova restarts (tray ✦ → Exit, then open Nova again)."); };
+        hr.Controls.Add(hk);
+        hr.Controls.Add(Th.L("— ✦ Ask Nova about the email open or selected in Outlook (any Outlook window; no ribbon needed). Not Ctrl+Shift+Q: that is Outlook's New meeting.", 10, Th.Text));
         Note("In the browser (with the Nova add-on): Alt + G fix grammar · Alt + T translate · right-click selected text → ✦ Nova Enhance.", Th.Text);
         Note("Right-click a folder → Search inside with Nova — find codes, references and sentences inside its files.", Th.Text);
         Note("Left-click the ✦ icon near the clock = Ask Nova · right-click = menu.", Th.Text);

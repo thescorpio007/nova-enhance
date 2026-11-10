@@ -72,9 +72,12 @@
 
 <div id="out" class="hide">
   <div class="sec" id="outlabel">Result</div>
+  <div id="diffnote" class="small muted hide">Before → after: <span class="del">red = removed</span> · <span class="ins">green = added</span>. Nothing changes in your email until you press ✓ Use Nova's version.</div>
+  <div id="diff" class="diff hide"></div>
   <textarea id="result" rows="9"></textarea>
   <div class="row">
     <button id="replace" class="primary">⇄ Replace</button>
+    <button id="keep" class="hide">✗ Keep mine</button>
     <button id="insert">＋ Insert</button>
     <button id="copy">⧉ Copy</button>
     <button id="clear">🧹 Clear</button>
@@ -85,8 +88,14 @@
 <div class="sec">📄 Original</div>
 <div id="orig" class="orig small muted">The text before each enhancement is kept here and in Documents\Nova Enhance\Originals.</div>
 <div class="row"><button id="putback">↩ Put back original</button> <button id="older">🕘 Older</button></div>
+<div id="verbox" class="hide">
+  <div class="sec">🕘 Versions of this draft</div>
+  <div class="small muted">Every Nova change keeps the whole draft (formatting, signature and the emails below). Outlook's Ctrl + Z can't undo add-in changes — put any version back here.</div>
+  <div class="row"><button id="versions">🕘 Show versions</button></div>
+  <div id="verlist"></div>
+</div>
 
-<div class="foot">Undo in Office: Ctrl + Z · <a href="#" id="settings">Nova settings</a><br><span id="sign">Designed by A.HAMROUNI</span></div>
+<div class="foot" id="undohint">Undo: ↩ Put back original / 🕘 Versions · <a href="#" id="settings">Nova settings</a><br><span id="sign">Designed by A.HAMROUNI</span></div>
 <script src="taskpane.js"></script>
 </body>
 </html>

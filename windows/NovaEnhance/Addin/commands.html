@@ -42,6 +42,20 @@ function novaPut(text, cb) {
   else Office.context.document.setSelectedDataAsync(text, { coercionType: Office.CoercionType.Text }, function (r) { cb(r.status === Office.AsyncResultStatus.Succeeded, r.error ? r.error.message : ""); });
 }
 
+/* 🕘 Before and after a quick change in an email being written: the whole draft is kept (Outlook's Ctrl+Z can't undo add-in changes). */
+function novaSnap(label, cb) {
+  var it = novaMail();
+  if (!it || typeof it.subject === "string" || !it.body || !it.body.getAsync) { cb(); return; }
+  var conv = it.conversationId || "";
+  it.subject.getAsync(function (sr) {
+    var subj = sr.status === Office.AsyncResultStatus.Succeeded ? (sr.value || "") : "";
+    it.body.getAsync(Office.CoercionType.Html, function (b) {
+      if (b.status !== Office.AsyncResultStatus.Succeeded) { cb(); return; }
+      novaApi("versions/save", { key: "mail|" + conv + "|" + subj, subject: subj, label: label, html: b.value || "", text: "" }, function () { cb(); });
+    });
+  });
+}
+
 function novaRun(event, mode, lang) {
   var done = function () { try { event.completed(); } catch (e) { } };
   novaGet(function (text) {
@@ -50,9 +64,14 @@ function novaRun(event, mode, lang) {
     novaNote("busy", mode === "translate" ? "Nova is translating…" : "Nova is working…");
     novaApi("enhance", { mode: mode, text: text, lang: lang || "", host: novaMail() ? "compose" : "doc" }, function (r) {
       if (r.error) { novaNote("bad", "⚠ " + r.error); done(); return; }
-      novaPut(r.result, function (ok, err) {
-        novaNote(ok ? "good" : "bad", ok ? "✓ " + r.label + " · original kept — ↩ Put back original undoes it" : "⚠ " + err);
-        done();
+      novaSnap("Before " + r.label, function () {
+        novaPut(r.result, function (ok, err) {
+          if (!ok) { novaNote("bad", "⚠ " + err); done(); return; }
+          novaSnap("After: " + r.label, function () {
+            novaNote("good", "✓ " + r.label + " · to go back: ✦ Panel → 🕘 Versions (Ctrl + Z doesn't undo it in Outlook)");
+            done();
+          });
+        });
       });
     });
   });

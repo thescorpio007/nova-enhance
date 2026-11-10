@@ -19,3 +19,9 @@ input{width:100%;margin:2px 0 4px}textarea{width:100%;resize:vertical}
 .xlit{padding:6px 8px;border-bottom:1px solid #232A3A;font-size:12px}.xlit label{display:block;cursor:pointer}
 .xlit .ad{color:#B9B0FF;font-weight:bold;margin-right:4px}.xlit .b{color:#9AA3B5;text-decoration:line-through;white-space:pre-wrap}.xlit .a{color:#ECEEF3;white-space:pre-wrap}
 .foot a,.row a{color:#B9B0FF}
+
+/* Before → after (build 32) */
+.diff{background:#181C24;border:1px solid #2E3546;border-radius:6px;padding:8px;margin:4px 0 6px;max-height:260px;overflow:auto;white-space:pre-wrap;font-size:12.5px;line-height:1.5}
+.diff del,.del{background:#4A1F24;color:#FF9A9A}.diff ins,.ins{background:#1E3A2C;color:#9FE6BF;text-decoration:none}
+.ver{background:#181C24;border:1px solid #2E3546;border-radius:6px;padding:6px 8px;margin:4px 0;cursor:pointer;font-size:12px}
+.ver:hover{border-color:#7C6CFF}.ver b{color:#fff}.ver .p{color:#9AA3B5}

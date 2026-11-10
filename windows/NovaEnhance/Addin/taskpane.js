@@ -97,11 +97,115 @@
     });
   }
 
+  // ---------------------------------------------------------------- 🕘 versions of the draft (Outlook can't Ctrl+Z add-in changes)
+  var lastLabel = "Nova", viewKey = null;
+
+  function draftKey(cb) {
+    var it = Office.context.mailbox && Office.context.mailbox.item;
+    if (!it) { cb("", ""); return; }
+    var conv = it.conversationId || "";
+    if (typeof it.subject === "string") { cb("mail|" + conv + "|" + it.subject, it.subject); return; }
+    it.subject.getAsync(function (r) { var s = r.status === Office.AsyncResultStatus.Succeeded ? (r.value || "") : ""; cb("mail|" + conv + "|" + s, s); });
+  }
+
+  function snapshot(label, cb) {
+    if (host !== "compose") { if (cb) cb(); return; }
+    draftKey(function (key, subj) {
+      Office.context.mailbox.item.body.getAsync(Office.CoercionType.Html, function (b) {
+        if (b.status !== Office.AsyncResultStatus.Succeeded) { if (cb) cb(); return; }
+        api("versions/save", { key: key, subject: subj, label: label, html: b.value || "", text: htmlText(splitHtml(b.value || "").own) }, function () { if (cb) cb(); });
+      });
+    });
+  }
+
+  function showVersions() {
+    draftKey(function (key) {
+      var k = viewKey || key;
+      api("versions/list", { key: k }, function (r) {
+        var box = $("verlist"); box.innerHTML = "";
+        var vs = r.versions || [];
+        if (!vs.length) box.appendChild(document.createTextNode("No versions of this draft yet — they are kept as soon as Nova changes it."));
+        for (var i = 0; i < vs.length; i++) (function (v) {
+          var d = document.createElement("div"); d.className = "ver";
+          var b = document.createElement("b"); b.appendChild(document.createTextNode(v.when + " · " + v.label)); d.appendChild(b);
+          var p = document.createElement("div"); p.className = "p"; p.appendChild(document.createTextNode(v.preview || "")); d.appendChild(p);
+          d.onclick = function () {
+            if (d.getAttribute("data-ask")) return;
+            d.setAttribute("data-ask", "1");
+            var yes = document.createElement("button"); yes.className = "primary"; yes.appendChild(document.createTextNode("↩ Put this version back"));
+            var no = document.createElement("button"); no.appendChild(document.createTextNode("Cancel"));
+            var row = document.createElement("div"); row.className = "row"; row.appendChild(yes); row.appendChild(no); d.appendChild(row);
+            no.onclick = function (e) { e.stopPropagation(); d.removeChild(row); d.removeAttribute("data-ask"); };
+            yes.onclick = function (e) {
+              e.stopPropagation();
+              api("versions/get", { key: k, i: v.i }, function (g) {
+                if (!g.html) { status("⚠ That version could not be read", "bad"); return; }
+                snapshot("Before putting back " + v.when, function () {
+                  Office.context.mailbox.item.body.setAsync(g.html, { coercionType: Office.CoercionType.Html }, function (res) {
+                    status(res.status === Office.AsyncResultStatus.Succeeded ? "↩ The " + v.when + " version is back (formatting and signature included)" : "⚠ " + (res.error ? res.error.message : ""), res.status === Office.AsyncResultStatus.Succeeded ? "good" : "bad");
+                    showVersions();
+                  });
+                });
+              });
+            };
+          };
+          box.appendChild(d);
+        })(vs[i]);
+        var rec = r.recent || [];
+        if (rec.length) {
+          var h = document.createElement("div"); h.className = "small muted"; h.style.marginTop = "8px"; h.appendChild(document.createTextNode("Other drafts (e.g. if you changed the subject):")); box.appendChild(h);
+          for (var j = 0; j < rec.length; j++) (function (o) {
+            var a = document.createElement("div"); a.className = "ver";
+            a.appendChild(document.createTextNode(o.when + " · " + (o.subject || "(no subject)") + " · " + o.count + " versions"));
+            a.onclick = function () { viewKey = o.key; showVersions(); };
+            box.appendChild(a);
+          })(rec[j]);
+        }
+        if (viewKey) { var back = document.createElement("a"); back.href = "#"; back.appendChild(document.createTextNode("← this draft")); back.onclick = function () { viewKey = null; showVersions(); return false; }; box.insertBefore(back, box.firstChild); }
+      });
+    });
+  }
+
+  // ---------------------------------------------------------------- before → after (word by word)
+  function toks(s) { return String(s || "").match(/\s+|[^\s]+/g) || []; }
+
+  function diffHtml(a, b) {
+    var x = toks(a), y = toks(b), n = x.length, m = y.length;
+    if (n * m > 2500000) return null;
+    var w = m + 1, dp = new Int32Array((n + 1) * (m + 1)), i, j;
+    for (i = n - 1; i >= 0; i--) for (j = m - 1; j >= 0; j--)
+      dp[i * w + j] = x[i] === y[j] ? dp[(i + 1) * w + j + 1] + 1 : Math.max(dp[(i + 1) * w + j], dp[i * w + j + 1]);
+    var out = "", del = "", ins = "";
+    function flush() { if (del) out += "<del>" + esc(del) + "</del>"; if (ins) out += "<ins>" + esc(ins) + "</ins>"; del = ins = ""; }
+    i = 0; j = 0;
+    while (i < n && j < m) {
+      if (x[i] === y[j]) { flush(); out += esc(x[i]); i++; j++; }
+      else if (dp[(i + 1) * w + j] >= dp[i * w + j + 1]) del += x[i++];
+      else ins += y[j++];
+    }
+    while (i < n) del += x[i++];
+    while (j < m) ins += y[j++];
+    flush();
+    return out;
+  }
+
+  function showDiff(before, after) {
+    var h = host === "compose" || host === "doc" ? diffHtml(before, after) : null;
+    var d = $("diff");
+    if (h === null) { show("diff", false); show("diffnote", false); show("keep", false); return; }
+    d.innerHTML = h; show("diff", true); show("diffnote", true); show("keep", true);
+    if (host === "compose") $("replace").innerHTML = "✓ Use Nova's version";
+  }
+
   function putText(text, whole, insert, cb) {
     var done = function (r) { cb(r.status === Office.AsyncResultStatus.Succeeded, r.error ? r.error.message : ""); };
     if (host === "compose") {
-      if (whole && !insert) replaceOwn(text, done);
-      else Office.context.mailbox.item.body.setSelectedDataAsync(text, { coercionType: Office.CoercionType.Text }, done);
+      var label = lastLabel;
+      var after = function (r) { if (r.status === Office.AsyncResultStatus.Succeeded) snapshot("After: " + label, function () { done(r); }); else done(r); };
+      snapshot(lastOriginal ? "Your text before " + label : "Before " + label, function () {
+        if (whole && !insert) replaceOwn(text, after);
+        else Office.context.mailbox.item.body.setSelectedDataAsync(text, { coercionType: Office.CoercionType.Text }, after);
+      });
       return;
     }
     if (insert) text = (lastOriginal || "") + "\n" + text;
@@ -122,12 +226,13 @@
       api("enhance", { mode: mode, text: text, lang: $("lang").value, host: host }, function (r) {
         each("button", function (b) { b.disabled = false; });
         if (r.error) { status("⚠ " + r.error, "bad"); return; }
-        lastOriginal = text; lastWasWhole = whole;
+        lastOriginal = text; lastWasWhole = whole; lastLabel = r.label || mode;
         $("result").value = r.result;
+        showDiff(text, r.result);
         $("outlabel").innerHTML = ""; $("outlabel").appendChild(document.createTextNode(r.label + " · " + r.ai));
         show("out", true);
         setOrig(text);
-        status("✓ Done — check it, then ⇄ Replace. The original is saved.", "good");
+        status(host === "compose" ? "✓ Done — check the changes, then ✓ Use Nova's version (or ✗ Keep mine). Every version is kept in 🕘 Versions." : "✓ Done — check it, then ⇄ Replace. The original is saved.", "good");
       });
     });
   }
@@ -329,6 +434,7 @@
   }
 
   function resetPane() {
+    show("diff", false); show("diffnote", false); show("keep", false); if ($("verlist")) $("verlist").innerHTML = ""; viewKey = null;
     lastOriginal = ""; lastWasWhole = false; origIdx = 0;
     $("result").value = ""; show("out", false);
     if ($("instr")) $("instr").value = "";
@@ -389,12 +495,33 @@
     $("replace").onclick = function () {
       var t = $("result").value;
       if (host === "read") { Office.context.mailbox.item.displayReplyForm(esc(stripClosing(t)).replace(/\n/g, "<br>")); return; }
-      putText(t, lastWasWhole, false, function (ok, err) { status(ok ? "✓ Replaced — Ctrl + Z in Office to undo" : "⚠ " + err, ok ? "good" : "bad"); });
+      putText(t, lastWasWhole, false, function (ok, err) { status(ok ? (host === "compose" ? "✓ Done — to go back: ↩ Put back original or 🕘 Versions (Ctrl + Z doesn't undo it in Outlook)" : "✓ Replaced — Ctrl + Z to undo") : "⚠ " + err, ok ? "good" : "bad"); show("diff", false); show("diffnote", false); show("keep", false); });
     };
+    $("keep").onclick = function () { show("out", false); show("diff", false); show("diffnote", false); show("keep", false); status("✗ Kept yours — nothing changed in the email", "good"); };
+    $("versions").onclick = function () { viewKey = null; showVersions(); };
     $("insert").onclick = function () { putText($("result").value, false, true, function (ok, err) { status(ok ? "✓ Inserted" : "⚠ " + err, ok ? "good" : "bad"); }); };
     $("copy").onclick = function () { var t = $("result"); t.select(); try { document.execCommand("copy"); status("⧉ Copied", "good"); } catch (e) { status("Press Ctrl + C to copy"); } };
     $("putback").onclick = function () {
       if (isExcel && xlPutBack()) return;
+      if (host === "compose") {
+        // The draft exactly as it was before Nova's first change (formatting and signature included).
+        draftKey(function (key) {
+          api("versions/list", { key: key }, function (r) {
+            var vs = r.versions || [];
+            if (!vs.length) { status("No version of this draft yet"); return; }
+            var first = vs[vs.length - 1];
+            api("versions/get", { key: key, i: first.i }, function (g) {
+              if (!g.html) { status("⚠ Could not read it", "bad"); return; }
+              snapshot("Before putting back your original", function () {
+                Office.context.mailbox.item.body.setAsync(g.html, { coercionType: Office.CoercionType.Html }, function (res) {
+                  status(res.status === Office.AsyncResultStatus.Succeeded ? "↩ Your original draft is back (" + first.when + ")" : "⚠ " + (res.error ? res.error.message : ""), res.status === Office.AsyncResultStatus.Succeeded ? "good" : "bad");
+                });
+              });
+            });
+          });
+        });
+        return;
+      }
       var t = lastOriginal || (originals[origIdx] ? originals[origIdx].text : "");
       if (!t) { status("No original yet"); return; }
       if (host === "read") { $("result").value = t; show("out", true); return; }
@@ -418,10 +545,12 @@
           var mb = Office.context.mailbox;
           if (mb.item) { host = typeof mb.item.subject === "string" ? "read" : "compose"; show("mailread", host === "read"); show("mailcompose", host === "compose"); }
           showSubject();
+    if (host === "compose") show("verbox", true); else show("verbox", false);
           status(mb.item ? "Ready — this email." : "Select an email.");
         });
     } catch (e) { }
     showSubject();
+    show("verbox", host === "compose");
 
     if (host === "read") {
       $("sum").onclick = function () { status("✦ Summarising…"); mailInfo(function (m) { api("summarize", m, function (r) { if (r.error) { status("⚠ " + r.error, "bad"); return; } $("result").value = r.result; $("outlabel").innerHTML = "Summary"; show("out", true); $("replace").style.display = "none"; status("✓ Summary ready", "good"); }); }); };

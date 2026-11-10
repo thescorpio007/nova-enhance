@@ -242,6 +242,22 @@ class MailAskForm : NovaForm
             {
                 status.Text = "Reading " + n + "…";
                 var path = await MailPreview.SaveAttachment(anchor, n, dir);
+                if (Path.GetExtension(path).Equals(".zip", StringComparison.OrdinalIgnoreCase))
+                {
+                    // 🗜 A zip (e.g. a shop-drawing package): unpacked on this PC and every readable file inside is read.
+                    foreach (var (inner, ipath) in await Task.Run(() => Unzip(path, Path.Combine(dir, Path.GetFileNameWithoutExtension(path) + " (unzipped)"), ct)))
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        status.Text = $"Reading {n} › {inner}…";
+                        try
+                        {
+                            var isegs = await Sta(() => FileText.Extract(ipath));
+                            foreach (var s in isegs.Where(s => s.Text.Trim().Length > 20)) attPool.Add(($"{n} › {inner}", ipath, s));
+                        }
+                        catch (Exception e) { Log.Warn("ask about email", $"{n} › {inner}: {e.Message}"); }
+                    }
+                    continue;
+                }
                 var segs = await Sta(() => FileText.Extract(path));
                 foreach (var s in segs.Where(s => s.Text.Trim().Length > 20)) attPool.Add((n, path, s));
             }
@@ -260,6 +276,32 @@ class MailAskForm : NovaForm
             thread.Add(new AskSource { Id = "E" + i++, Mail = m, Title = $"{(m.Sent ? "You" : m.FromName)} · {m.Date:dd MMM yyyy} · {m.Subject}", Text = Cut(m.NewPart, 1500) });
         gathered = true;
         if (thread.Count > 0) meta.Text += $" · {thread.Count} earlier email{(thread.Count == 1 ? "" : "s")} found";
+    }
+
+    static readonly string[] Readable = { ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".xlsm", ".csv", ".pptx", ".txt", ".rtf", ".msg", ".eml", ".png", ".jpg", ".jpeg", ".tif", ".tiff" };
+
+    /// <summary>Unpacks a zip safely (no paths outside the folder, at most 60 readable files and 800 MB).</summary>
+    static List<(string Name, string Path)> Unzip(string zip, string to, CancellationToken ct)
+    {
+        var res = new List<(string, string)>();
+        Directory.CreateDirectory(to);
+        var root = Path.GetFullPath(to) + Path.DirectorySeparatorChar;
+        long total = 0;
+        using var z = System.IO.Compression.ZipFile.OpenRead(zip);
+        foreach (var e in z.Entries.OrderBy(e => e.FullName))
+        {
+            ct.ThrowIfCancellationRequested();
+            if (e.Length == 0 || e.FullName.EndsWith("/")) continue;
+            if (!Readable.Contains(Path.GetExtension(e.Name).ToLowerInvariant())) continue;
+            total += e.Length;
+            if (total > 800L * 1024 * 1024 || res.Count >= 60) break;
+            var dest = Path.GetFullPath(Path.Combine(to, e.FullName));
+            if (!dest.StartsWith(root, StringComparison.OrdinalIgnoreCase)) continue;
+            Directory.CreateDirectory(Path.GetDirectoryName(dest));
+            if (!File.Exists(dest) || new FileInfo(dest).Length != e.Length) e.ExtractToFile(dest, true);
+            res.Add((e.FullName.Replace('/', ' ').Trim() is var nm && nm.Length > 0 ? e.FullName.Replace('/', '›') : e.Name, dest));
+        }
+        return res;
     }
 
     static string Cut(string s, int n) { s = Regex.Replace(s ?? "", @"[ \t]+", " ").Trim(); return s.Length > n ? s[..n] + " …" : s; }

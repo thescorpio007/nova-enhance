@@ -88,6 +88,7 @@ class NovaContext : ApplicationContext
         m.Items.Add("📌  My Work", null, (_, _) => Screens.Work(null));
         m.Items.Add("🕘  Chat history", null, (_, _) => Screens.ChatHistory());
         m.Items.Add("📄  Nova for this PDF                Ctrl+Shift+D", null, (_, _) => PdfCompanion.Open());
+        m.Items.Add($"✦  Ask Nova about the open email   Ctrl+Alt+{Store.Str("win_hk_mailask", "Q")}", null, (_, _) => Screens.MailAsk(null));
         m.Items.Add("📁  Search inside a folder…", null, (_, _) => Screens.FolderSearch(null));
         m.Items.Add("☀  Morning brief", null, (_, _) => Screens.Brief());
         m.Items.Add(new ToolStripSeparator());
@@ -104,6 +105,9 @@ class NovaContext : ApplicationContext
         hot.Register(2, Keys.F, Screens.Ask, "Ctrl+Shift+F");
         hot.Register(3, Keys.A, Screens.HubSelection, "Ctrl+Shift+A");
         hot.Register(4, Keys.D, () => PdfCompanion.Open(), "Ctrl+Shift+D");
+        // ✦ Ask Nova about the email open or selected in Outlook — any Outlook window, no ribbon needed (Ctrl+Alt+Q by default).
+        var mk = Store.Str("win_hk_mailask", "Q");
+        if (Enum.TryParse<Keys>(mk, out var mkey)) hot.Register(5, mkey, () => Screens.MailAsk(null), "Ctrl+Alt+" + mk, 0x1 | 0x2);
         PdfCompanion.Watch();
 
         showEvt = new EventWaitHandle(false, EventResetMode.AutoReset, "NovaEnhanceWindows-show");
@@ -181,10 +185,10 @@ class HotkeyWindow : NativeWindow
 
     public HotkeyWindow() { CreateHandle(new CreateParams()); }
 
-    public void Register(int id, Keys k, Action a, string name)
+    public void Register(int id, Keys k, Action a, string name, uint mods = 0x2 | 0x4)
     {
         map[id] = a;
-        if (!RegisterHotKey(Handle, id, 0x2 | 0x4 | 0x4000, (uint)k))
+        if (!RegisterHotKey(Handle, id, mods | 0x4000, (uint)k))
         {
             Log.Write($"Hotkey {name} is already used by another program");
             Program.Balloon("Shortcut busy", $"{name} is used by another program — use the ✦ icon near the clock instead.");

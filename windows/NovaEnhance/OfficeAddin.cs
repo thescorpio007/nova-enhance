@@ -648,6 +648,12 @@ static class Server
                 History.Add("ask", prov.Id, Store.Model(prov.Id), "page-" + S(r, "mode"), S(r, "title") + " · " + S(r, "question"), a);
                 return new JsonObject { ["result"] = a, ["ai"] = prov.Label };
             }
+            case "/api/versions/save":
+                return new JsonObject { ["count"] = Versions.Save(S(r, "key"), S(r, "subject"), S(r, "label"), S(r, "html"), S(r, "text")) };
+            case "/api/versions/list":
+                return Versions.List(S(r, "key"));
+            case "/api/versions/get":
+                return new JsonObject { ["html"] = Versions.Get(S(r, "key"), int.TryParse(S(r, "i"), out var vi) ? vi : -1) };
             case "/api/originals":
             {
                 var a = new JsonArray();
