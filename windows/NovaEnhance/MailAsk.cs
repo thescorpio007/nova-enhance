@@ -119,7 +119,7 @@ class MailAskForm : NovaForm
     {
         cts?.Cancel();
         anchor = h;
-        gathered = false; thread.Clear(); attPool.Clear();
+        gathered = false; thread.Clear(); attPool.Clear(); allowDocs = false;
         fullBody = h?.Body ?? "";
         conv = resume;
         status.Text = "";
@@ -149,6 +149,7 @@ class MailAskForm : NovaForm
         head.Text = "Reading the email from Outlook…";
         try
         {
+            selText = await Sta(() => Outlook.SelectedText());
             var h = await Sta(() => Outlook.CurrentMail());
             if (h == null && subjectHint.Length > 0)
                 h = MailIndex.Search(new MailQuery { Phrase = subjectHint, Limit = 1 }).FirstOrDefault();
@@ -189,10 +190,26 @@ class MailAskForm : NovaForm
     string projectKey = "";
     string folder = "";
 
+    Project proj;
+    string selText = "";
+    bool allowDocs;
+
     string FolderFor(MailHit h)
     {
+        // 📁 Projects (Settings): found from the codes in the subject and text.
+        proj = Projects.ForMail(h);
+        if (proj != null && proj.Folders.Count > 0) { projectKey = proj.Code; return proj.Folders[0]; }
         projectKey = Prompts.ProjectOf(h);
         return Map().TryGetValue(projectKey, out var f) ? f : "";
+    }
+
+    /// <summary>The project's folders and the general "_" reference folders (or just the folder you chose).</summary>
+    List<string> AllFolders()
+    {
+        var l = new List<string>();
+        if (folder.Length > 0) l.Add(folder);
+        if (proj != null && proj.Folders.Contains(folder, StringComparer.OrdinalIgnoreCase)) l.AddRange(Projects.FoldersOf(proj));
+        return l.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     void SetFolder(string f, bool remember = true)
@@ -204,8 +221,9 @@ class MailAskForm : NovaForm
             if (folder.Length > 0) m[projectKey] = folder; else m.Remove(projectKey);
             Store.Set("win_proj_folders", JsonSerializer.Serialize(m));
         }
+        var extra = proj != null && proj.Folders.Contains(folder, StringComparer.OrdinalIgnoreCase) ? AllFolders().Count - 1 : 0;
         folderLbl.Text = folder.Length > 0
-            ? $"📁 Project documents ({projectKey}): {GDrive.Display(folder)}"
+            ? $"📁 Project {(proj != null && extra >= 0 && proj.Folders.Contains(folder, StringComparer.OrdinalIgnoreCase) ? $"{proj.Code} · {proj.Name} (found automatically)" : $"documents ({projectKey})")}: {GDrive.Display(folder)}" + (extra > 0 ? $" + {extra} more folder(s) (general reference)" : "")
             : $"📁 No project folder for {(projectKey.Length > 0 ? projectKey : "this email")} yet — choose one so Nova can check the spec, BOQ and drawings too (remembered)";
     }
 
@@ -359,11 +377,50 @@ class MailAskForm : NovaForm
             foreach (var x in firstOf.Concat(ranked).Distinct().Take(14))
                 sources.Add(new AskSource { Id = "A" + a++, Title = $"{x.Name} · {x.Seg.Loc}", Text = Cut(x.Seg.Text, 1400), Path = x.Path, Goto = x.Seg.Goto, Loc = x.Seg.Loc });
 
-            string docNote = "";
-            if (folder.Length > 0)
+            string docNote = "", drawLine = "";
+            int d = 1;
+            var folders = AllFolders();
+            if (folders.Count > 0 && FolderAsk.Sees == "never" && !ConfirmSend.LocalHandlesPrivate && !allowDocs)
             {
-                if (FolderAsk.Sees == "never" && !ConfirmSend.LocalHandlesPrivate) docNote = "Project documents not sent (Settings → Folder search: the AI doesn't read your files).";
-                else if (!Directory.Exists(folder) && !GDrive.IsRoot(folder)) docNote = "The project folder is not reachable: " + folder;
+                var dwAsk = MessageBox.Show(this, "⚠ Settings → Folder search is set so that the AI never reads your files — so Nova can't check the project documents or the drawings in this email.\n\nAllow it for this conversation only?\n(Yes = allow now · No = answer from the emails only. To change it for good: Settings → Folder search.)",
+                    "Nova Enhance · project documents", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                allowDocs = dwAsk == DialogResult.Yes;
+            }
+            var docsOk = folders.Count > 0 && (FolderAsk.Sees != "never" || ConfirmSend.LocalHandlesPrivate || allowDocs);
+            if (folders.Count > 0 && !docsOk) docNote = "Project documents not sent (Settings → Folder search: the AI doesn't read your files).";
+
+            // 📐 Drawing / document numbers in the email, its subject, or the text you highlighted in Outlook: their latest PDF.
+            if (docsOk)
+            {
+                var dwSel = await Sta(() => Outlook.SelectedText());
+                if (dwSel.Length > 0) selText = dwSel;
+                var dwNums = Projects.DocNumber.Matches((selText.Length > 0 ? selText : "") + "\n" + p).Select(x => x.Value).ToList();
+                if (dwNums.Count == 0) dwNums = Projects.DocNumber.Matches((anchor.Subject ?? "") + "\n" + fullBody).Select(x => x.Value).ToList();
+                dwNums = dwNums.Distinct(StringComparer.OrdinalIgnoreCase).Take(25).ToList();
+                if (dwNums.Count > 0)
+                {
+                    status.Text = $"📐 Looking for {dwNums.Count} drawing / document number(s) in the project folders…";
+                    var dwFound = new List<string>(); var dwMissing = new List<string>();
+                    foreach (var dn in dwNums)
+                    {
+                        my.Token.ThrowIfCancellationRequested();
+                        var dwHits = await Task.Run(() => Projects.FindDoc(dn, folders));
+                        var dwBest = dwHits.FirstOrDefault(x => x.Status == "latest");
+                        if (dwBest == null) { dwMissing.Add(dn + (dwHits.Any(x => x.Cad) ? " (only CAD)" : "")); continue; }
+                        var dwOlder = dwHits.Count(x => x.Status == "superseded");
+                        dwFound.Add($"{dn} → {Path.GetFileName(dwBest.Path)}" + (dwBest.Rev.Length > 0 ? $" (rev {dwBest.Rev}, latest)" : "") + (dwOlder > 0 ? $" · {dwOlder} older superseded" : ""));
+                        List<Seg> dwSegs;
+                        try { dwSegs = await Sta(() => FileText.Extract(dwBest.Path)); } catch { dwSegs = new(); }
+                        var dwText = string.Join("\n", dwSegs.Select(x => x.Text)).Trim();
+                        sources.Add(new AskSource { Id = "D" + d++, Title = $"📐 {dn} · {Path.GetFileName(dwBest.Path)} — {Revisions.KindOf(dwBest.Path)} · latest" + (dwBest.Rev.Length > 0 ? " rev " + dwBest.Rev : ""), Text = Cut(dwText.Length > 0 ? dwText : "(drawing with no readable text — title only)", 1800), Path = dwBest.Path, Goto = dwSegs.FirstOrDefault()?.Goto ?? "", Loc = dwSegs.FirstOrDefault()?.Loc ?? "" });
+                    }
+                    drawLine = $"📐 **Drawings referred to: found {dwFound.Count} of {dwNums.Count}**\n" + string.Join("\n", dwFound.Select(x => "• ✓ " + x).Concat(dwMissing.Select(x => "• ✗ " + x + " — not found in " + string.Join(", ", folders.Select(Path.GetFileName))))) + "\n\n";
+                }
+            }
+
+            foreach (var folder in docsOk ? folders : new List<string>())
+            {
+                if (!Directory.Exists(folder) && !GDrive.IsRoot(folder)) docNote = "The project folder is not reachable: " + folder;
                 else
                 {
                     status.Text = "Reading the project folder (only new or changed files)…";
@@ -371,10 +428,11 @@ class MailAskForm : NovaForm
                     var ui = new System.Windows.Forms.Timer { Interval = 700 };
                     ui.Tick += (_, _) => status.Text = $"Reading the project folder… {pg.Done:N0} of {pg.Files:N0} files" + (pg.Current is { Length: > 0 } c ? " · " + c : "");
                     ui.Start();
-                    try { await Sta(() => { FolderIndex.Search(folder, null, null, _ => { }, null, pg, my.Token); return true; }); }
+                    // A project kept indexed in the background is not re-read here (it may hold 100,000 files).
+                    var background = Projects.Status.TryGetValue(folder, out var bst) && bst.Last > DateTime.MinValue;
+                    try { if (!background) await Sta(() => { FolderIndex.Search(folder, null, null, _ => { }, null, pg, my.Token); return true; }); }
                     finally { ui.Stop(); ui.Dispose(); }
-                    var ps = await Task.Run(() => FolderIndex.Retrieve(folder, terms, 14, 3, Memory.Boosts(terms), false));
-                    int d = 1;
+                    var ps = await Task.Run(() => FolderIndex.Retrieve(folder, terms, folders.Count > 1 ? 8 : 14, 3, Memory.Boosts(terms), false));
                     foreach (var x in ps)
                     {
                         var tag = string.Join(" · ", new[] { Revisions.KindOf(x.Path), Revisions.Tag(folder, x.Path) }.Where(t => t.Length > 0));
@@ -424,7 +482,7 @@ class MailAskForm : NovaForm
             catch (OperationCanceledException) { throw; }
             catch (Exception e) { msg.Check = "🔎 Technical check not done (" + e.Message + ") — read the answer with care."; }
 
-            msg.Text = ans + (docNote.Length > 0 ? "\n\n" + docNote : "");
+            msg.Text = drawLine + ans + (docNote.Length > 0 ? "\n\n" + docNote : "");
             msg.Src = sources.Select(s => new ConvSrc { Id = s.Id, Title = s.Title, Path = s.Path, Goto = s.Goto, Loc = s.Loc, Entry = s.Mail?.Entry ?? "", Store = s.Mail?.StoreId ?? "" }).ToList();
             conv.Msgs.Add(msg);
             Conversations.Save(conv);

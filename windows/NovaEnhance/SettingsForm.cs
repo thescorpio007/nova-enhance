@@ -3,7 +3,7 @@ namespace NovaEnhance;
 /// <summary>Settings, split into sections like the phone app.</summary>
 class SettingsForm : NovaForm
 {
-    static readonly string[] Sections = { "AI & API keys", "About me", "Enhancement", "Email & AI", "Folder search", "✦ Prompts", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "About" };
+    static readonly string[] Sections = { "AI & API keys", "About me", "Enhancement", "Email & AI", "Folder search", "📁 Projects", "✦ Prompts", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "About" };
     readonly ListBox nav;
     readonly Panel host;
     Stack page;
@@ -68,6 +68,7 @@ class SettingsForm : NovaForm
                 case "Enhancement": Enhancement(); break;
                 case "Email & AI": EmailAi(); break;
                 case "Folder search": FolderSearch(); break;
+                case "📁 Projects": ProjectsPage(); break;
                 case "Google Drive": GoogleDrive(); break;
                 case "Shortcuts": Shortcuts(); break;
                 case "Browser add-on": BrowserPage(); break;
@@ -467,6 +468,180 @@ class SettingsForm : NovaForm
             l.Margin = new Padding(20, 0, 0, 2);
         }
         optEnd = page.Controls.Count;
+    }
+
+    // ------------------------------------------------------------------ 📁 Projects
+    static List<ProjectProposal> lastScan;
+    static Projects.ScanProgress scanPg;
+    static CancellationTokenSource scanCts;
+    Label projLive;
+
+    void ProjectsPage()
+    {
+        Note("Give Nova your work folder. It reads only the folder and file NAMES (never the contents) and proposes your projects: a folder that starts with a number (1-, 2-, 3-…) is a project — the name after the number is the project, a bracket like (SAH) is its code. Folders that start with \"_\" are general reference used with every project. Private-looking folders (wallet, password, bank…) are 🔒 never read. Nothing is indexed until you tick ✓ Use and press Save.");
+        var wr = page.Add(Th.Row(false));
+        var wf = Th.Box(false);
+        wf.Text = Projects.WorkFolder.Length > 0 ? Projects.WorkFolder : @"F:\_MZA";
+        if (wf is SpellBox sb) sb.Off = true;
+        wf.Width = 300;
+        wr.Controls.Add(wf);
+        wr.Controls.Add(Th.B("📁 Choose…", () => { using var d = new FolderBrowserDialog { SelectedPath = Directory.Exists(wf.Text) ? wf.Text : "" }; if (d.ShowDialog(this) == DialogResult.OK) wf.Text = d.SelectedPath; }));
+        var scanStatus = Th.L("", 9.5f, Th.Muted);
+        void Run(bool network)
+        {
+            var root = wf.Text.Trim();
+            if (!Directory.Exists(root)) { scanStatus.Text = "⚠ Folder not found: " + root; return; }
+            Projects.WorkFolder = root;
+            scanCts?.Cancel();
+            var my = scanCts = new CancellationTokenSource();
+            scanPg = new Projects.ScanProgress();
+            var pg = scanPg;
+            var t = new System.Windows.Forms.Timer { Interval = 600 };
+            t.Tick += (_, _) => { if (!scanStatus.IsDisposed) scanStatus.Text = $"🔍 Scanning… {pg.Folders} folders · {pg.Files:N0} files · {pg.Current}"; };
+            t.Start();
+            Task.Run(() => Projects.Scan(root, network, pg, my.Token), my.Token).ContinueWith(r =>
+            {
+                Program.UiContext.Post(_ =>
+                {
+                    t.Stop(); t.Dispose();
+                    if (r.IsCanceled || my.IsCancellationRequested) { if (!scanStatus.IsDisposed) scanStatus.Text = "Scan stopped."; return; }
+                    if (r.IsFaulted) { if (!scanStatus.IsDisposed) scanStatus.Text = "⚠ " + r.Exception?.GetBaseException().Message; return; }
+                    lastScan = r.Result;
+                    if (!IsDisposed) Draw("📁 Projects");
+                }, null);
+            });
+        }
+        wr.Controls.Add(Th.B("🔍 Scan my work folder", () => Run(false), true));
+        wr.Controls.Add(Th.B("🌐 + network shortcuts", () => Run(true)));
+        wr.Controls.Add(Th.B("■ Stop", () => scanCts?.Cancel()));
+        page.Add(scanStatus);
+
+        if (lastScan != null)
+        {
+            page.Add(Th.Section($"What Nova found in {Projects.WorkFolder} · tick ✓ Use, correct the name / code / email codes (click a cell), then Save"));
+            var g = new DataGridView
+            {
+                Height = 420, BackgroundColor = Th.Card, ForeColor = Th.Text, GridColor = Color.FromArgb(0x2E, 0x35, 0x46), BorderStyle = BorderStyle.FixedSingle,
+                AllowUserToAddRows = false, AllowUserToDeleteRows = false, RowHeadersVisible = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.DisplayedCells, EnableHeadersVisualStyles = false, Font = Th.F(9),
+                ScrollBars = ScrollBars.Both
+            };
+            g.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(0x1D, 0x21, 0x30);
+            g.ColumnHeadersDefaultCellStyle.ForeColor = Th.Text;
+            g.DefaultCellStyle.BackColor = Th.Card; g.DefaultCellStyle.ForeColor = Th.Text;
+            g.DefaultCellStyle.SelectionBackColor = Color.FromArgb(0x2E, 0x2A, 0x55);
+            g.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "✓ Use", Width = 50 });
+            foreach (var h in new[] { "Folder", "Type", "Project name ✎", "Code ✎", "Email codes ✎", "Emails", "Files", "PDF", "Word/Excel", "CAD", "Size", "Last change", "Codes in file names", "Main subfolders" })
+                g.Columns.Add(h, h);
+            foreach (DataGridViewColumn c in g.Columns) c.ReadOnly = !(c.Index == 0 || c.HeaderText.EndsWith("✎"));
+            foreach (var p in lastScan)
+            {
+                var kind = p.Kind switch { "project" => "Project", "general" => "General reference", "network" => "🌐 Network (not scanned)", "locked" => "🔒 never read", _ => "Not a project" };
+                var i = g.Rows.Add(p.Use, p.Display, kind, p.Name, p.Code, string.Join(", ", p.Codes),
+                    p.Kind == "project" ? p.Emails.ToString("N0") : "", p.Files > 0 ? p.Files.ToString("N0") : "", p.Pdf > 0 ? p.Pdf.ToString("N0") : "", p.Office > 0 ? p.Office.ToString("N0") : "", p.Cad > 0 ? p.Cad.ToString("N0") : "",
+                    p.Bytes > 0 ? Projects.Size(p.Bytes) : "", p.Last > DateTime.MinValue ? p.Last.ToString("dd MMM yyyy") : "", string.Join(", ", p.FileCodes), string.Join(", ", p.Subfolders));
+                var row = g.Rows[i];
+                row.Tag = p;
+                if (p.Kind == "locked") { row.ReadOnly = true; row.DefaultCellStyle.ForeColor = Th.Muted; row.Cells[0].Value = false; }
+                else if (p.Kind is "other" or "network") row.DefaultCellStyle.ForeColor = Th.Muted;
+                if (p.Kind != "project") { row.Cells[3].ReadOnly = row.Cells[4].ReadOnly = row.Cells[5].ReadOnly = true; }
+            }
+            page.Add(g, true);
+            var nP = lastScan.Count(p => p.Kind == "project"); var nG = lastScan.Count(p => p.Kind == "general");
+            Note($"{nP} projects · {nG} general reference folders · {lastScan.Count(p => p.Kind == "other")} not projects · {lastScan.Count(p => p.Kind == "locked")} 🔒 never read · {lastScan.Count(p => p.Kind == "network")} network. Emails = emails whose subject has the project's code. Pre-ticked: projects with 20+ emails or 500+ files.");
+            var br = page.Add(Th.Row(false));
+            br.Controls.Add(Th.B("💾 Save the ticked lines", () =>
+            {
+                g.EndEdit();
+                foreach (DataGridViewRow r in g.Rows)
+                {
+                    if (r.Tag is not ProjectProposal p || p.Kind == "locked") continue;
+                    p.Use = r.Cells[0].Value is true;
+                    if (p.Kind == "network" && p.Use) p.Kind = "general";   // a network folder you tick is used as general reference
+                    if (p.Kind == "other" && p.Use) p.Kind = "project";
+                    p.Name = (r.Cells[3].Value?.ToString() ?? "").Trim();
+                    p.Code = (r.Cells[4].Value?.ToString() ?? "").Trim().ToUpperInvariant();
+                    p.Codes = (r.Cells[5].Value?.ToString() ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+                    if (p.Kind == "project" && p.Use && p.Code.Length == 0) p.Code = p.Name.Length > 0 ? p.Name.ToUpperInvariant() : Path.GetFileName(p.Folder);
+                    if (p.Kind == "project" && p.Name.Length == 0) p.Name = Path.GetFileName(p.Folder);
+                }
+                Projects.Accept(lastScan);
+                lastScan = null;
+                Draw("📁 Projects");
+            }, true));
+            br.Controls.Add(Th.B("✓ Tick all projects", () => { foreach (DataGridViewRow r in g.Rows) if (r.Tag is ProjectProposal { Kind: "project" }) r.Cells[0].Value = true; }));
+            br.Controls.Add(Th.B("✗ Untick all", () => { foreach (DataGridViewRow r in g.Rows) r.Cells[0].Value = false; }));
+            br.Controls.Add(Th.B("Close the list", () => { lastScan = null; Draw("📁 Projects"); }));
+        }
+
+        page.Add(Th.Section("My projects · kept indexed in the background like your email"));
+        var list = Projects.All();
+        var lb = page.Add(new ListBox { Height = 200, BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.FixedSingle, Font = Th.F(9.5f), IntegralHeight = false, HorizontalScrollbar = true }, true);
+        string Line(Project p)
+        {
+            var st = p.Folders.Select(f => Projects.Status.TryGetValue(f, out var s) ? s : null).FirstOrDefault(s => s != null);
+            var stt = st == null ? "waiting" : st.Phase == "reading" ? $"reading {(st.Total > 0 ? 100 * st.Done / st.Total : 0)}% ({st.Done:N0} of {st.Total:N0})" : st.Phase + (st.Last > DateTime.MinValue ? $" · {st.Last:dd MMM HH:mm}" : "");
+            return $"{p.Code}  ·  {p.Name}  ·  email codes: {string.Join(", ", p.Codes)}  ·  {string.Join(" + ", p.Folders)}  ·  {stt}";
+        }
+        foreach (var p in list) lb.Items.Add(Line(p));
+        if (list.Count == 0) lb.Items.Add("(none yet — scan your work folder above)");
+        projLive = page.Add(Th.L(Projects.Indexer.Line(), 9.5f, Th.Muted));
+        var lt = new System.Windows.Forms.Timer { Interval = 2500 };
+        lt.Tick += (_, _) =>
+        {
+            if (lb.IsDisposed) { lt.Stop(); lt.Dispose(); return; }
+            var all = Projects.All();
+            for (int i = 0; i < all.Count && i < lb.Items.Count; i++) { var s = Line(all[i]); if ((string)lb.Items[i] != s) lb.Items[i] = s; }
+            projLive.Text = Projects.Indexer.Line() + (IndexProgress.Rushing ? "   " + IndexProgress.RushText : "");
+        };
+        lt.Start();
+        Project Sel() => lb.SelectedIndex >= 0 && lb.SelectedIndex < list.Count ? list[lb.SelectedIndex] : null;
+        var pr = page.Add(Th.Row());
+        pr.Controls.Add(Th.B("⚡ Index now", () => { IndexProgress.Rush(true); Projects.Indexer.Wake(); }, true));
+        pr.Controls.Add(Th.B("✎ Edit", () =>
+        {
+            var p = Sel(); if (p == null) return;
+            var name = Prompt.Ask(this, "✎ Project", "Project name", p.Name); if (name == null) return;
+            var code = Prompt.Ask(this, "✎ Project", "Project code", p.Code); if (code == null) return;
+            var codes = Prompt.Ask(this, "✎ Project", "Codes in email subjects and file names (comma-separated)", string.Join(", ", p.Codes)); if (codes == null) return;
+            p.Name = name.Trim(); p.Code = code.Trim().ToUpperInvariant();
+            p.Codes = codes.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+            Projects.SaveAll(list); Draw("📁 Projects");
+        }));
+        pr.Controls.Add(Th.B("➕ Add a folder", () =>
+        {
+            var p = Sel(); if (p == null) { MessageBox.Show(this, "Select a project first.", "Nova Enhance"); return; }
+            using var d = new FolderBrowserDialog { Description = "Another folder for " + p.Code };
+            if (d.ShowDialog(this) != DialogResult.OK) return;
+            if (Projects.Private.IsMatch(d.SelectedPath)) { MessageBox.Show(this, "🔒 That folder looks private — Nova never reads it.", "Nova Enhance"); return; }
+            p.Folders.Add(d.SelectedPath); Projects.SaveAll(list); Draw("📁 Projects");
+        }));
+        pr.Controls.Add(Th.B("➕ New project…", () =>
+        {
+            using var d = new FolderBrowserDialog { Description = "The project's folder" };
+            if (d.ShowDialog(this) != DialogResult.OK) return;
+            var code = Prompt.Ask(this, "➕ New project", "Project code (as in email subjects)", ""); if (string.IsNullOrWhiteSpace(code)) return;
+            list.Add(new Project { Code = code.Trim().ToUpperInvariant(), Name = Path.GetFileName(d.SelectedPath), Codes = new() { code.Trim().ToUpperInvariant() }, Folders = new() { d.SelectedPath } });
+            Projects.SaveAll(list); Draw("📁 Projects");
+        }));
+        pr.Controls.Add(Th.B("🗑 Remove", () =>
+        {
+            var p = Sel(); if (p == null) return;
+            if (MessageBox.Show(this, $"Remove {p.Code} from your projects? (Your files are not touched.)", "Nova Enhance", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
+            list.Remove(p); Projects.SaveAll(list); Draw("📁 Projects");
+        }));
+
+        page.Add(Th.Section("General reference (used with every project)"));
+        var gen = Projects.General;
+        Note(gen.Count == 0 ? "(none)" : string.Join("\n", gen.Select(x => "• " + x)));
+        var gr = page.Add(Th.Row(false));
+        gr.Controls.Add(Th.B("➕ Add", () => { using var d = new FolderBrowserDialog(); if (d.ShowDialog(this) == DialogResult.OK && !Projects.Private.IsMatch(d.SelectedPath)) { var l = Projects.General; l.Add(d.SelectedPath); Projects.General = l; Projects.Indexer.Wake(); Draw("📁 Projects"); } }));
+        gr.Controls.Add(Th.B("Clear", () => { Projects.General = new(); Draw("📁 Projects"); }));
+
+        page.Add(Th.Section("Background indexing"));
+        page.Add(Th.Check("Keep my projects indexed in the background (new and changed files are read as they appear; a full check every night)", Projects.Indexer.On, v => Projects.Indexer.On = v));
+        Note("Gentle, like the email: full speed after working hours or when the PC is idle (Settings → Email & AI → Gentle indexing); while you work it pauses. ⚡ Index now runs at full speed until complete. The first pass of a big project can take hours — Ask about this email uses what is ready.");
+        Note("📐 Drawing numbers: when an email (or the text you highlight in Outlook) mentions a drawing or document number, ✦ Ask about this email finds the file by its name in the project — the latest PDF first, then Word / Excel, CAD last (never used for the answer) — and marks older revisions as superseded.");
     }
 
     // ------------------------------------------------------------------ Folder search

@@ -78,6 +78,7 @@ class NovaContext : ApplicationContext
         Program.Tray = tray;
         // ⏳ Pointing at the tray icon shows the email index progress.
         IndexProgress.Start();
+        Projects.Indexer.Start();
         var trayTip = new System.Windows.Forms.Timer { Interval = 5000 };
         trayTip.Tick += (_, _) => { try { tray.Text = IndexProgress.Tray(); } catch { } };
         trayTip.Start();

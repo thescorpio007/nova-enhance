@@ -101,6 +101,21 @@ static class Outlook
         item.Display(false);
     }
 
+    /// <summary>The text you highlighted in the open email (reading or reply window), or "".</summary>
+    public static string SelectedText()
+    {
+        try
+        {
+            dynamic app = Running();
+            if (app == null) return "";
+            dynamic w = app.ActiveInspector();
+            if (w == null) return "";
+            dynamic doc = w.WordEditor;
+            return ((string)doc.Application.Selection.Text ?? "").Trim();
+        }
+        catch { return ""; }
+    }
+
     /// <summary>The email selected (or open) in Outlook right now — from the index when it is there, else read from Outlook.</summary>
     public static MailHit CurrentMail()
     {
@@ -955,6 +970,21 @@ static class MailIndex
             };
         }
         catch { return null; }
+    }
+
+    /// <summary>How many indexed emails have this text in the subject (for matching project folders with your emails).</summary>
+    public static long CountSubject(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text) || !File.Exists(DbPath)) return 0;
+        try
+        {
+            using var c = Open();
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM mail WHERE subject LIKE $s";
+            cmd.Parameters.AddWithValue("$s", "%" + text + "%");
+            return Convert.ToInt64(cmd.ExecuteScalar());
+        }
+        catch { return 0; }
     }
 
     /// <summary>The emails of one Outlook conversation, newest first.</summary>
