@@ -359,7 +359,10 @@ class PreviewPane : UserControl
         if (tempFile != null) { try { File.Delete(tempFile); } catch { } tempFile = null; }
         thumbs.Controls.Clear();
         var paged = hits.Any(x => x.Page > 0);
-        if (!paged) { ShowText(h, m); return; }
+        // A whole file to look at (an email attachment, no search hits): draw its pages from page 1.
+        var ext = Path.GetExtension(h.Path ?? "").ToLowerInvariant();
+        var whole = h.Pieces.Count == 0 && ext is ".pdf" or ".jpg" or ".jpeg" or ".png" or ".tif" or ".tiff" or ".bmp" or ".docx" or ".docm" or ".doc" or ".rtf" or ".odt" or ".pptx" or ".pptm" or ".ppt";
+        if (!paged && !whole) { ShowText(h, m); return; }
         ShowMessage("Opening the page…");
         try
         {
@@ -369,8 +372,16 @@ class PreviewPane : UserControl
             if (doc == null) { ShowText(h, m); return; }
             canvas.Visible = true; textView.Visible = false;
             pageOf.Text = $"of {doc.Pages:N0}";
-            hitIndex = Math.Clamp(startHit, 0, hits.Count - 1);
-            await GoHitAsync(hitIndex, true);
+            if (hits.Count == 0)
+            {
+                await ShowPage(1, true);
+                hitLbl.Text = $"{doc.Pages:N0} page{(doc.Pages == 1 ? "" : "s")}";
+            }
+            else
+            {
+                hitIndex = Math.Clamp(startHit, 0, hits.Count - 1);
+                await GoHitAsync(hitIndex, true);
+            }
             LoadThumbs(my);
         }
         catch (Exception e)
@@ -526,7 +537,9 @@ class PreviewPane : UserControl
     async void LoadThumbs(int my)
     {
         var pages = hits.Where(h => h.Page > 0).Select(h => h.Page).Distinct().Take(40).ToList();
-        thumbs.Controls.Add(Th.L("PAGES WITH HITS", 7.5f, Th.Muted, true));
+        var all = pages.Count == 0 && doc != null;
+        if (all) pages = Enumerable.Range(1, Math.Min(doc.Pages, 40)).ToList();
+        thumbs.Controls.Add(Th.L(all ? "PAGES" : "PAGES WITH HITS", 7.5f, Th.Muted, true));
         foreach (var p in pages)
         {
             if (my != loadId) return;
