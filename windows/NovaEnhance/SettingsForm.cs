@@ -574,13 +574,14 @@ class SettingsForm : NovaForm
             br.Controls.Add(Th.B("Close the list", () => { lastScan = null; Draw("📁 Projects"); }));
         }
 
-        page.Add(Th.Section("My projects · kept indexed in the background like your email"));
+        page.Add(Th.Section("My projects · every file name listed and kept up to date"));
         var list = Projects.All();
         var lb = page.Add(new ListBox { Height = 200, BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.FixedSingle, Font = Th.F(9.5f), IntegralHeight = false, HorizontalScrollbar = true }, true);
         string Line(Project p)
         {
             var st = p.Folders.Select(f => Projects.Status.TryGetValue(f, out var s) ? s : null).FirstOrDefault(s => s != null);
-            var stt = st == null ? "waiting" : st.Phase == "reading" ? $"reading {(st.Total > 0 ? 100 * st.Done / st.Total : 0)}% ({st.Done:N0} of {st.Total:N0})" : st.Phase + (st.Last > DateTime.MinValue ? $" · {st.Last:dd MMM HH:mm}" : "");
+            var sts = p.Folders.Select(f => Projects.Status.TryGetValue(f, out var s) ? s : null).Where(s => s != null).ToList();
+            var stt = st == null ? "waiting" : sts.Any(s => s.Phase == "listing") ? $"listing names… {sts.Sum(s => s.Files):N0}" : sts.All(s => s.Phase == "listed") ? $"✓ {sts.Sum(s => s.Files):N0} file names · {sts.Sum(s => s.Read)} read inside · {st.Last:dd MMM HH:mm}" : st.Phase;
             return $"{p.Code}  ·  {p.Name}  ·  email codes: {string.Join(", ", p.Codes)}  ·  {string.Join(" + ", p.Folders)}  ·  {stt}";
         }
         foreach (var p in list) lb.Items.Add(Line(p));
@@ -592,12 +593,13 @@ class SettingsForm : NovaForm
             if (lb.IsDisposed) { lt.Stop(); lt.Dispose(); return; }
             var all = Projects.All();
             for (int i = 0; i < all.Count && i < lb.Items.Count; i++) { var s = Line(all[i]); if ((string)lb.Items[i] != s) lb.Items[i] = s; }
-            projLive.Text = Projects.Indexer.Line() + (IndexProgress.Rushing ? "   " + IndexProgress.RushText : "");
+            projLive.Text = Projects.Indexer.Line();
         };
         lt.Start();
         Project Sel() => lb.SelectedIndex >= 0 && lb.SelectedIndex < list.Count ? list[lb.SelectedIndex] : null;
         var pr = page.Add(Th.Row());
-        pr.Controls.Add(Th.B("⚡ Index now", () => { IndexProgress.Rush(true); Projects.Indexer.Wake(); }, true));
+        pr.Controls.Add(Th.B("📂 Find a file…", () => Screens.FindFile(null), true));
+        pr.Controls.Add(Th.B("⟳ List again now", () => Projects.Indexer.Refresh()));
         pr.Controls.Add(Th.B("✎ Edit", () =>
         {
             var p = Sel(); if (p == null) return;
@@ -638,9 +640,9 @@ class SettingsForm : NovaForm
         gr.Controls.Add(Th.B("➕ Add", () => { using var d = new FolderBrowserDialog(); if (d.ShowDialog(this) == DialogResult.OK && !Projects.Private.IsMatch(d.SelectedPath)) { var l = Projects.General; l.Add(d.SelectedPath); Projects.General = l; Projects.Indexer.Wake(); Draw("📁 Projects"); } }));
         gr.Controls.Add(Th.B("Clear", () => { Projects.General = new(); Draw("📁 Projects"); }));
 
-        page.Add(Th.Section("Background indexing"));
-        page.Add(Th.Check("Keep my projects indexed in the background (new and changed files are read as they appear; a full check every night)", Projects.Indexer.On, v => Projects.Indexer.On = v));
-        Note("Gentle, like the email: full speed after working hours or when the PC is idle (Settings → Email & AI → Gentle indexing); while you work it pauses. ⚡ Index now runs at full speed until complete. The first pass of a big project can take hours — Ask about this email uses what is ready.");
+        page.Add(Th.Section("How Nova knows your files"));
+        page.Add(Th.Check("Keep the list of file names up to date (new, renamed and deleted files within seconds; a full check every day)", Projects.Indexer.On, v => Projects.Indexer.On = v));
+        Note("1 · Names only: Nova lists every file name, folder, date and revision of your projects — a few minutes, then instant.\n2 · Inside only when needed: when you ask something, Nova picks the likely files by their names and opens just those (OCR included for scanned drawings).\n3 · Remembered: a file read once is answered instantly next time; if the file changes, it is read again when needed.\n📂 Find a project file (tray menu, or here): type a drawing number or a few words — results as you type, latest revision first, Enter opens, right-click to attach it to an email.");
         Note("📐 Drawing numbers: when an email (or the text you highlight in Outlook) mentions a drawing or document number, ✦ Ask about this email finds the file by its name in the project — the latest PDF first, then Word / Excel, CAD last (never used for the answer) — and marks older revisions as superseded.");
     }
 

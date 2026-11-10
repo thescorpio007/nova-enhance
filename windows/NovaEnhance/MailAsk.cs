@@ -85,6 +85,7 @@ class MailAskForm : NovaForm
         fr.Controls.Add(folderLbl);
         fr.Controls.Add(Th.B("📁 Choose…", ChooseFolder));
         fr.Controls.Add(Th.B("No folder", () => SetFolder("")));
+        fr.Controls.Add(Th.B("📂 Find a file", () => { var n = Projects.DocNumber.Match(Outlook.SelectedText()); Screens.FindFile(n.Success ? n.Value : null); }));
         status = top.Add(Th.Wrap("", 9.5f, Th.AccentText), true);
 
         // Your input, always at the bottom: Enter = send · Shift+Enter = new line.
@@ -410,7 +411,7 @@ class MailAskForm : NovaForm
                         var dwOlder = dwHits.Count(x => x.Status == "superseded");
                         dwFound.Add($"{dn} → {Path.GetFileName(dwBest.Path)}" + (dwBest.Rev.Length > 0 ? $" (rev {dwBest.Rev}, latest)" : "") + (dwOlder > 0 ? $" · {dwOlder} older superseded" : ""));
                         List<Seg> dwSegs;
-                        try { dwSegs = await Sta(() => FileText.Extract(dwBest.Path)); } catch { dwSegs = new(); }
+                        try { status.Text = $"📐 Reading {Path.GetFileName(dwBest.Path)}…"; dwSegs = (await Task.Run(() => Projects.Read(dwBest.Path, my.Token), my.Token)).Segs; } catch (OperationCanceledException) { throw; } catch { dwSegs = new(); }
                         var dwText = string.Join("\n", dwSegs.Select(x => x.Text)).Trim();
                         sources.Add(new AskSource { Id = "D" + d++, Title = $"📐 {dn} · {Path.GetFileName(dwBest.Path)} — {Revisions.KindOf(dwBest.Path)} · latest" + (dwBest.Rev.Length > 0 ? " rev " + dwBest.Rev : ""), Text = Cut(dwText.Length > 0 ? dwText : "(drawing with no readable text — title only)", 1800), Path = dwBest.Path, Goto = dwSegs.FirstOrDefault()?.Goto ?? "", Loc = dwSegs.FirstOrDefault()?.Loc ?? "" });
                     }
@@ -418,7 +419,19 @@ class MailAskForm : NovaForm
                 }
             }
 
-            foreach (var folder in docsOk ? folders : new List<string>())
+            // 📂 Project folders: the likely files are found by NAME (instant), and only those are opened — remembered after the first read.
+            var listed = docsOk ? folders.Where(Projects.Listed).ToList() : new List<string>();
+            if (listed.Count > 0)
+            {
+                var already = new HashSet<string>(sources.Where(s => s.Path is { Length: > 0 }).Select(s => s.Path), StringComparer.OrdinalIgnoreCase);
+                var ui = SynchronizationContext.Current;
+                var pas = await Task.Run(() => Projects.Ask(listed, terms.SelectMany(t => Regex.Split(t.ToLowerInvariant(), @"[^\p{L}\p{N}\-]+")).Concat(words).ToList(), 8, 14,
+                    t => ui?.Post(_ => { if (!status.IsDisposed) status.Text = t; }, null), my.Token), my.Token);
+                foreach (var x in pas.Where(x => !already.Contains(x.Path) || x.Loc.Length > 0))
+                    sources.Add(new AskSource { Id = "D" + d++, Title = $"{Path.GetFileName(x.Path)} · {x.Loc} — {Revisions.KindOf(x.Path)}" + (x.Status.Length > 0 ? " · " + x.Status : ""), Text = Cut(x.Text, 1400), Path = x.Path, Goto = x.Goto ?? "", Loc = x.Loc ?? "" });
+            }
+
+            foreach (var folder in docsOk ? folders.Except(listed, StringComparer.OrdinalIgnoreCase).ToList() : new List<string>())
             {
                 if (!Directory.Exists(folder) && !GDrive.IsRoot(folder)) docNote = "The project folder is not reachable: " + folder;
                 else
@@ -428,9 +441,7 @@ class MailAskForm : NovaForm
                     var ui = new System.Windows.Forms.Timer { Interval = 700 };
                     ui.Tick += (_, _) => status.Text = $"Reading the project folder… {pg.Done:N0} of {pg.Files:N0} files" + (pg.Current is { Length: > 0 } c ? " · " + c : "");
                     ui.Start();
-                    // A project kept indexed in the background is not re-read here (it may hold 100,000 files).
-                    var background = Projects.Status.TryGetValue(folder, out var bst) && bst.Last > DateTime.MinValue;
-                    try { if (!background) await Sta(() => { FolderIndex.Search(folder, null, null, _ => { }, null, pg, my.Token); return true; }); }
+                    try { await Sta(() => { FolderIndex.Search(folder, null, null, _ => { }, null, pg, my.Token); return true; }); }
                     finally { ui.Stop(); ui.Dispose(); }
                     var ps = await Task.Run(() => FolderIndex.Retrieve(folder, terms, folders.Count > 1 ? 8 : 14, 3, Memory.Boosts(terms), false));
                     foreach (var x in ps)

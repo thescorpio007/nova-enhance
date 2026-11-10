@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Microsoft.Data.Sqlite;
 
 namespace NovaEnhance;
 
@@ -37,7 +38,8 @@ static class Projects
     static readonly JsonSerializerOptions J = new() { IncludeFields = true };
     static readonly string[] OfficeExt = { ".doc", ".docx", ".docm", ".xls", ".xlsx", ".xlsm", ".csv", ".ppt", ".pptx" };
     static readonly string[] CadExt = { ".dwg", ".dxf", ".dgn", ".rvt", ".rfa", ".ifc", ".nwd", ".nwc", ".skp", ".3dm", ".pln" };
-    public static readonly Regex Private = new(@"wallet|password|passwd|bank|crypto|seed|private|personal|keepass|bitwarden|\bkeys?\b|passport|salary", RegexOptions.IgnoreCase);
+    public static readonly Regex Private = new(@"wallet|password|passwd|keepass|bitwarden|\b(bank|banking|crypto|seed|passport|salary|personal)\b", RegexOptions.IgnoreCase);
+    static readonly Regex PrivateFile = new(@"wallet|password|passwd|keepass|bitwarden|seed phrase|recovery phrase", RegexOptions.IgnoreCase);
     static readonly Regex Numbered = new(@"^\s*(\d{1,3})\s*[-_.)]\s*(.+)$");
 
     public static string WorkFolder { get => Store.Str("win_work_folder"); set => Store.Set("win_work_folder", value); }
@@ -219,7 +221,197 @@ static class Projects
         SaveAll(list.OrderBy(p => p.Order).ToList());
     }
 
-    // ------------------------------------------------------------------ 📐 document register: a number → the files with it in their name
+    // ------------------------------------------------------------------ 📇 the file catalogue: every file NAME, kept up to date (no contents)
+
+    static readonly object dbInit = new();
+    static volatile bool dbReady;
+
+    static SqliteConnection Db()
+    {
+        var c = FolderIndex.Open();
+        Exec(c, "PRAGMA busy_timeout=8000;");
+        if (!dbReady)
+            lock (dbInit)
+                if (!dbReady)
+                {
+                    Exec(c, "CREATE TABLE IF NOT EXISTS pnames(path TEXT PRIMARY KEY, root TEXT, name TEXT, ext TEXT, size INTEGER, mtime INTEGER, seen INTEGER);");
+                    Exec(c, "CREATE INDEX IF NOT EXISTS pnames_root ON pnames(root);");
+                    Exec(c, "CREATE TABLE IF NOT EXISTS pread(path TEXT, mtime INTEGER, n INTEGER, loc TEXT, go TEXT, text TEXT);");
+                    Exec(c, "CREATE INDEX IF NOT EXISTS pread_path ON pread(path);");
+                    dbReady = true;
+                }
+        return c;
+    }
+
+    static void Exec(SqliteConnection c, string sql) { using var cmd = c.CreateCommand(); cmd.CommandText = sql; cmd.ExecuteNonQuery(); }
+
+    static string RootKey(string root) => root.TrimEnd('\\').ToLowerInvariant();
+
+    static bool Skip(string fullName)
+    {
+        var n = Path.GetFileName(fullName);
+        return n.StartsWith("~$") || n.Equals("Thumbs.db", StringComparison.OrdinalIgnoreCase) || n.Equals("desktop.ini", StringComparison.OrdinalIgnoreCase) || PrivateFile.IsMatch(n);
+    }
+
+    /// <summary>Lists every file name under a folder (minutes for 30,000 files). Private folders are never entered.</summary>
+    static void ListFolder(string root, State st, CancellationToken ct)
+    {
+        var stamp = DateTime.Now.Ticks;
+        var rk = RootKey(root);
+        st.Phase = "listing"; st.Files = 0;
+        using var c = Db();
+        var tx = c.BeginTransaction();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "INSERT OR REPLACE INTO pnames(path,root,name,ext,size,mtime,seen) VALUES($p,$r,$n,$e,$s,$m,$t)";
+        var pp = cmd.Parameters.Add("$p", SqliteType.Text); var pr = cmd.Parameters.Add("$r", SqliteType.Text); var pn = cmd.Parameters.Add("$n", SqliteType.Text);
+        var pe = cmd.Parameters.Add("$e", SqliteType.Text); var ps = cmd.Parameters.Add("$s", SqliteType.Integer); var pm = cmd.Parameters.Add("$m", SqliteType.Integer);
+        cmd.Parameters.AddWithValue("$t", stamp);
+        pr.Value = rk;
+        cmd.Transaction = tx;
+        int batch = 0, files = 0;
+        var stack = new Stack<string>();
+        stack.Push(root);
+        while (stack.Count > 0)
+        {
+            ct.ThrowIfCancellationRequested();
+            var dir = stack.Pop();
+            IEnumerable<FileSystemInfo> items;
+            try { items = new DirectoryInfo(dir).EnumerateFileSystemInfos().ToList(); } catch { continue; }
+            foreach (var i in items)
+            {
+                if (i is DirectoryInfo d) { if (!Private.IsMatch(d.Name) && (d.Attributes & FileAttributes.ReparsePoint) == 0) stack.Push(d.FullName); continue; }
+                if (i is not FileInfo f || Skip(f.FullName)) continue;
+                pp.Value = f.FullName; pn.Value = f.Name; pe.Value = f.Extension.ToLowerInvariant();
+                try { ps.Value = f.Length; pm.Value = f.LastWriteTime.Ticks; } catch { ps.Value = 0L; pm.Value = 0L; }
+                cmd.ExecuteNonQuery();
+                files++;
+                if (++batch >= 3000) { tx.Commit(); tx.Dispose(); tx = c.BeginTransaction(); cmd.Transaction = tx; batch = 0; st.Files = files; }
+            }
+        }
+        tx.Commit(); tx.Dispose();
+        using (var del = c.CreateCommand())
+        {
+            del.CommandText = "DELETE FROM pnames WHERE root=$r AND seen<>$t";
+            del.Parameters.AddWithValue("$r", rk); del.Parameters.AddWithValue("$t", stamp);
+            del.ExecuteNonQuery();
+        }
+        st.Files = files; st.Read = CountRead(root); st.Last = DateTime.Now; st.Phase = "listed";
+    }
+
+    static void Upsert(string root, string path)
+    {
+        try
+        {
+            using var c = Db();
+            if (File.Exists(path))
+            {
+                if (Skip(path)) return;
+                var f = new FileInfo(path);
+                using var cmd = c.CreateCommand();
+                cmd.CommandText = "INSERT OR REPLACE INTO pnames(path,root,name,ext,size,mtime,seen) VALUES($p,$r,$n,$e,$s,$m,0)";
+                cmd.Parameters.AddWithValue("$p", f.FullName); cmd.Parameters.AddWithValue("$r", RootKey(root)); cmd.Parameters.AddWithValue("$n", f.Name);
+                cmd.Parameters.AddWithValue("$e", f.Extension.ToLowerInvariant()); cmd.Parameters.AddWithValue("$s", f.Length); cmd.Parameters.AddWithValue("$m", f.LastWriteTime.Ticks);
+                cmd.ExecuteNonQuery();
+            }
+            else if (!Directory.Exists(path))
+            {
+                using var cmd = c.CreateCommand();
+                cmd.CommandText = "DELETE FROM pnames WHERE path=$p OR substr(path,1,$n)=$d";
+                cmd.Parameters.AddWithValue("$p", path); cmd.Parameters.AddWithValue("$d", path.TrimEnd('\\') + "\\"); cmd.Parameters.AddWithValue("$n", path.TrimEnd('\\').Length + 1);
+                cmd.ExecuteNonQuery();
+            }
+        }
+        catch (Exception e) { Log.Warn("projects", "update " + Path.GetFileName(path) + ": " + e.Message); }
+    }
+
+    static long Count(string sql, string root)
+    {
+        try { using var c = Db(); using var cmd = c.CreateCommand(); cmd.CommandText = sql; cmd.Parameters.AddWithValue("$r", RootKey(root)); return Convert.ToInt64(cmd.ExecuteScalar()); }
+        catch { return 0; }
+    }
+
+    static int CountRead(string root) => (int)Count("SELECT COUNT(DISTINCT pread.path) FROM pread JOIN pnames ON pnames.path=pread.path WHERE pnames.root=$r", root);
+
+    /// <summary>True when the folder's file names are in the catalogue.</summary>
+    public static bool Listed(string root) => root.Length > 0 && Count("SELECT COUNT(*) FROM (SELECT 1 FROM pnames WHERE root=$r LIMIT 1)", root) > 0;
+
+    // ------------------------------------------------------------------ 📂 finding files by name
+
+    public class FileRow
+    {
+        public string Path = "", Name = "", Project = "", Rev = "", Status = "";
+        public long Size; public DateTime Modified; public double Score;
+    }
+
+    static string Stem(string w) => w.Length > 7 && Regex.IsMatch(w, @"^\p{L}+$") ? w[..7] : w;
+
+    static double KindScore(string ext) => ext switch
+    {
+        ".pdf" => 2, ".docx" or ".doc" or ".docm" or ".rtf" => 2, ".xlsx" or ".xls" or ".xlsm" or ".csv" => 1.5, ".pptx" or ".ppt" => 1, ".msg" or ".eml" or ".txt" => 1,
+        ".jpg" or ".jpeg" or ".png" or ".tif" or ".tiff" or ".bmp" => -1.5, ".zip" or ".rar" or ".7z" => -2, _ when CadExt.Contains(ext) => -6, _ => 0
+    };
+
+    static string ProjectOf(string path, List<Project> all)
+    {
+        foreach (var p in all) if (p.Folders.Any(f => path.StartsWith(f.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase))) return p.Code;
+        return General.Any(f => path.StartsWith(f.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase)) ? "General" : "";
+    }
+
+    /// <summary>
+    /// Files whose path holds the words: all of them (finder) or any of them (questions). Ranked by where the words are (file name first,
+    /// folder names next), the kind of file (PDF and Word first, CAD last), and revision (older revisions marked superseded).
+    /// </summary>
+    public static List<FileRow> FindFiles(string query, IEnumerable<string> folders, bool all, bool latestOnly, int max)
+    {
+        var words = Regex.Split((query ?? "").ToLowerInvariant(), @"[^\p{L}\p{N}\-\.]+").Select(w => w.Trim('.', '-')).Where(w => w.Length >= 2).Distinct().Take(10).ToList();
+        var roots = folders.Where(f => f.Length > 0).Select(RootKey).Distinct().ToList();
+        var res = new List<FileRow>();
+        if (words.Count == 0 || roots.Count == 0) return res;
+        var stems = words.Select(Stem).ToList();
+        var rows = new List<(string Path, string Name, long Size, long M)>();
+        try
+        {
+            using var c = Db();
+            using var cmd = c.CreateCommand();
+            var rIn = string.Join(",", roots.Select((_, i) => "$r" + i));
+            var cond = string.Join(all ? " AND " : " OR ", stems.Select((_, i) => "path LIKE $w" + i));
+            cmd.CommandText = $"SELECT path,name,size,mtime FROM pnames WHERE root IN ({rIn}) AND ({cond}) LIMIT 6000";
+            for (int i = 0; i < roots.Count; i++) cmd.Parameters.AddWithValue("$r" + i, roots[i]);
+            for (int i = 0; i < stems.Count; i++) cmd.Parameters.AddWithValue("$w" + i, "%" + stems[i] + "%");
+            using var r = cmd.ExecuteReader();
+            while (r.Read()) rows.Add((r.GetString(0), r.GetString(1), r.IsDBNull(2) ? 0 : r.GetInt64(2), r.IsDBNull(3) ? 0 : r.GetInt64(3)));
+        }
+        catch (Exception e) { Log.Warn("projects", "find: " + e.Message); }
+        var projects = All();
+        var recent = DateTime.Now.AddDays(-180).Ticks;
+        foreach (var x in rows)
+        {
+            var name = x.Name.ToLowerInvariant();
+            var dir = (System.IO.Path.GetDirectoryName(x.Path) ?? "").ToLowerInvariant();
+            double s = 0;
+            for (int i = 0; i < words.Count; i++)
+            {
+                if (name.Contains(words[i])) s += 3 + Math.Min(words[i].Length, 12) / 6.0;
+                else if (name.Contains(stems[i])) s += 2.5;
+                else if (dir.Contains(stems[i])) s += 1;
+            }
+            var ext = System.IO.Path.GetExtension(x.Path).ToLowerInvariant();
+            s += KindScore(ext) + (x.M > recent ? 0.5 : 0);
+            res.Add(new FileRow { Path = x.Path, Name = x.Name, Size = x.Size, Modified = x.M > 0 ? new DateTime(x.M) : DateTime.MinValue, Score = s, Project = ProjectOf(x.Path, projects) });
+        }
+        // Revisions: within one document (same number, same kind of file), only the latest is current.
+        foreach (var g in res.GroupBy(f => (Revisions.Parse(f.Path, 0).Key, System.IO.Path.GetExtension(f.Path).ToLowerInvariant())))
+        {
+            var docs = g.Select(f => (f, d: Revisions.Parse(f.Path, f.Modified.Ticks))).ToList();
+            foreach (var (f, d) in docs) f.Rev = d.Rev;
+            if (docs.Count < 2) { if (docs[0].d.Rank.Item1 < 0) docs[0].f.Status = "in an old / superseded folder"; continue; }
+            var best = docs.OrderByDescending(x => x.d.Rank.Item1).ThenByDescending(x => x.d.Rank.Item2, StringComparer.Ordinal).ThenByDescending(x => x.d.MTime).First();
+            foreach (var (f, d) in docs) { if (f == best.f) f.Status = "latest"; else { f.Status = "superseded"; f.Score -= 4; } }
+        }
+        return res.Where(f => !latestOnly || f.Status != "superseded").OrderByDescending(f => f.Score).ThenByDescending(f => f.Modified).Take(max).ToList();
+    }
+
+    // ------------------------------------------------------------------ 📐 a drawing / document number → its files
 
     public class DocHit { public string Path = "", Rev = "", Status = ""; public int Rank; public bool Cad; }
 
@@ -233,21 +425,19 @@ static class Projects
         var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         try
         {
-            using var c = FolderIndex.Open();
-            foreach (var root in roots)
-            {
-                var pre = FolderIndex.NormalRoot(root).TrimEnd('\\') + "\\";
-                using var cmd = c.CreateCommand();
-                cmd.CommandText = "SELECT path FROM files WHERE lower(substr(path,1,$n))=lower($p) AND path LIKE $q LIMIT 60";
-                cmd.Parameters.AddWithValue("$n", pre.Length); cmd.Parameters.AddWithValue("$p", pre); cmd.Parameters.AddWithValue("$q", "%" + num + "%");
-                using var r = cmd.ExecuteReader();
-                while (r.Read()) { var p = r.GetString(0); if (System.IO.Path.GetFileName(p).Contains(num, StringComparison.OrdinalIgnoreCase)) paths.Add(p); }
-            }
+            using var c = Db();
+            using var cmd = c.CreateCommand();
+            var rIn = string.Join(",", roots.Select((_, i) => "$r" + i));
+            cmd.CommandText = $"SELECT path FROM pnames WHERE root IN ({rIn}) AND name LIKE $q LIMIT 80";
+            for (int i = 0; i < roots.Count; i++) cmd.Parameters.AddWithValue("$r" + i, RootKey(roots[i]));
+            cmd.Parameters.AddWithValue("$q", "%" + num + "%");
+            using var r = cmd.ExecuteReader();
+            while (r.Read()) paths.Add(r.GetString(0));
         }
         catch { }
-        // Not indexed yet: look on the disk by name (a few seconds on a big folder).
+        // A folder not listed yet: look on the disk by name.
         if (paths.Count == 0)
-            foreach (var root in roots.Where(Directory.Exists))
+            foreach (var root in roots.Where(f => Directory.Exists(f) && !Listed(f)))
                 try
                 {
                     foreach (var f in Directory.EnumerateFiles(root, "*" + num + "*", new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true }).Take(40))
@@ -257,10 +447,9 @@ static class Projects
         foreach (var p in paths)
         {
             var x = System.IO.Path.GetExtension(p).ToLowerInvariant();
-            var d = Revisions.Parse(p, File.Exists(p) ? File.GetLastWriteTime(p).Ticks : 0);
+            var d = Revisions.Parse(p, 0);
             res.Add(new DocHit { Path = p, Rev = d.Rev, Cad = CadExt.Contains(x), Rank = x == ".pdf" ? 0 : x is ".docx" or ".doc" ? 1 : OfficeExt.Contains(x) ? 2 : CadExt.Contains(x) ? 9 : 5 });
         }
-        // Latest revision of the best kind first; the others are marked superseded.
         var ordered = res.OrderBy(h => h.Rank).ThenByDescending(h => Revisions.Parse(h.Path, 0).Rank.Item1).ThenByDescending(h => Revisions.Parse(h.Path, 0).Rank.Item2, StringComparer.Ordinal)
                          .ThenByDescending(h => File.Exists(h.Path) ? File.GetLastWriteTime(h.Path) : DateTime.MinValue).ToList();
         var first = ordered.FirstOrDefault(h => !h.Cad);
@@ -270,9 +459,83 @@ static class Projects
 
     public static readonly Regex DocNumber = new(@"\b[A-Z][A-Z0-9]{1,6}(?:-[A-Z0-9]{1,8}){3,10}\b");
 
-    // ------------------------------------------------------------------ background indexing, like the email
+    // ------------------------------------------------------------------ 📖 reading inside a file only when it is needed (remembered after)
 
-    public class State { public string Folder = "", Phase = "waiting"; public int Done, Total; public DateTime Last; }
+    /// <summary>The text of a file: from memory when it was read before and hasn't changed, otherwise read now (OCR included) and remembered.</summary>
+    public static (List<Seg> Segs, bool Remembered) Read(string path, CancellationToken ct)
+    {
+        long m = 0;
+        try { m = File.GetLastWriteTime(path).Ticks; } catch { }
+        try
+        {
+            using var c = Db();
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "SELECT loc,go,text,mtime FROM pread WHERE path=$p ORDER BY n";
+            cmd.Parameters.AddWithValue("$p", path);
+            var segs = new List<Seg>(); long had = -1;
+            using (var r = cmd.ExecuteReader()) while (r.Read()) { had = r.GetInt64(3); segs.Add(new Seg(r.GetString(0), r.GetString(2), r.GetString(1))); }
+            if (had == m && segs.Count > 0) return (segs, true);
+        }
+        catch { }
+        List<Seg> got = null; Exception err = null;
+        var t = new Thread(() => { try { got = FileText.Extract(path); } catch (Exception e) { err = e; } }) { IsBackground = true, Name = "Nova read" };
+        t.SetApartmentState(ApartmentState.STA);
+        t.Start();
+        while (!t.Join(200)) ct.ThrowIfCancellationRequested();
+        if (err != null) throw err;
+        got = (got ?? new()).Where(s => s.Text.Trim().Length > 0).Take(600).ToList();
+        if (got.Count == 0) got.Add(new Seg("file", "(no readable text)"));
+        try
+        {
+            using var c = Db();
+            using var tx = c.BeginTransaction();
+            using (var del = c.CreateCommand()) { del.Transaction = tx; del.CommandText = "DELETE FROM pread WHERE path=$p"; del.Parameters.AddWithValue("$p", path); del.ExecuteNonQuery(); }
+            using var ins = c.CreateCommand();
+            ins.Transaction = tx;
+            ins.CommandText = "INSERT INTO pread(path,mtime,n,loc,go,text) VALUES($p,$m,$n,$l,$g,$t)";
+            var pn = ins.Parameters.Add("$n", SqliteType.Integer); var pl = ins.Parameters.Add("$l", SqliteType.Text); var pg = ins.Parameters.Add("$g", SqliteType.Text); var pt = ins.Parameters.Add("$t", SqliteType.Text);
+            ins.Parameters.AddWithValue("$p", path); ins.Parameters.AddWithValue("$m", m);
+            for (int i = 0; i < got.Count; i++) { pn.Value = i; pl.Value = got[i].Loc ?? ""; pg.Value = got[i].Goto ?? ""; pt.Value = got[i].Text; ins.ExecuteNonQuery(); }
+            tx.Commit();
+        }
+        catch (Exception e) { Log.Warn("projects", "remember " + Path.GetFileName(path) + ": " + e.Message); }
+        foreach (var st in Status.Values.Where(s => path.StartsWith(s.Folder.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase))) st.Read++;
+        return (got, false);
+    }
+
+    public class Passage { public string Path = "", Loc = "", Goto = "", Text = "", Status = ""; public double Score; }
+
+    /// <summary>
+    /// A question about the project's documents: the likely files are found by NAME in a second, only those are opened
+    /// (from memory when read before), and their best passages are returned.
+    /// </summary>
+    public static List<Passage> Ask(IEnumerable<string> folders, List<string> words, int maxFiles, int maxPassages, Action<string> status, CancellationToken ct)
+    {
+        var w = words.Where(x => x.Length >= 3 && !Regex.IsMatch(x, "^(the|and|for|with|this|that|from|please|email|what|which|about|check|find|send|give|nova)$")).Distinct().Take(10).ToList();
+        var files = FindFiles(string.Join(" ", w), folders, false, true, maxFiles * 3).Where(f => f.Score >= 3 && !CadExt.Contains(System.IO.Path.GetExtension(f.Path).ToLowerInvariant())).Take(maxFiles).ToList();
+        var res = new List<Passage>();
+        var stems = w.Select(Stem).ToList();
+        int i = 0, mem = 0;
+        foreach (var f in files)
+        {
+            ct.ThrowIfCancellationRequested();
+            i++;
+            status?.Invoke($"📂 {files.Count} likely file(s) found by name · reading {i} of {files.Count}: {f.Name}");
+            List<Seg> segs;
+            try { var (s, r) = Read(f.Path, ct); segs = s; if (r) mem++; }
+            catch (OperationCanceledException) { throw; }
+            catch { continue; }
+            var scored = segs.Select(s => (s, sc: stems.Count(x => s.Text.Contains(x, StringComparison.OrdinalIgnoreCase)) + (s.Text.Length > 60 ? 0.1 : 0))).Where(x => x.sc >= 1).OrderByDescending(x => x.sc).Take(3).ToList();
+            if (scored.Count == 0) scored = segs.Take(1).Select(s => (s, sc: 0.5)).ToList();   // the name matched: its first page still helps
+            foreach (var (s, sc) in scored) res.Add(new Passage { Path = f.Path, Loc = s.Loc, Goto = s.Goto, Text = s.Text, Status = f.Status, Score = sc + f.Score / 4 });
+        }
+        status?.Invoke($"📂 {files.Count} file(s) used · {mem} from memory, {files.Count - mem} read now");
+        return res.OrderByDescending(p => p.Score).Take(maxPassages).ToList();
+    }
+
+    // ------------------------------------------------------------------ keeping the catalogue up to date
+
+    public class State { public string Folder = "", Phase = "waiting"; public int Files, Read; public DateTime Last; }
 
     public static readonly ConcurrentDictionary<string, State> Status = new(StringComparer.OrdinalIgnoreCase);
 
@@ -280,7 +543,8 @@ static class Projects
     {
         static Thread thread;
         static readonly AutoResetEvent wake = new(false);
-        static readonly ConcurrentDictionary<string, DateTime> dirty = new(StringComparer.OrdinalIgnoreCase);
+        static readonly ConcurrentQueue<(string Root, string Path)> changes = new();
+        static readonly ConcurrentDictionary<string, bool> relist = new(StringComparer.OrdinalIgnoreCase);
         static readonly List<FileSystemWatcher> watchers = new();
         public static bool On { get => Store.Bool("win_proj_index", true); set { Store.SetBool("win_proj_index", value); Wake(); } }
 
@@ -288,11 +552,13 @@ static class Projects
         {
             if (thread != null) return;
             thread = new Thread(Loop) { IsBackground = true, Name = "Nova projects", Priority = ThreadPriority.BelowNormal };
-            thread.SetApartmentState(ApartmentState.STA);
             thread.Start();
         }
 
         public static void Wake() => wake.Set();
+
+        /// <summary>⟳ List again now (all projects).</summary>
+        public static void Refresh() { foreach (var f in AllFolders()) relist[f] = true; Wake(); }
 
         static IEnumerable<string> AllFolders() => All().SelectMany(p => p.Folders).Concat(General).Distinct(StringComparer.OrdinalIgnoreCase);
 
@@ -305,10 +571,13 @@ static class Projects
                 foreach (var f in AllFolders().Where(Directory.Exists))
                     try
                     {
-                        var w = new FileSystemWatcher(f) { IncludeSubdirectories = true, NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size, InternalBufferSize = 64 * 1024 };
+                        var w = new FileSystemWatcher(f) { IncludeSubdirectories = true, NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.Size, InternalBufferSize = 64 * 1024 };
                         var ff = f;
-                        FileSystemEventHandler h = (_, e) => { if (!Private.IsMatch(e.FullPath)) dirty[ff] = DateTime.Now; };
-                        w.Created += h; w.Changed += h; w.Renamed += (_, e) => dirty[ff] = DateTime.Now; w.Deleted += h;
+                        w.Created += (_, e) => Changed(ff, e.FullPath);
+                        w.Changed += (_, e) => Changed(ff, e.FullPath);
+                        w.Deleted += (_, e) => Changed(ff, e.FullPath);
+                        w.Renamed += (_, e) => { Changed(ff, e.OldFullPath); Changed(ff, e.FullPath); };
+                        w.Error += (_, _) => { relist[ff] = true; Wake(); };   // too many changes at once: list the folder again
                         w.EnableRaisingEvents = true;
                         watchers.Add(w);
                     }
@@ -316,45 +585,40 @@ static class Projects
             }
         }
 
-        /// <summary>Gentle: at full speed after working hours, when the PC is idle, or with ⚡ Index now.</summary>
-        static bool MayRun() => On && (IndexProgress.Rushing || !Gentle.On || !Gentle.WorkingNow || Gentle.Idle > TimeSpan.FromMinutes(3));
+        static void Changed(string root, string path)
+        {
+            if (Private.IsMatch(path)) return;
+            if (Directory.Exists(path)) { relist[root] = true; return; }   // a folder added or renamed: list again
+            changes.Enqueue((root, path));
+        }
 
         static void Loop()
         {
-            Thread.Sleep(TimeSpan.FromSeconds(90));   // let Outlook and the email index start first
-            var lastFull = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+            Thread.Sleep(TimeSpan.FromSeconds(20));
             string watched = "";
             while (true)
             {
                 try
                 {
-                    var folders = AllFolders().ToList();
+                    var folders = On ? AllFolders().ToList() : new List<string>();
                     var key = string.Join("|", folders);
                     if (key != watched) { Watch(); watched = key; }
+                    // Single files added, changed, renamed or deleted: updated in a second.
+                    var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    while (changes.TryDequeue(out var ch)) if (seen.Add(ch.Path)) Upsert(ch.Root, ch.Path);
                     foreach (var f in folders)
                     {
                         var st = Status.GetOrAdd(f, x => new State { Folder = x });
-                        var due = !lastFull.TryGetValue(f, out var lf) || DateTime.Now - lf > TimeSpan.FromHours(20) || (dirty.TryGetValue(f, out var dt) && dt > lf && DateTime.Now - dt > TimeSpan.FromMinutes(2));
+                        var due = st.Last == DateTime.MinValue || DateTime.Now - st.Last > TimeSpan.FromHours(20) || relist.TryRemove(f, out _);
                         if (!due) continue;
-                        if (!MayRun()) { st.Phase = "waiting (gentle — after working hours or when the PC is idle)"; continue; }
-                        if (!Directory.Exists(f) && !GDrive.IsRoot(f)) { st.Phase = "⚠ not reachable"; continue; }
-                        var pg = new FolderIndex.Progress();
-                        using var cts = new CancellationTokenSource();
-                        st.Phase = "reading";
-                        var t = new Thread(() => { try { FolderIndex.Search(f, null, null, _ => { }, null, pg, cts.Token); } catch { } }) { IsBackground = true };
-                        t.SetApartmentState(ApartmentState.STA);
-                        t.Start();
-                        while (!t.Join(2000))
-                        {
-                            st.Done = pg.Done; st.Total = pg.Total;
-                            if (!MayRun()) { cts.Cancel(); st.Phase = "paused (you are working)"; }
-                        }
-                        st.Done = pg.Done; st.Total = pg.Total;
-                        if (!cts.IsCancellationRequested) { lastFull[f] = DateTime.Now; dirty.TryRemove(f, out _); st.Phase = "up to date"; st.Last = DateTime.Now; }
+                        if (!Directory.Exists(f)) { st.Phase = "⚠ not reachable"; continue; }
+                        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(30));
+                        try { ListFolder(f, st, cts.Token); }
+                        catch (Exception e) { st.Phase = "⚠ " + e.Message; Log.Warn("projects", "list " + f + ": " + e.Message); }
                     }
                 }
                 catch (Exception e) { Log.Warn("projects", e.Message); }
-                wake.WaitOne(TimeSpan.FromMinutes(3));
+                wake.WaitOne(TimeSpan.FromSeconds(changes.IsEmpty ? 60 : 3));
             }
         }
 
@@ -364,12 +628,12 @@ static class Projects
             foreach (var p in All())
             {
                 var sts = p.Folders.Select(f => Status.TryGetValue(f, out var s) ? s : null).Where(s => s != null).ToList();
-                if (sts.Count == 0) { parts.Add($"{p.Code} waiting"); continue; }
-                if (sts.All(s => s.Phase == "up to date")) parts.Add($"{p.Code} ✓");
-                else if (sts.Any(s => s.Phase == "reading")) { var s = sts.First(x => x.Phase == "reading"); parts.Add($"{p.Code} {(s.Total > 0 ? 100 * s.Done / s.Total : 0)}%"); }
-                else parts.Add($"{p.Code} waiting");
+                if (sts.Count == 0) parts.Add($"{p.Code} waiting");
+                else if (sts.Any(s => s.Phase == "listing")) parts.Add($"{p.Code} listing {sts.Sum(s => s.Files):N0}…");
+                else if (sts.All(s => s.Phase == "listed")) parts.Add($"{p.Code} ✓ {sts.Sum(s => s.Files):N0} files · {sts.Sum(s => s.Read)} read");
+                else parts.Add($"{p.Code} {sts[0].Phase}");
             }
-            return parts.Count == 0 ? "" : "📁 Projects: " + string.Join(" · ", parts);
+            return parts.Count == 0 ? "" : "📁 " + string.Join("   ·   ", parts);
         }
     }
 }

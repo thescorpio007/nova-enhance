@@ -87,6 +87,7 @@ class NovaContext : ApplicationContext
         m.Items.Add("🔍  Ask Nova about my email   Ctrl+Shift+F", null, (_, _) => Screens.Ask());
         m.Items.Add("💬  Nova Chat & AI Hub        Ctrl+Shift+A", null, (_, _) => Screens.Hub(null));
         m.Items.Add("📌  My Work", null, (_, _) => Screens.Work(null));
+        m.Items.Add("📂  Find a project file…", null, (_, _) => Screens.FindFile(null));
         m.Items.Add("🕘  Chat history", null, (_, _) => Screens.ChatHistory());
         m.Items.Add("📄  Nova for this PDF                Ctrl+Shift+D", null, (_, _) => PdfCompanion.Open());
         m.Items.Add($"✦  Ask Nova about the open email   Ctrl+Alt+{Store.Str("win_hk_mailask", "Q")}", null, (_, _) => Screens.MailAsk(null));
@@ -305,6 +306,15 @@ static class Screens
     }
 
     static ChatHistoryForm history;
+    static FileFinderForm finder;
+
+    /// <summary>📂 Find a project file by name (optionally with a search already typed).</summary>
+    public static void FindFile(string q)
+    {
+        if (finder == null || finder.IsDisposed) finder = new FileFinderForm();
+        Show(finder);
+        if (!string.IsNullOrEmpty(q)) finder.Search(q);
+    }
 
     /// <summary>🕘 Chat history: every conversation, newest first, with search.</summary>
     public static void ChatHistory()

@@ -101,6 +101,15 @@ static class Outlook
         item.Display(false);
     }
 
+    /// <summary>✉ A new email with these files attached, shown in Outlook.</summary>
+    public static void NewWithAttachments(List<string> paths)
+    {
+        dynamic app = Running() ?? Activator.CreateInstance(Type.GetTypeFromProgID("Outlook.Application"));
+        dynamic m = app.CreateItem(0);
+        foreach (var p in paths) m.Attachments.Add(p);
+        m.Display(false);
+    }
+
     /// <summary>The text you highlighted in the open email (reading or reply window), or "".</summary>
     public static string SelectedText()
     {
