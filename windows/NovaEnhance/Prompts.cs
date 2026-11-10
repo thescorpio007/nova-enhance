@@ -237,6 +237,7 @@ static class Prompts
 
     public static async Task<(List<MailHit> Kept, List<(string Why, MailHit Hit)> Hidden, int Read, string Note)> AiFilter(IWin32Window owner, List<MailHit> hits, string criterion, CancellationToken ct)
     {
+        using var privateWork = Ai.Private();   // your emails / documents: the routing rule may keep them on the local AI
         var kept = new List<MailHit>(); var hidden = new List<(string, MailHit)>();
         if (string.IsNullOrWhiteSpace(criterion) || hits.Count == 0) return (hits, hidden, 0, "");
         if (Ai.Active() == null) return (hits, hidden, 0, "AI check skipped — no AI key");
@@ -245,7 +246,7 @@ static class Prompts
         if (todo.Count > 0 && owner != null && todo.Count > AskOver)
         {
             var sample = string.Join("\n", todo.Take(8).Select(h => $"• {h.FromName} — {h.Subject}"));
-            var c = ConfirmSend.Ask(owner, $"✦ Send {todo.Count} emails to {Ai.Active().Label} for the AI check?",
+            var c = ConfirmSend.Ask(owner, $"✦ Send {todo.Count} emails to {Ai.LabelOf(Ai.Current())} for the AI check?",
                 $"To check “{criterion}”, Nova sends {(AiSends == "whole" ? "the text" : "the subject and first lines")} of {todo.Count} emails (no attachments). Settings → ✦ Prompts changes this.",
                 sample + (todo.Count > 8 ? $"\n… and {todo.Count - 8} more" : ""), "Send and check", false);
             if (c != ConfirmSend.Choice.Send) return (hits, hidden, 0, "AI check not sent — rules on this PC only");

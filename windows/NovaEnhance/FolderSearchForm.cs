@@ -871,6 +871,7 @@ class FolderSearchForm : NovaForm
     }
 
     FlowLayoutPanel instrRow;
+    Conversation folderConv;
     TextBox fInstr;
     List<string> lastTerms = new();
     string searchedNote = "";
@@ -993,7 +994,7 @@ class FolderSearchForm : NovaForm
     {
         var chars = passages.Sum(x => x.Text.Length);
         var byFile = passages.GroupBy(x => Path.GetFileName(x.Path)).Select(g => $"{g.Key} ({g.Count()})");
-        var choice = ConfirmSend.Ask(this, $"✦ Send {passages.Count} extracts to {Ai.Active().Label}?",
+        var choice = ConfirmSend.Ask(this, $"✦ Send {passages.Count} extracts to {Ai.LabelOf(Ai.Current())}?",
             $"To answer, Nova sends {passages.Count} short passages (about {chars:N0} characters) from {nFiles} file{(nFiles == 1 ? "" : "s")} of this folder. Nothing else leaves the PC.\n" + string.Join(" · ", byFile.Take(6)) + (nFiles > 6 ? $" · +{nFiles - 6} files" : ""),
             FolderAsk.Extracts(passages), "Send and answer", true);
         if (choice == ConfirmSend.Choice.Send) return true;
@@ -1056,8 +1057,14 @@ class FolderSearchForm : NovaForm
         {
             var ins = fInstr.Text.Trim();
             var qq = lastQuestion + (ins.Length > 0 ? "\n\nInstructions from the user (follow them for what to include or exclude, the format, the length and the language): " + ins : "");
+            var fresh = history.Length == 0 && !detailed;
             var a = await FolderAsk.Answer(qq, passages, detailed, detailed ? "" : history, ct);
             lastAnswer = a;
+            // 🕘 Saved in Chat history (with its sources).
+            if (fresh) folderConv = null;
+            var cited = FolderAsk.CitedOrder(a, passages.Count).Take(14).ToList();
+            Conversations.Add(ref folderConv, "folder", lastQuestion, lastRoot, qq, FolderAsk.WithSources(a, passages),
+                cited.Select((pi, k) => new ConvSrc { Id = "D" + (k + 1), Title = FolderAsk.Label(passages[pi]), Path = passages[pi].Path, Goto = passages[pi].Goto ?? "", Loc = passages[pi].Loc ?? "" }));
             var head = detailed ? "✦ DETAILED ANSWER\n" : "✦ ANSWER\n";
             if (remembered != null && !detailed) head = $"✦ ANSWER (checked again now — 🧠 Nova also remembered an answer from {remembered.Saved:dd MMM yyyy})\n";
             ShowAnswer(head + FolderAsk.WithSources(a, passages));

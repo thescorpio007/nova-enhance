@@ -79,7 +79,7 @@ class NovaChat
             switch (m["t"]?.ToString())
             {
                 case "init":
-                    Post(new JsonObject { ["t"] = "init", ["ai"] = Ai.Active()?.Label ?? "", ["sign"] = Program.Sign, ["chats"] = List(), ["text"] = PendingText });
+                    Post(new JsonObject { ["t"] = "init", ["ai"] = Ai.LabelOf(Ai.Current()) ?? "", ["sign"] = Program.Sign, ["chats"] = List(), ["text"] = PendingText });
                     PendingText = null;
                     break;
                 case "open":
@@ -191,7 +191,7 @@ class NovaChat
         if (text.Length == 0) return;
         var ctx = m["ctx"] as JsonObject ?? new JsonObject();
         bool detailed = m["detailed"]?.GetValue<bool>() == true, again = m["again"]?.GetValue<bool>() == true;
-        var prov = Ai.Active() ?? throw new AiException("Add an AI key in Nova Enhance → Settings → AI & API keys");
+        var prov = Ai.Current() ?? throw new AiException("Add an AI key in Nova Enhance → Settings → AI & API keys");
 
         var chat = Load(m["id"]?.ToString());
         if (chat == null)

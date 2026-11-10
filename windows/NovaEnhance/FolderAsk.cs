@@ -97,6 +97,7 @@ static class FolderAsk
     /// <summary>The extracts go to the AI here — only after the user agreed (or chose "send without asking").</summary>
     public static async Task<string> Answer(string question, List<FolderIndex.Passage> ps, bool detailed, string history, CancellationToken ct)
     {
+        using var privateWork = Ai.Private();   // your emails / documents: the routing rule may keep them on the local AI
         var sys = (detailed ? DetailRules : ShortRules) + Checks + AdviceRule + Modes.ProfileNote();
         var user = (string.IsNullOrWhiteSpace(history) ? "" : "Earlier in this conversation:\n" + history + "\n\n") +
                    "Extracts:\n" + Extracts(ps) + "Question: " + question;
@@ -145,6 +146,7 @@ static class FolderAsk
 class ConfirmSend : NovaForm
 {
     public enum Choice { Send, PassagesOnly, Cancel }
+    public static bool LocalHandlesPrivate => Ai.LocalNoAsk && Ai.HasKey("local") && (Ai.Route is "private" or "local-first" || Ai.Active()?.Id == "local");
     public Choice Result = Choice.Cancel;
 
     public ConfirmSend(string title, string text, string details, string sendLabel, bool offerPassages)
@@ -171,6 +173,8 @@ class ConfirmSend : NovaForm
 
     public static Choice Ask(IWin32Window owner, string title, string text, string details, string sendLabel, bool offerPassages)
     {
+        // 💻 Your emails and documents go to the local AI on this PC: nothing leaves it, so no need to ask.
+        if (LocalHandlesPrivate) return Choice.Send;
         using var f = new ConfirmSend(title, text, details, sendLabel, offerPassages);
         f.ShowDialog(owner);
         return f.Result;

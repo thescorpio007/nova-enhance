@@ -572,7 +572,7 @@ static class Server
         switch (p)
         {
             case "/api/ping":
-                return new JsonObject { ["ok"] = true, ["build"] = Program.Build, ["ai"] = Ai.Active()?.Label ?? "", ["lang"] = Store.TrLang, ["langLabel"] = Modes.LangLabel(), ["sign"] = Program.Sign, ["cellReview"] = Store.Bool("win_xl_review", true) };
+                return new JsonObject { ["ok"] = true, ["build"] = Program.Build, ["ai"] = Ai.LabelOf(Ai.Current()) ?? "", ["lang"] = Store.TrLang, ["langLabel"] = Modes.LangLabel(), ["sign"] = Program.Sign, ["cellReview"] = Store.Bool("win_xl_review", true) };
             case "/api/langs":
             {
                 var a = new JsonArray();
@@ -585,7 +585,7 @@ static class Server
                 if (text.Trim().Length == 0) return new JsonObject { ["error"] = "Select some text first" };
                 var mode = S(r, "mode"); if (mode.Length == 0) mode = "grammar";
                 if (S(r, "lang").Length > 0) Store.TrLang = S(r, "lang");
-                var prov = Ai.Active() ?? throw new AiException("Add an AI key in Nova Enhance → Settings → AI & API keys");
+                var prov = Ai.Current() ?? throw new AiException("Add an AI key in Nova Enhance → Settings → AI & API keys");
                 using var _ = Log.Doing($"Office panel · {Modes.Label(mode)} ({S(r, "host")})");
                 var outText = await Ai.Enhance(prov, mode, text, CancellationToken.None);
                 History.SaveOriginal(mode, text, outText);
@@ -597,7 +597,7 @@ static class Server
                 // Excel: a batch of cells (the panel sends up to ~25 at a time and shows the progress).
                 var mode = S(r, "mode"); if (mode.Length == 0) mode = "grammar";
                 if (S(r, "lang").Length > 0) Store.TrLang = S(r, "lang");
-                var prov = Ai.Active() ?? throw new AiException("Add an AI key in Nova Enhance → Settings → AI & API keys");
+                var prov = Ai.Current() ?? throw new AiException("Add an AI key in Nova Enhance → Settings → AI & API keys");
                 var list = new List<(string, string)>();
                 foreach (var it in r["items"] as JsonArray ?? new JsonArray())
                     if (it is JsonObject jo && S(jo, "id").Length > 0 && S(jo, "text").Trim().Length > 0) list.Add((S(jo, "id"), S(jo, "text")));
@@ -626,7 +626,7 @@ static class Server
                 // Browser add-on: summarise the page, or answer a question from it (the page text goes to the AI only when the user clicks).
                 var text = S(r, "text"); if (text.Length > 40000) text = text[..40000];
                 if (text.Trim().Length < 20) return new JsonObject { ["error"] = "This page has no readable text" };
-                var prov = Ai.Active() ?? throw new AiException("Add an AI key in Nova Enhance → Settings → AI & API keys");
+                var prov = Ai.Current() ?? throw new AiException("Add an AI key in Nova Enhance → Settings → AI & API keys");
                 bool detailed = r["detailed"]?.GetValue<bool>() == true;
                 using var _ = Log.Doing("Browser add-on · " + (S(r, "mode") == "ask" ? "ask about page" : "summarise page"));
                 string sys, user;
@@ -658,6 +658,7 @@ static class Server
             case "/api/summarize":
             {
                 using var _ = Log.Doing("Office panel · summarise email");
+                using var privateWork = Ai.Private();
                 var body = S(r, "text"); if (body.Length > 12000) body = body[..12000];
                 var a = await Ai.Chat("Summarise this email for a busy professional in 3–6 short bullet points: what is asked, decisions, dates and deadlines, attachments mentioned. Reply in English unless the email is in Arabic or French." + Modes.ProfileNote(),
                     $"From: {S(r, "from")}\nSubject: {S(r, "subject")}\n\n{body}", true);
@@ -667,6 +668,7 @@ static class Server
             case "/api/draft":
             {
                 using var _ = Log.Doing("Office panel · draft reply");
+                using var privateWork = Ai.Private();
                 var body = S(r, "text"); if (body.Length > 8000) body = body[..8000];
                 var sys = "You write email replies for the user. Write ONLY the reply body: no subject line, no notes. Use the language of the email. " +
                           "Clear, professional and concise, in the user's field terminology. Answer every question asked. If a fact is missing, put a short placeholder in [square brackets]. " +

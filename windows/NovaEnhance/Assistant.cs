@@ -199,6 +199,7 @@ Rules:
     /// <summary>Privacy C/D: the full email goes to the AI for a summary.</summary>
     public static async Task<string> Summarize(MailHit h, CancellationToken ct)
     {
+        using var privateWork = Ai.Private();   // your emails / documents: the routing rule may keep them on the local AI
         if (!Store.AiSeesFull) return "A summary needs Settings → Email & AI → C or D (the full email is sent to the AI only when you ask).";
         var body = h.Body.Length > 12000 ? h.Body[..12000] : h.Body;
         return await Ai.Chat(
@@ -209,6 +210,7 @@ Rules:
     /// <summary>Privacy C/D: writes a reply draft; Outlook opens it for the user to check and send.</summary>
     public static async Task<string> Draft(MailHit h, string instruction, CancellationToken ct)
     {
+        using var privateWork = Ai.Private();   // your emails / documents: the routing rule may keep them on the local AI
         if (!Store.AiSeesFull) throw new AiException("Draft reply needs Settings → Email & AI → C or D (the full email is sent to the AI only when you ask).");
         var body = h.NewPart.Length > 8000 ? h.NewPart[..8000] : h.NewPart;
         var sys = "You write email replies for the user. Write ONLY the reply body: no subject line, no notes. Use the language of the email. " +

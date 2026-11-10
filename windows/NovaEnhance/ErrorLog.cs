@@ -147,7 +147,7 @@ static class Log
         sb.AppendLine($".NET {System.Environment.Version} · {System.Globalization.CultureInfo.CurrentCulture.Name} · screen scale {(int)(Screen.PrimaryScreen?.Bounds.Width ?? 0)}px");
         sb.AppendLine("Office: " + OfficeVersion());
         sb.AppendLine("Classic Outlook: " + (Outlook.Installed ? "installed" : "not found") + " · OCR languages: " + Ocr.Languages);
-        sb.AppendLine("Google Drive: " + (GDrive.SignedIn ? "connected" : "not connected") + " · AI: " + (Ai.Active()?.Label ?? "no key") + " · Office add-in: " + OfficeAddin.StatusShort());
+        sb.AppendLine("Google Drive: " + (GDrive.SignedIn ? "connected" : "not connected") + " · AI: " + (Ai.LabelOf(Ai.Current()) ?? "no key") + " · Office add-in: " + OfficeAddin.StatusShort());
         return sb.ToString();
     }
 

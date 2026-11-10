@@ -42,7 +42,15 @@ static class Backup
         root["windows"] = Encrypt(win.ToJsonString(), password);
         var work = new JsonArray();
         try { foreach (var f in Directory.GetFiles(Work.Dir, "*.json")) work.Add(File.ReadAllText(f)); } catch { }
-        var extra = new JsonObject { ["secrets"] = winSecrets, ["originals"] = OriginalsText(), ["work"] = work, ["memory"] = Memory.Export() };
+        // 🕘 Conversations (the data files; the readable pages are made again from them).
+        var convs = new JsonObject();
+        try
+        {
+            foreach (var f in Directory.EnumerateFiles(Conversations.Dir, "*.json", SearchOption.AllDirectories))
+                convs[Path.GetRelativePath(Conversations.Dir, f)] = File.ReadAllText(f);
+        }
+        catch { }
+        var extra = new JsonObject { ["secrets"] = winSecrets, ["originals"] = OriginalsText(), ["work"] = work, ["memory"] = Memory.Export(), ["conversations"] = convs };
         root["windows_extra"] = Encrypt(extra.ToJsonString(), password);
         return root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
     }
@@ -155,7 +163,21 @@ static class Backup
                     }
                     catch { }
                 int nm = Memory.Import(x["memory"]?.ToString());
-                extraNote = $" · {ns} sign-in(s) restored (Google Drive) · {no} original(s) restored · {nw} task(s) restored (My Work) · {nm} item(s) restored (🧠 Nova Memory)";
+                int nc = 0;
+                if (x["conversations"] is JsonObject cv)
+                    foreach (var (rel, v) in cv)
+                        try
+                        {
+                            var file = Path.Combine(Conversations.Dir, rel);
+                            if (File.Exists(file) || v == null) continue;
+                            Directory.CreateDirectory(Path.GetDirectoryName(file));
+                            File.WriteAllText(file, v.ToString(), new UTF8Encoding(false));
+                            var c = Conversations.Load(file);
+                            if (c != null) { c.File = Path.ChangeExtension(file, null); Conversations.Save(c); }
+                            nc++;
+                        }
+                        catch { }
+                extraNote = $" · {ns} sign-in(s) restored (Google Drive) · {no} original(s) restored · {nw} task(s) restored (My Work) · {nm} item(s) restored (🧠 Nova Memory) · {nc} conversation(s) restored";
             }
             catch { extraNote = " · Google Drive sign-in and originals NOT restored (wrong password)"; }
         }

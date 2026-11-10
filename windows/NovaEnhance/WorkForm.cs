@@ -181,6 +181,16 @@ class WorkForm : NovaForm
                 var pv = Th.B("👁 Preview", () => OpenPreview(t, i));
                 pv.Font = Th.F(9); pv.Margin = new Padding(6, 0, 0, 0);
                 row.Controls.Add(pv, 2, 0);
+                // Right-click: the usual email menu.
+                var wi = i; var wt = t;
+                EmailMenu.Hook(row, null, pt =>
+                {
+                    var h = MailIndex.ByEntry(wi.Entry);
+                    if (h == null) { MessageBox.Show(this, "This email is not in the index any more (moved or deleted?).", "Nova Enhance"); return true; }
+                    if (string.IsNullOrEmpty(h.StoreId)) h.StoreId = wi.Store;
+                    EmailMenu.Show(h, this, pt, preview: _ => OpenPreview(wt, wi));
+                    return true;
+                });
             }
             var open = Th.B(i.Kind == "mail" ? "Open" : "Open file", () =>
             {

@@ -84,6 +84,17 @@ class MailList : FlowLayoutPanel
         if (Parent is ScrollableControl sc) try { sc.ScrollControlIntoView(cards[h]); } catch { }
     }
 
+    void OpenMenu(MailHit h, Point pt) => EmailMenu.Show(h, this, pt, OnSummary, OnDraft, OnHandled, Compact ? m => Select(m) : null);
+
+    /// <summary>Menu key / Shift+F10: the menu of the selected email.</summary>
+    public bool ShowMenu()
+    {
+        var h = Selected ?? Order.FirstOrDefault();
+        if (h == null || !cards.TryGetValue(h, out var c)) return false;
+        OpenMenu(h, c.PointToScreen(new Point(60, 34)));
+        return true;
+    }
+
     public void Unselect()
     {
         var old = Selected;
@@ -190,6 +201,8 @@ class MailList : FlowLayoutPanel
             void Hook(Control c) { c.Cursor = Cursors.Hand; c.Click += (_, _) => Select(h); foreach (Control k in c.Controls) Hook(k); }
             Hook(card);
         }
+        // Right-click: the usual options for this email.
+        EmailMenu.Hook(card, h, pt => { if (Compact) Select(h); OpenMenu(h, pt); return true; });
         return card;
     }
 
@@ -350,6 +363,8 @@ class ReadPane : Panel
         var text = (h.Body ?? "").Replace("\r\n", "\n").Trim();
         if (text.Length > 20000) text = text[..20000] + "\n…";
         textView.Add(Th.Wrap(text.Length > 0 ? text : "(no text)", 10.5f, Th.Text));
+        // Right-click on the header: the same menu as the email cards.
+        foreach (Control c in s.Controls) if (c is not Button) EmailMenu.Hook(c, h, pt => { EmailMenu.Show(h, this, pt, OnSummary, OnDraft, OnHandled, _ => { }); return true; });
         s.ResumeLayout();
         textView.AutoScrollPosition = new Point(0, 0);
         Switch();
@@ -643,6 +658,7 @@ class AskForm : NovaForm
         KeyDown += (_, e) =>
         {
             if (e.KeyCode == Keys.Escape) Hide();
+            else if ((e.KeyCode == Keys.Apps || (e.Shift && e.KeyCode == Keys.F10)) && !question.Focused && !follow.Focused && !instr.Focused) { list.ShowMenu(); e.Handled = true; }
             else if (wide && (e.KeyCode == Keys.Down || e.KeyCode == Keys.Up) && !question.Focused && !follow.Focused)
             { list.MoveBy(e.KeyCode == Keys.Down ? 1 : -1); e.Handled = true; }
         };
@@ -658,6 +674,28 @@ class AskForm : NovaForm
         Activated += (_, _) => { if (DateTime.Now - lastCheck > TimeSpan.FromSeconds(45)) Recheck(); };
         DrawChips();
     }
+
+    Conversation conv;
+
+    /// <summary>🕘 Saves the question and the list it found (each email is a source you can open later).</summary>
+    void SaveConv(bool followUp, string q, string explain)
+    {
+        if (!followUp) conv = null;
+        var main = hits.Where(h => h.MaybeAnswered.Length == 0).Take(40).ToList();
+        var sb = new System.Text.StringBuilder($"Understood as: {explain}\n{main.Count} email{(main.Count == 1 ? "" : "s")}:\n");
+        var src = new List<ConvSrc>();
+        for (int i = 0; i < main.Count; i++)
+        {
+            var h = main[i];
+            sb.Append($"• {h.Subject} — {(h.Sent ? "you" : h.FromName)} · {h.Date:dd MMM yyyy}{(h.Status is "needs" or "week" ? $" · waiting {h.DaysWaiting} days" : "")} [E{i + 1}]\n");
+            src.Add(new ConvSrc { Id = "E" + (i + 1), Title = h.Subject, Entry = h.Entry, Store = h.StoreId });
+        }
+        if (lastExport != null) sb.Append("\n⇩ " + lastExport);
+        Conversations.Add(ref conv, "ask", Prompts.Split(q).Main, "", q, sb.ToString(), src);
+    }
+
+    /// <summary>Runs a question from elsewhere (🔍 Find related emails).</summary>
+    public void AskNow(string q) { question.Text = q; Run(q, false); }
 
     void SetLevel(string l)
     {
@@ -766,6 +804,7 @@ class AskForm : NovaForm
                 bottom.Visible = true;
                 follow.Text = "";
                 History.Add("ask", Ai.Active()?.Id ?? "", "", "ask-mail", q + " ✎ " + instructions, $"{hits.Count} results · {ans.Explain}");
+                SaveConv(followUp, q + (instructions.Length > 0 ? "\n✎ " + instructions : ""), ans.Explain);
                 return;
             }
             plan = null;
@@ -783,6 +822,7 @@ class AskForm : NovaForm
             bottom.Visible = true;
             follow.Text = "";
             History.Add("ask", Ai.Active()?.Id ?? "", "", "ask-mail", q, $"{hits.Count} results · {ans.Explain}");
+            SaveConv(followUp, q, ans.Explain);
         }
         catch (Exception e)
         {
@@ -810,7 +850,7 @@ class AskForm : NovaForm
         int read = 0; var note = plan.Note;
         if (level != "A" && plan.AiCheck.Length > 0)
         {
-            info.Text = $"✦ {Ai.Active()?.Label ?? "Your AI"} is checking {Math.Min(kept.Count, Prompts.MaxAi)} emails: “{plan.AiCheck}”…";
+            info.Text = $"✦ {Ai.LabelOf(Ai.Current()) ?? "Your AI"} is checking {Math.Min(kept.Count, Prompts.MaxAi)} emails: “{plan.AiCheck}”…";
             try
             {
                 var r = await Prompts.AiFilter(this, kept, plan.AiCheck, ct);
@@ -823,7 +863,7 @@ class AskForm : NovaForm
         hits = kept.Concat(Prompts.Apply(maybe, plan).Kept).ToList();
         list.GroupKey = plan.Group.Length > 0 ? (Func<MailHit, string>)(h => Prompts.GroupKey(h, plan)) : null;
         ShowList();
-        var label = Ai.Active()?.Label ?? "AI";
+        var label = Ai.LabelOf(Ai.Current()) ?? "AI";
         resultLbl.Text = $"✓ {kept.Count} email{(kept.Count == 1 ? "" : "s")} · {main.Count} found → {afterRules} after your rules" +
                          (level != "A" && plan.AiCheck.Length > 0 ? $" → {kept.Count} after the AI check ({label} · {read} read)" : "") + (note.Length > 0 ? " · " + note : "");
         info.Text = "";
@@ -1155,6 +1195,7 @@ class BriefForm : NovaForm
         KeyDown += (_, e) =>
         {
             if (e.KeyCode == Keys.Escape) Hide();
+            else if (e.KeyCode == Keys.Apps || (e.Shift && e.KeyCode == Keys.F10)) { (new[] { needs, fyi, follow }.FirstOrDefault(x => x.Selected != null) ?? needs).ShowMenu(); e.Handled = true; }
             else if (mode > 0 && (e.KeyCode == Keys.Down || e.KeyCode == Keys.Up))
             {
                 var l = new[] { needs, fyi, follow }.FirstOrDefault(x => x.Selected != null) ?? needs;

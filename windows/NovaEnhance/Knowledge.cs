@@ -364,7 +364,7 @@ static class Memory
         var bodies = sent.Select(h => OwnText(h.Body)).Where(b => b.Length > 80).Take(40).Select(b => b.Length > 900 ? b[..900] : b).ToList();
         if (bodies.Count < 5) return "Not enough sent emails in the mail index yet (Ask Nova → build the index first).";
         var sample = string.Join("\n\n---\n\n", bodies);
-        var ok = ConfirmSend.Ask(owner, $"✦ Send {bodies.Count} of your sent emails to {Ai.Active().Label}?",
+        var ok = ConfirmSend.Ask(owner, $"✦ Send {bodies.Count} of your sent emails to {Ai.LabelOf(Ai.Current())}?",
             $"To learn how you write, Nova sends the text you wrote in {bodies.Count} recent sent emails (about {sample.Length:N0} characters, quoted replies removed). Only a short description of your style is kept, encrypted on this PC.",
             sample, "Send and learn", false);
         if (ok != ConfirmSend.Choice.Send) return "Cancelled — nothing was sent.";

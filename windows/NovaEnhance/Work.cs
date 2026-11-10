@@ -82,7 +82,7 @@ static class Work
 
     static string NewId() => DateTime.Now.ToString("yyyyMMdd-HHmmss") + "-" + Random.Shared.Next(100, 999);
 
-    static WorkItem FromHit(MailHit h) => new()
+    public static WorkItem FromHit(MailHit h) => new()
     {
         Kind = "mail", Entry = h.Entry, Store = h.StoreId, Subject = h.Subject, From = h.Sent ? "Me → " + h.To : h.FromName, Date = h.Date,
         Summary = h.Summary, Att = h.AttNames, State = Outstanding.IsHandled(h) ? "handled" : "open"

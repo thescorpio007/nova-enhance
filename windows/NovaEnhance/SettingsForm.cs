@@ -102,7 +102,19 @@ class SettingsForm : NovaForm
             var r = Th.Radio(p.Label + (Ai.HasKey(p.Id) ? " ✓" : ""), Store.Target == p.Id, () => Store.Target = pp.Id);
             row.Controls.Add(r);
         }
-        foreach (var p in Ai.All)
+        // How Nova chooses between your cloud AI and the local AI.
+        page.Add(Th.Section("💻 Local or ☁ cloud — which AI does the work"));
+        Opt(new[] { ("manual", "☁ My default AI above for everything (you can pick Local AI there too)"),
+                    ("private", "💻 Local AI for my emails and documents (they stay on this PC) · ☁ default AI for the rest"),
+                    ("local-first", "💻 Local AI first for everything · ☁ default AI when the local one is not running or fails") }, Ai.Route, v => Ai.Route = v);
+        page.Add(Th.Check("Don't ask \"Send to the AI?\" when the local AI does the work (nothing leaves this PC)", Ai.LocalNoAsk, v => Ai.LocalNoAsk = v));
+        page.Add(Th.Section("👁 Reading scanned pages and drawings (vision)"));
+        Opt(new[] { ("gemini", "☁ Gemini vision (cloud, best quality)"), ("local", "💻 Local AI vision on this PC (a vision model, e.g. Gemma 4 · Qwen-VL · LLaVA)") }, Ai.VisionBy, v => Ai.VisionBy = v);
+
+        LocalSection();
+        ServerSection();
+
+        foreach (var p in Ai.All.Where(x => x.Id is not ("local" or "server")))
         {
             var pp = p;
             page.Add(Th.Section(p.Label));
@@ -130,6 +142,113 @@ class SettingsForm : NovaForm
             status.Margin = new Padding(4, 8, 0, 0);
             btns.Controls.Add(status);
         }
+    }
+
+    ComboBox Combo(IEnumerable<string> items, string value, int width)
+    {
+        var c = new ComboBox { DropDownStyle = ComboBoxStyle.DropDown, Width = width, BackColor = Th.Card, ForeColor = Th.Text, Font = Th.F(10), FlatStyle = FlatStyle.Flat };
+        foreach (var i in items) c.Items.Add(i);
+        c.Text = value;
+        return c;
+    }
+
+    /// <summary>💻 Local AI: LM Studio, Ollama, Jan, GPT4All, llama.cpp, KoboldCpp — any OpenAI-compatible server on this PC (or on your network).</summary>
+    void LocalSection()
+    {
+        page.Add(Th.Section("💻 Local AI (on this PC)"));
+        Note("Runs on your own computer with LM Studio, Ollama, Jan, GPT4All, llama.cpp or KoboldCpp — no key, and nothing leaves this PC. Start the server in the app (LM Studio: Developer → Local server → Start), then 🔍 Detect. Tip: set the model's context length to 16,000 or more in LM Studio so long emails and documents fit.", Th.Muted);
+        var on = page.Add(Th.Check("Use the local AI (it appears as \"Local AI\" in Default AI above)", Ai.LocalOn, v => Ai.LocalOn = v));
+        var r1 = page.Add(Th.Row(false));
+        r1.Controls.Add(Th.L("Server", 9.5f, Th.Muted));
+        var url = Combo(Ai.LocalPresets.Select(p => p.Url), Ai.LocalUrl, 300);
+        r1.Controls.Add(url);
+        var preset = Combo(Ai.LocalPresets.Select(p => p.Name), "", 130);
+        preset.DropDownStyle = ComboBoxStyle.DropDownList;
+        preset.SelectedIndexChanged += (_, _) => { if (preset.SelectedIndex >= 0) url.Text = Ai.LocalPresets[preset.SelectedIndex].Url; };
+        r1.Controls.Add(preset);
+        var r2 = page.Add(Th.Row(false));
+        r2.Controls.Add(Th.L("Model", 9.5f, Th.Muted));
+        var model = Combo(new string[0], Store.Model("local"), 300);
+        r2.Controls.Add(model);
+        r2.Controls.Add(Th.L("Vision model", 9.5f, Th.Muted));
+        var vmodel = Combo(new string[0], Store.Str("win_local_vision_model"), 220);
+        r2.Controls.Add(vmodel);
+        var r3 = page.Add(Th.Row(false));
+        r3.Controls.Add(Th.L("Context length (tokens) set in your local app", 9.5f, Th.Muted));
+        var ctx = new NumericUpDown { Minimum = 2048, Maximum = 262144, Increment = 1024, Value = Math.Clamp(Ai.LocalContext, 2048, 262144), Width = 90, BackColor = Th.Card, ForeColor = Th.Text, Font = Th.F(10) };
+        ctx.ValueChanged += (_, _) => Ai.LocalContext = (int)ctx.Value;
+        r3.Controls.Add(ctx);
+        var btns = page.Add(Th.Row(false));
+        var st = Th.L("", 9.5f, Th.Muted); st.Margin = new Padding(4, 8, 0, 0);
+        btns.Controls.Add(Th.B("🔍 Detect", async () =>
+        {
+            st.Text = "Looking for a local AI server…"; st.ForeColor = Th.Muted;
+            var d = await Ai.Detect();
+            if (d == null) { st.Text = "⚠ No local AI server found — start it in LM Studio / Ollama first"; st.ForeColor = Th.Bad; return; }
+            url.Text = d.Value.Url;
+            model.Items.Clear(); vmodel.Items.Clear();
+            foreach (var m in d.Value.Models) { model.Items.Add(m); vmodel.Items.Add(m); }
+            if (d.Value.Models.Count > 0 && (model.Text.Length == 0 || !d.Value.Models.Contains(model.Text)))
+                model.Text = d.Value.Models.FirstOrDefault(m => m.Contains("gemma", StringComparison.OrdinalIgnoreCase)) ?? d.Value.Models[0];
+            st.Text = $"✓ {d.Value.Name} found · {d.Value.Models.Count} model(s)"; st.ForeColor = Th.Good;
+        }, true));
+        btns.Controls.Add(Th.B("Save & test", async () =>
+        {
+            Ai.LocalUrl = url.Text; Store.SetModel("local", model.Text); Store.Set("win_local_vision_model", vmodel.Text.Trim());
+            if (model.Text.Trim().Length == 0)
+                try { var ms = await Ai.Models(url.Text); if (ms.Count > 0) { model.Text = ms[0]; Store.SetModel("local", ms[0]); } } catch { }
+            Ai.LocalOn = true; on.Checked = true;
+            st.Text = "Testing (the first answer can take a while while the model loads)…"; st.ForeColor = Th.Muted;
+            try { var s = await Ai.Test(Ai.ById("local")); st.Text = $"✓ Works · {s:0.0} s · {model.Text}"; st.ForeColor = Th.Good; }
+            catch (Exception e) { st.Text = "⚠ " + e.Message; st.ForeColor = Th.Bad; }
+        }));
+        btns.Controls.Add(Th.B("Get LM Studio", () => Shell.Open("https://lmstudio.ai")));
+        btns.Controls.Add(st);
+    }
+
+    /// <summary>🌐 Any OpenAI-compatible service: Groq, OpenRouter, Mistral, Together, Perplexity or a company server.</summary>
+    void ServerSection()
+    {
+        page.Add(Th.Section("🌐 Other server (web or company)"));
+        Note("Groq (free and very fast), OpenRouter (hundreds of models with one key), Mistral, Together, Perplexity, or your office server — anything that speaks the OpenAI format.", Th.Muted);
+        var on = page.Add(Th.Check("Use this server (it appears as \"Other server\" in Default AI above)", Ai.ServerOn, v => Ai.ServerOn = v));
+        var r0 = page.Add(Th.Row(false));
+        r0.Controls.Add(Th.L("Service", 9.5f, Th.Muted));
+        var preset = Combo(Ai.ServerPresets.Select(p => p.Name), Store.Str("win_server_name", ""), 280);
+        preset.DropDownStyle = ComboBoxStyle.DropDownList;
+        var i0 = Array.FindIndex(Ai.ServerPresets, p => p.Name == Store.Str("win_server_name", ""));
+        if (i0 >= 0) preset.SelectedIndex = i0;
+        r0.Controls.Add(preset);
+        var grid = page.Add(new TableLayoutPanel { ColumnCount = 2, AutoSize = true, BackColor = Color.Transparent, Margin = new Padding(0) }, true);
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 90));
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        grid.Controls.Add(Th.L("Address", 9.5f, Th.Muted), 0, 0);
+        var url = Th.NoSpell(Th.Box(false)); url.Text = Ai.ServerUrl; url.Dock = DockStyle.Fill; grid.Controls.Add(url, 1, 0);
+        grid.Controls.Add(Th.L("API key", 9.5f, Th.Muted), 0, 1);
+        var key = Th.Box(false, 1, true); key.Text = Store.Key("server"); key.Dock = DockStyle.Fill; grid.Controls.Add(key, 1, 1);
+        grid.Controls.Add(Th.L("Model", 9.5f, Th.Muted), 0, 2);
+        var model = Th.NoSpell(Th.Box(false)); model.Text = Store.Model("server"); model.Dock = DockStyle.Fill; grid.Controls.Add(model, 1, 2);
+        preset.SelectedIndexChanged += (_, _) =>
+        {
+            if (preset.SelectedIndex < 0) return;
+            var p = Ai.ServerPresets[preset.SelectedIndex];
+            if (p.Url.Length > 0) url.Text = p.Url;
+            if (p.Model.Length > 0) model.Text = p.Model;
+        };
+        var btns = page.Add(Th.Row(false));
+        var st = Th.L("", 9.5f, Th.Muted); st.Margin = new Padding(4, 8, 0, 0);
+        btns.Controls.Add(Th.B("Save & test", async () =>
+        {
+            Ai.ServerUrl = url.Text; Store.SetKey("server", key.Text); Store.SetModel("server", model.Text);
+            Store.Set("win_server_name", preset.SelectedIndex >= 0 ? Ai.ServerPresets[preset.SelectedIndex].Name.Split(" (")[0] : "Server");
+            Ai.ServerOn = url.Text.Trim().Length > 0; on.Checked = Ai.ServerOn;
+            if (!Ai.ServerOn) { st.Text = "Add the server address first"; return; }
+            st.Text = "Testing…"; st.ForeColor = Th.Muted;
+            try { var s = await Ai.Test(Ai.ById("server")); st.Text = $"✓ Works · {s:0.0} s"; st.ForeColor = Th.Good; }
+            catch (Exception e) { st.Text = "⚠ " + e.Message; st.ForeColor = Th.Bad; }
+        }, true));
+        btns.Controls.Add(Th.B("Get a key", () => { var i = preset.SelectedIndex; var u = i >= 0 ? Ai.ServerPresets[i].KeyUrl : ""; Shell.Open(u.Length > 0 ? u : "https://console.groq.com/keys"); }));
+        btns.Controls.Add(st);
     }
 
     // ------------------------------------------------------------------ About me
@@ -548,6 +667,14 @@ class SettingsForm : NovaForm
         fr.Controls.Add(Th.B("📁 Open", () => Shell.Open(Prompts.Folder)));
         page.Add(Th.Check("Show ✎ More instructions open in Ask Nova", Prompts.ShowMore, v => Prompts.ShowMore = v));
         page.Add(Th.Check("Show the ✦ Nova understood chips", Prompts.ShowChips, v => Prompts.ShowChips = v));
+
+        page.Add(Th.Section("🕘 Chat history"));
+        page.Add(Th.Check("Save every Nova conversation automatically (readable page + search in 🕘 Chat history; included in your backup)", Conversations.On, v => Conversations.On = v));
+        var cr = page.Add(Th.Row(false));
+        var cl = Th.L("Saved in: " + Conversations.Dir, 9.5f, Th.Muted);
+        cr.Controls.Add(cl);
+        cr.Controls.Add(Th.B("Change…", () => { using var d = new FolderBrowserDialog { SelectedPath = Conversations.Dir }; if (d.ShowDialog(this) == DialogResult.OK) { Conversations.Dir = d.SelectedPath; cl.Text = "Saved in: " + d.SelectedPath; } }));
+        cr.Controls.Add(Th.B("🕘 Open Chat history", Screens.ChatHistory, true));
 
         page.Add(Th.Section("⭐ Saved prompts and schedules"));
         var all = Prompts.All();

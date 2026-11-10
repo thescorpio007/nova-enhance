@@ -20,21 +20,93 @@ static class Ai
         new("chatgpt", "ChatGPT", "openai", "https://api.openai.com/v1", "gpt-4o-mini", "https://platform.openai.com/api-keys"),
         new("claude", "Claude", "anthropic", "https://api.anthropic.com/v1", "claude-sonnet-5-5", "https://console.anthropic.com/settings/keys"),
         new("deepseek", "DeepSeek", "openai", "https://api.deepseek.com", "deepseek-chat", "https://platform.deepseek.com/api_keys"),
-        new("grok", "Grok", "openai", "https://api.x.ai/v1", "grok-3-mini", "https://console.x.ai/")
+        new("grok", "Grok", "openai", "https://api.x.ai/v1", "grok-3-mini", "https://console.x.ai/"),
+        new("local", "Local AI", "openai", "", "", "https://lmstudio.ai"),
+        new("server", "Other server", "openai", "", "llama-3.3-70b-versatile", "https://console.groq.com/keys")
     };
 
     public static Provider ById(string id) => All.FirstOrDefault(p => p.Id == id) ?? All[0];
-    public static bool HasKey(string id) => Store.Key(id).Length > 0;
+
+    // ---------------------------------------------------------------- 💻 Local AI and 🌐 other servers (OpenAI-compatible)
+    public static string LocalUrl { get => Store.Str("win_local_url", "http://localhost:1234/v1").TrimEnd('/'); set => Store.Set("win_local_url", value?.Trim().TrimEnd('/')); }
+    public static string ServerUrl { get => Store.Str("win_server_url", "https://api.groq.com/openai/v1").TrimEnd('/'); set => Store.Set("win_server_url", value?.Trim().TrimEnd('/')); }
+    public static bool LocalOn { get => Store.Bool("win_local_on", false); set => Store.SetBool("win_local_on", value); }
+    public static bool ServerOn { get => Store.Bool("win_server_on", false); set => Store.SetBool("win_server_on", value); }
+    /// <summary>manual = the default AI only · private = local AI for your emails and documents · local-first = local, cloud when it fails.</summary>
+    public static string Route { get => Store.Str("win_ai_route", "manual"); set => Store.Set("win_ai_route", value); }
+    public static bool LocalNoAsk { get => Store.Bool("win_local_noask", true); set => Store.SetBool("win_local_noask", value); }
+    /// <summary>Gemini (cloud) or the local AI for reading scanned pages and drawings.</summary>
+    public static string VisionBy { get => Store.Str("win_vision", "gemini"); set => Store.Set("win_vision", value); }
+    public static int LocalContext { get => Store.Int("win_local_ctx", 16000); set => Store.SetInt("win_local_ctx", value); }
+
+    public static string Url(Provider p) => p.Id == "local" ? LocalUrl : p.Id == "server" ? ServerUrl : p.BaseUrl;
+    public static string LabelOf(Provider p) => p == null ? "AI" : p.Id == "local" ? "Local AI · " + Store.Model("local") : p.Id == "server" ? Store.Str("win_server_name", "Server") + " · " + Store.Model("server") : p.Label;
+
+    public static bool HasKey(string id) => id == "local" ? LocalOn : id == "server" ? ServerOn && ServerUrl.Length > 0 : Store.Key(id).Length > 0;
+
+    static readonly AsyncLocal<bool> priv = new();
+    sealed class Undo : IDisposable { readonly Action a; public Undo(Action a) => this.a = a; public void Dispose() => a(); }
+    /// <summary>Marks the work in this block as private (your emails and documents) for the routing rule.</summary>
+    public static IDisposable Private() { var old = priv.Value; priv.Value = true; return new Undo(() => priv.Value = old); }
+
+    /// <summary>The AI the next question goes to: the routing rule first, then your default AI.</summary>
+    public static Provider Current()
+    {
+        if (HasKey("local") && (Route == "local-first" || (Route == "private" && priv.Value))) return ById("local");
+        return Active();
+    }
+
+    public static bool CurrentIsLocal => Current()?.Id == "local";
+
+    /// <summary>How many characters of sources fit (local models have a small memory).</summary>
+    public static int MaxChars => CurrentIsLocal ? Math.Max(6000, LocalContext * 3 - 6000) : 400_000;
+
+    /// <summary>The models a local or company server offers (GET /models).</summary>
+    public static async Task<List<string>> Models(string url, string key = "")
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Get, url.TrimEnd('/') + "/models");
+        if (key.Length > 0) req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(4));
+        using var res = await Http.SendAsync(req, cts.Token);
+        var j = JsonNode.Parse(await res.Content.ReadAsStringAsync(cts.Token));
+        return (j?["data"] as JsonArray ?? new JsonArray()).Select(x => x?["id"]?.ToString() ?? "").Where(x => x.Length > 0 && !x.Contains("embed", StringComparison.OrdinalIgnoreCase)).ToList();
+    }
+
+    public static readonly (string Name, string Url)[] LocalPresets =
+    {
+        ("LM Studio", "http://localhost:1234/v1"), ("Ollama", "http://localhost:11434/v1"), ("Jan", "http://localhost:1337/v1"),
+        ("GPT4All", "http://localhost:4891/v1"), ("llama.cpp", "http://localhost:8080/v1"), ("KoboldCpp", "http://localhost:5001/v1")
+    };
+
+    public static readonly (string Name, string Url, string Model, string KeyUrl)[] ServerPresets =
+    {
+        ("Groq (free, very fast)", "https://api.groq.com/openai/v1", "llama-3.3-70b-versatile", "https://console.groq.com/keys"),
+        ("OpenRouter (many models, one key)", "https://openrouter.ai/api/v1", "openrouter/auto", "https://openrouter.ai/keys"),
+        ("Mistral", "https://api.mistral.ai/v1", "mistral-medium-latest", "https://console.mistral.ai/api-keys"),
+        ("Together AI", "https://api.together.xyz/v1", "meta-llama/Llama-3.3-70B-Instruct-Turbo", "https://api.together.ai/settings/api-keys"),
+        ("Perplexity", "https://api.perplexity.ai", "sonar", "https://www.perplexity.ai/settings/api"),
+        ("Company / office server", "", "", "")
+    };
+
+    /// <summary>Finds a running local AI server (LM Studio, Ollama, Jan…): (name, url, models) or null.</summary>
+    public static async Task<(string Name, string Url, List<string> Models)?> Detect()
+    {
+        foreach (var (n, u) in LocalPresets)
+            try { var m = await Models(u); return (n, u, m); } catch { }
+        return null;
+    }
     public static Provider[] WithKeys => All.Where(p => HasKey(p.Id)).ToArray();
 
     /// <summary>The chosen AI, or the first one that has a key.</summary>
     public static Provider Active()
     {
         var p = ById(Store.Target);
-        return HasKey(p.Id) ? p : All.FirstOrDefault(x => HasKey(x.Id));
+        return HasKey(p.Id) ? p : All.FirstOrDefault(x => HasKey(x.Id) && x.Id != "local") ?? All.FirstOrDefault(x => HasKey(x.Id));
     }
 
     static readonly HttpClient Http = new(new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(5) }) { Timeout = TimeSpan.FromSeconds(120) };
+    /// <summary>Local models are slower: up to 10 minutes for one answer.</summary>
+    static readonly HttpClient SlowHttp = new(new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(5) }) { Timeout = TimeSpan.FromMinutes(10) };
     static readonly Dictionary<string, int> ThinkMode = new();
 
     class Busy : Exception { public Busy(string m) : base(m) { } }
@@ -42,15 +114,20 @@ static class Ai
     /// <summary>One question, one answer. Retries busy/connection errors twice.</summary>
     public static async Task<string> Chat(string system, string user, bool fast = true, bool json = false, Provider p = null, CancellationToken ct = default)
     {
-        if (p != null || Store.Str("win_ai_busy", "other") != "other" || WithKeys.Length < 2) return await ChatOne(system, user, fast, json, p, ct);
-        // Your AI is busy? Settings → ✦ Prompts: use my other AI key.
-        var first = Active();
+        if (p != null) return await ChatOne(system, user, fast, json, p, ct);
+        var first = Current();
         try { return await ChatOne(system, user, fast, json, first, ct); }
-        catch (AiException e) when (!ct.IsCancellationRequested && Regex.IsMatch(e.Message, "busy|too long|429|503|500|overloaded|quota|rate", RegexOptions.IgnoreCase))
+        catch (AiException e) when (!ct.IsCancellationRequested)
         {
-            foreach (var other in WithKeys.Where(x => x.Id != first?.Id))
+            var others = new List<Provider>();
+            // Local AI not running or too slow → your cloud AI (routing rule).
+            if (first?.Id == "local" && Route != "manual") { var cloud = Active(); if (cloud != null && cloud.Id != "local") others.Add(cloud); }
+            // Your AI is busy? Settings → ✦ Prompts: use my other AI key.
+            if (Store.Str("win_ai_busy", "other") == "other" && Regex.IsMatch(e.Message, "busy|too long|429|503|500|overloaded|quota|rate", RegexOptions.IgnoreCase))
+                others.AddRange(WithKeys.Where(x => x.Id != first?.Id && !others.Contains(x)));
+            foreach (var other in others)
             {
-                try { var r = await ChatOne(system, user, fast, json, other, ct); Log.Warn("ai", $"{first?.Label} busy — answered by {other.Label}"); return r; }
+                try { var r = await ChatOne(system, user, fast, json, other, ct); Log.Warn("ai", $"{LabelOf(first)}: {e.Message} — answered by {LabelOf(other)}"); return r; }
                 catch (AiException) { }
             }
             throw;
@@ -61,13 +138,15 @@ static class Ai
     {
         p ??= Active() ?? throw new AiException("No AI key yet — add one in Settings → AI & API keys");
         var key = Store.Key(p.Id);
-        if (key.Length == 0) throw new AiException($"No {p.Label} key — add it in Settings → AI & API keys");
+        if (p.Id is "local" or "server") { if (key.Length == 0) key = "nova"; }   // local servers need no key
+        else if (key.Length == 0) throw new AiException($"No {p.Label} key — add it in Settings → AI & API keys");
         var model = Store.Model(p.Id);
         Exception last = null;
         for (int attempt = 0; attempt < 3; attempt++)
         {
             try { return await Once(p, key, model, system, user, fast, json, ct); }
             catch (Busy e) { last = e; await Task.Delay(1500 * (attempt + 1), ct); }
+            catch (HttpRequestException e) when (p.Id == "local") { throw new AiException($"The local AI is not running at {LocalUrl} — start the server in LM Studio (Developer → Start server) ({e.Message})"); }
             catch (HttpRequestException e) { last = new AiException("No connection — check the internet or VPN (" + e.Message + ")"); await Task.Delay(1200, ct); }
             catch (TaskCanceledException) when (!ct.IsCancellationRequested) { last = new AiException($"{p.Label} took too long to answer"); }
         }
@@ -104,8 +183,14 @@ static class Ai
                     ["model"] = model,
                     ["messages"] = new JsonArray(new JsonObject { ["role"] = "system", ["content"] = system }, new JsonObject { ["role"] = "user", ["content"] = user })
                 };
-                var r = await Post(p.BaseUrl + "/chat/completions", body, new() { ["Authorization"] = "Bearer " + key }, ct);
-                return (r["choices"]?[0]?["message"]?["content"]?.ToString() ?? "").Trim();
+                var slow = p.Id is "local" or "server";
+                var r = await Post(Url(p) + "/chat/completions", body, new() { ["Authorization"] = "Bearer " + key }, ct, slow);
+                var text = r["choices"]?[0]?["message"]?["content"]?.ToString() ?? "";
+                // DeepSeek R1 and other "thinking" models: only the answer, not the thinking.
+                text = Regex.Replace(text, @"<think>[\s\S]*?</think>", "", RegexOptions.IgnoreCase);
+                var cut = text.IndexOf("</think>", StringComparison.OrdinalIgnoreCase);
+                if (cut >= 0) text = text[(cut + 8)..];
+                return text.Trim();
             }
         }
     }
@@ -162,6 +247,29 @@ static class Ai
     /// <summary>Gemini vision: all the text on a scanned page or picture (only after the user agreed to send it).</summary>
     public static async Task<string> Vision(byte[] image, string mime, CancellationToken ct = default)
     {
+        const string Ask = "Transcribe ALL the text visible in this scanned page or drawing: title block, notes, labels, dimensions, tables, stamps and handwriting, in any language (English, Arabic, French…). Keep a natural reading order, one item per line. Reply with the text only.";
+        if (VisionBy == "local" && HasKey("local"))
+        {
+            // The local AI reads the page on this PC (a vision model such as Gemma, Qwen-VL or LLaVA).
+            var vm = Store.Str("win_local_vision_model");
+            var lb = new JsonObject
+            {
+                ["model"] = vm.Length > 0 ? vm : Store.Model("local"),
+                ["messages"] = new JsonArray(new JsonObject
+                {
+                    ["role"] = "user",
+                    ["content"] = new JsonArray(
+                        new JsonObject { ["type"] = "text", ["text"] = Ask },
+                        new JsonObject { ["type"] = "image_url", ["image_url"] = new JsonObject { ["url"] = $"data:{mime};base64,{Convert.ToBase64String(image)}" } })
+                })
+            };
+            try
+            {
+                var lr = await Post(LocalUrl + "/chat/completions", lb, new() { ["Authorization"] = "Bearer nova" }, ct, true);
+                return Regex.Replace(lr["choices"]?[0]?["message"]?["content"]?.ToString() ?? "", @"<think>[\s\S]*?</think>", "").Trim();
+            }
+            catch (HttpRequestException e) { throw new AiException($"The local AI is not running at {LocalUrl} ({e.Message})"); }
+        }
         var key = Store.Key("gemini");
         if (key.Length == 0) throw new AiException("Gemini vision needs a Gemini key (Settings → AI & API keys)");
         var body = new JsonObject
@@ -183,7 +291,7 @@ static class Ai
         throw new AiException("Gemini is busy — try again later (" + last?.Message + ")");
     }
 
-    static async Task<JsonObject> Post(string url, JsonObject body, Dictionary<string, string> headers, CancellationToken ct)
+    static async Task<JsonObject> Post(string url, JsonObject body, Dictionary<string, string> headers, CancellationToken ct, bool slow = false)
     {
         using var req = new HttpRequestMessage(HttpMethod.Post, url) { Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json") };
         foreach (var h in headers)
@@ -191,7 +299,7 @@ static class Ai
             if (h.Key == "Authorization") req.Headers.Authorization = AuthenticationHeaderValue.Parse(h.Value);
             else req.Headers.TryAddWithoutValidation(h.Key, h.Value);
         }
-        using var res = await Http.SendAsync(req, ct);
+        using var res = await (slow ? SlowHttp : Http).SendAsync(req, ct);
         var text = await res.Content.ReadAsStringAsync(ct);
         int code = (int)res.StatusCode;
         if (code == 429 || code == 500 || code == 502 || code == 503 || code == 504 || code == 529) throw new Busy($"{code}");

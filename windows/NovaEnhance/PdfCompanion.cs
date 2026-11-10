@@ -185,6 +185,7 @@ class PdfPanel : NovaForm
     readonly NumericUpDown page;
     readonly LinkLabel answer;
     readonly TextBox pInstr;
+    Conversation pdfConv;
     readonly FlowLayoutPanel hits;
     string path = "";
     List<Seg> segs;
@@ -340,6 +341,7 @@ class PdfPanel : NovaForm
 
     async void Ask(string q, bool detailed)
     {
+        using var privateWork = Ai.Private();   // your emails / documents: the routing rule may keep them on the local AI
         if (q == ask.Text) { Speller.FixBeforeSearch(ask, () => Ask(ask.Text, detailed)); q = ask.Text; }
         q = (q ?? "").Trim();
         if (q.Length == 0) { ask.Focus(); return; }
@@ -350,7 +352,7 @@ class PdfPanel : NovaForm
         {
             var all = await Text_();
             if (all == null || all.Count == 0) { status.Text = "⚠ No readable text in this PDF — press 🔤 OCR this PDF first"; return; }
-            var prov = Ai.Active() ?? throw new AiException("Add an AI key in Settings → AI & API keys");
+            var prov = Ai.Current() ?? throw new AiException("Add an AI key in Settings → AI & API keys");
             lastQuestion = q;
             status.Text = $"Asking {prov.Label}…";
             var terms = FolderAsk.LocalTerms(q);
@@ -363,6 +365,8 @@ class PdfPanel : NovaForm
             var a = await Ai.Chat(sys, $"Document: {Path.GetFileName(path)}\n\n{Extracts(pick, 60000)}\nQuestion: {q}" + (pInstr.Text.Trim().Length > 0 ? "\nInstructions from the user (follow them for content, format, length and language): " + pInstr.Text.Trim() : ""), !detailed, false, prov, my.Token);
             if (my.IsCancellationRequested) return;
             History.Add("ask", prov.Id, Store.Model(prov.Id), "pdf", Path.GetFileName(path) + " · " + q, a);
+            if (pdfConv?.Ref != path) pdfConv = null;
+            Conversations.Add(ref pdfConv, "pdf", Path.GetFileName(path), path, q, a);
             ShowAnswer(a);
             status.Text = $"✓ Answer from this PDF · {prov.Label} — click a [p.N] to open that page" + Newer();
         }
@@ -383,12 +387,13 @@ class PdfPanel : NovaForm
 
     async void Summary()
     {
+        using var privateWork = Ai.Private();   // your emails / documents: the routing rule may keep them on the local AI
         cts?.Cancel(); var my = cts = new CancellationTokenSource();
         try
         {
             var all = await Text_();
             if (all == null || all.Count == 0) { status.Text = "⚠ No readable text in this PDF — press 🔤 OCR this PDF first"; return; }
-            var prov = Ai.Active() ?? throw new AiException("Add an AI key in Settings → AI & API keys");
+            var prov = Ai.Current() ?? throw new AiException("Add an AI key in Settings → AI & API keys");
             lastQuestion = "";
             status.Text = $"✦ Reading and checking with {prov.Label}…";
             var sys = "You are an experienced architect checking a construction document for the user. From the page texts (each starts with [p.N]) write:\n" +
@@ -416,7 +421,7 @@ class PdfPanel : NovaForm
             if (text.Trim().Length == 0) { status.Text = $"⚠ Page {p} has no readable text — try 🔤 OCR this PDF"; return; }
             if (text.Length > 20000) text = text[..20000];
             status.Text = $"🌐 Translating page {p} into {Store.TrLang}…";
-            var prov = Ai.Active() ?? throw new AiException("Add an AI key in Settings → AI & API keys");
+            var prov = Ai.Current() ?? throw new AiException("Add an AI key in Settings → AI & API keys");
             var r = await Ai.Enhance(prov, "translate", text, CancellationToken.None);
             lastQuestion = "";
             ShowAnswer($"[p.{p}] → {Store.TrLang}\n\n" + r);

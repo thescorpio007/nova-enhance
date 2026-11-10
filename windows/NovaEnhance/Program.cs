@@ -86,6 +86,7 @@ class NovaContext : ApplicationContext
         m.Items.Add("🔍  Ask Nova about my email   Ctrl+Shift+F", null, (_, _) => Screens.Ask());
         m.Items.Add("💬  Nova Chat & AI Hub        Ctrl+Shift+A", null, (_, _) => Screens.Hub(null));
         m.Items.Add("📌  My Work", null, (_, _) => Screens.Work(null));
+        m.Items.Add("🕘  Chat history", null, (_, _) => Screens.ChatHistory());
         m.Items.Add("📄  Nova for this PDF                Ctrl+Shift+D", null, (_, _) => PdfCompanion.Open());
         m.Items.Add("📁  Search inside a folder…", null, (_, _) => Screens.FolderSearch(null));
         m.Items.Add("☀  Morning brief", null, (_, _) => Screens.Brief());
@@ -288,6 +289,31 @@ static class Screens
         if (mailAsk == null || mailAsk.IsDisposed) mailAsk = new MailAskForm();
         Show(mailAsk);
         if (h != null) mailAsk.ShowMail(h); else mailAsk.LoadCurrent(subjectHint ?? "");
+    }
+
+    /// <summary>↻ Continue a saved email conversation from 🕘 Chat history.</summary>
+    public static void MailAskContinue(string path)
+    {
+        if (mailAsk == null || mailAsk.IsDisposed) mailAsk = new MailAskForm();
+        Show(mailAsk);
+        mailAsk.Resume(path);
+    }
+
+    static ChatHistoryForm history;
+
+    /// <summary>🕘 Chat history: every conversation, newest first, with search.</summary>
+    public static void ChatHistory()
+    {
+        if (history == null || history.IsDisposed) history = new ChatHistoryForm();
+        else history.Reload();
+        Show(history);
+    }
+
+    public static void AskFor(string q)
+    {
+        if (ask == null || ask.IsDisposed) ask = new AskForm();
+        Show(ask);
+        ask.AskNow(q);
     }
 
     public static void Ask()
