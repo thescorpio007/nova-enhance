@@ -85,7 +85,7 @@ class MailAskForm : NovaForm
         fr.Controls.Add(folderLbl);
         fr.Controls.Add(Th.B("📁 Choose…", ChooseFolder));
         fr.Controls.Add(Th.B("No folder", () => SetFolder("")));
-        fr.Controls.Add(Th.B("📂 Find a file", () => { var n = Projects.DocNumber.Match(Outlook.SelectedText()); Screens.FindFile(n.Success ? n.Value : null); }));
+        fr.Controls.Add(Th.B("📂 Find a file", () => { var n = Revisions.Numbers(Outlook.SelectedText()); Screens.FindFile(n.FirstOrDefault()); }));
         status = top.Add(Th.Wrap("", 9.5f, Th.AccentText), true);
 
         // Your input, always at the bottom: Enter = send · Shift+Enter = new line.
@@ -395,8 +395,8 @@ class MailAskForm : NovaForm
             {
                 var dwSel = await Sta(() => Outlook.SelectedText());
                 if (dwSel.Length > 0) selText = dwSel;
-                var dwNums = Projects.DocNumber.Matches((selText.Length > 0 ? selText : "") + "\n" + p).Select(x => x.Value).ToList();
-                if (dwNums.Count == 0) dwNums = Projects.DocNumber.Matches((anchor.Subject ?? "") + "\n" + fullBody).Select(x => x.Value).ToList();
+                var dwNums = Revisions.Numbers((selText.Length > 0 ? selText : "") + "\n" + p);
+                if (dwNums.Count == 0) dwNums = Revisions.Numbers((anchor.Subject ?? "") + "\n" + fullBody);
                 dwNums = dwNums.Distinct(StringComparer.OrdinalIgnoreCase).Take(25).ToList();
                 if (dwNums.Count > 0)
                 {
@@ -419,16 +419,32 @@ class MailAskForm : NovaForm
                 }
             }
 
-            // 📂 Project folders: the likely files are found by NAME (instant), and only those are opened — remembered after the first read.
-            var listed = docsOk ? folders.Where(Projects.Listed).ToList() : new List<string>();
-            if (listed.Count > 0)
+            // 🔎 One Nova search: project documents (by name, then only the likely files opened — remembered for all features),
+            // related emails beyond this thread, 🧠 Nova Memory and past answers in 🕘 Chat history.
+            var listed = docsOk ? folders.Where(Projects.Covers).ToList() : new List<string>();
             {
                 var already = new HashSet<string>(sources.Where(s => s.Path is { Length: > 0 }).Select(s => s.Path), StringComparer.OrdinalIgnoreCase);
+                var exclude = new HashSet<string>(sources.Where(s => s.Mail != null).Select(s => s.Mail.Entry ?? ""));
                 var ui = SynchronizationContext.Current;
-                var pas = await Task.Run(() => Projects.Ask(listed, terms.SelectMany(t => Regex.Split(t.ToLowerInvariant(), @"[^\p{L}\p{N}\-]+")).Concat(words).ToList(), 8, 14,
-                    t => ui?.Post(_ => { if (!status.IsDisposed) status.Text = t; }, null), my.Token), my.Token);
-                foreach (var x in pas.Where(x => !already.Contains(x.Path) || x.Loc.Length > 0))
-                    sources.Add(new AskSource { Id = "D" + d++, Title = $"{Path.GetFileName(x.Path)} · {x.Loc} — {Revisions.KindOf(x.Path)}" + (x.Status.Length > 0 ? " · " + x.Status : ""), Text = Cut(x.Text, 1400), Path = x.Path, Goto = x.Goto ?? "", Loc = x.Loc ?? "" });
+                var nsOpts = new NovaSearch.Opts { Folders = listed, Project = proj, Docs = listed.Count > 0, Drawings = false, ExcludeConv = anchor.Conv ?? "", ExcludeEntries = exclude, MaxEmails = 4 };
+                var ns = await Task.Run(() => NovaSearch.Run(p + " " + Outstanding.NormSubject(anchor.Subject ?? ""), terms, nsOpts,
+                    stMsg => ui?.Post(_ => { if (!status.IsDisposed) status.Text = stMsg; }, null), my.Token), my.Token);
+                foreach (var x in ns.Docs.Where(x => !already.Contains(x.Path) || (x.Loc ?? "").Length > 0))
+                {
+                    var tag = string.Join(" · ", new[] { Revisions.KindOf(x.Path), Revisions.Tag(x.Root ?? "", x.Path) }.Where(t => t.Length > 0));
+                    sources.Add(new AskSource { Id = "D" + d++, Title = FolderAsk.Label(x) + (tag.Length > 0 ? " — " + tag : ""), Text = Cut(x.Text, 1400), Path = x.Path, Goto = x.Goto ?? "", Loc = x.Loc ?? "" });
+                }
+                int e = sources.Count(s => s.Id.StartsWith("E"));
+                foreach (var x in ns.Emails)
+                {
+                    var parts = (x.Remote ?? "").Split('|');
+                    var mh = parts.Length >= 2 ? MailIndex.ByEntry(parts[1]) : null;
+                    sources.Add(new AskSource { Id = "E" + e++, Mail = mh, Title = x.Loc, Text = Cut(x.Text, 1500) });
+                }
+                int mi = 1;
+                foreach (var x in ns.Memory) sources.Add(new AskSource { Id = "M" + mi++, Title = x.Loc, Text = Cut(x.Text, 1800) });
+                int hi = 1;
+                foreach (var x in ns.History) sources.Add(new AskSource { Id = "H" + hi++, Title = x.Loc, Text = Cut(x.Text, 1500) });
             }
 
             foreach (var folder in docsOk ? folders.Except(listed, StringComparer.OrdinalIgnoreCase).ToList() : new List<string>())
@@ -476,7 +492,7 @@ class MailAskForm : NovaForm
             status.Text = $"✦ {label} is writing the answer from {sources.Count} sources…";
             Draw($"✦ {label} is writing the answer from {sources.Count} sources…");
             var user = (history.Length > 0 ? "EARLIER IN THIS CONVERSATION:\n" + history + "\n\n" : "") + "SOURCES:\n" + block + "\nTHE USER'S PROMPT:\n" + p;
-            var ans = (await Ai.Chat(AnswerRules + FolderAsk.AdviceRule + Modes.ProfileNote(), user, false, false, null, my.Token)).Trim();
+            var ans = (await Ai.Chat(AnswerRules + NovaSearch.SourceRule + " [M…] = 🧠 Nova Memory, [H…] = 🕘 an earlier conversation." + FolderAsk.AdviceRule + Modes.ProfileNote(), user, false, false, null, my.Token)).Trim();
 
             status.Text = "🔎 Technical check — your AI re-reads its answer against the sources…";
             Draw("🔎 Technical check — re-reading the answer against the sources…");

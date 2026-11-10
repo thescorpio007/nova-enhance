@@ -17,10 +17,36 @@ static class Revisions
     public class Doc { public string Key = "", Path = "", Rev = ""; public long MTime; public (int, string) Rank; }
 
     static readonly Regex RevRx = new(
-        @"(?:^|[\s_\-\.\(\[]+)(?:rev(?:ision)?[\s\.\-_]*(?<r>[A-Z]{0,2}\d{0,3}[A-Z]?)|(?<r>R\d{1,3})|(?<r>[CPTD]\d{2,3})|(?<r>IFC|IFT|IFA|IFR|IFP))(?=[\s_\-\.\)\]]|$)",
+        @"(?:^|[\s_\-\.\(\[]+)(?:rev(?:ision)?[\s\.\-_]*(?<r>[A-Z]{0,2}\d{0,3}[A-Z]?)|(?<r>R\d{1,3})|(?<r>[CPTD]\d{1,3})|(?<r>IFC|IFT|IFA|IFR|IFP))(?=[\s_\-\.\)\]]|$)",
         RegexOptions.IgnoreCase);
 
     static readonly Dictionary<string, (DateTime At, Dictionary<string, (Doc Me, Doc Latest, int Count)> Map)> cache = new(StringComparer.OrdinalIgnoreCase);
+
+    static readonly Regex NumRx = new(@"\b[A-Z][A-Z0-9]{1,7}(?:-[A-Z0-9]{1,10}){2,12}\b", RegexOptions.IgnoreCase);
+    static readonly Regex RevSeg = new(@"^(?:[CPTDR]\d{1,3}|IF[CTARP]|REV[A-Z0-9]*|R\d{1,3}[A-Z]?)$", RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// The document / drawing number in a name or a text, without its revision and title:
+    /// "YT-TBW-PW-ZZ-DRW-FC-DET-50003-C0-TYPICAL ALL TOWERS…" → "YT-TBW-PW-ZZ-DRW-FC-DET-50003". "" when there is none.
+    /// </summary>
+    public static string Number(string text)
+    {
+        foreach (Match m in NumRx.Matches(text ?? ""))
+        {
+            var seg = m.Value.Split('-').ToList();
+            var cut = seg.FindIndex(1, x => RevSeg.IsMatch(x));
+            if (cut > 0) seg = seg.Take(cut).ToList();
+            var lastDigit = seg.FindLastIndex(x => x.Any(char.IsDigit));
+            if (lastDigit < 0) continue;
+            seg = seg.Take(lastDigit + 1).ToList();
+            if (seg.Count >= 3) return string.Join("-", seg).ToUpperInvariant();
+        }
+        return "";
+    }
+
+    /// <summary>All the document numbers in a text (an email, a highlighted selection, a question).</summary>
+    public static List<string> Numbers(string text) =>
+        NumRx.Matches(text ?? "").Select(m => Number(m.Value)).Where(n => n.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
     public static Doc Parse(string path, long mtime)
     {
@@ -29,13 +55,17 @@ static class Revisions
         var ms = RevRx.Matches(name);
         var d = new Doc { Path = path, MTime = mtime };
         var key = name;
-        if (ms.Count > 0)
+        var num = Number(name);
+        // With a document number, the revision is the one right after it ("…-50003-C0-TITLE"), not a word of the title.
+        var at = num.Length > 0 ? name.IndexOf(num, StringComparison.OrdinalIgnoreCase) : -1;
+        var after = at >= 0 ? ms.Cast<Match>().FirstOrDefault(x => x.Index >= at + num.Length - 1) : null;
+        if (after != null || ms.Count > 0)
         {
-            var m = ms[^1];
+            var m = after ?? ms[^1];
             var r = m.Groups["r"].Value.ToUpperInvariant();
             if (r.Length > 0) { d.Rev = r; key = name.Remove(m.Index, m.Length) + (m.Index + m.Length < name.Length ? "" : ""); }
         }
-        d.Key = Regex.Replace(key.ToLowerInvariant(), @"[\s_\-\.]+", " ").Trim();
+        d.Key = num.Length > 0 ? num.ToLowerInvariant() : Regex.Replace(key.ToLowerInvariant(), @"[\s_\-\.]+", " ").Trim();
         var penalty = Regex.IsMatch(path, @"\\(superseded|old|archive|_old|previous)\\", RegexOptions.IgnoreCase) ? -5 : 0;
         int cls = d.Rev switch
         {
@@ -74,6 +104,14 @@ static class Revisions
             cmd.Parameters.AddWithValue("$n", pre.Length); cmd.Parameters.AddWithValue("$p", pre);
             using var r = cmd.ExecuteReader();
             while (r.Read()) docs.Add(Parse(r.GetString(0), r.IsDBNull(1) ? 0 : r.GetInt64(1)));
+        }
+        catch { }
+        // The project file-name list knows every file, also those never read inside.
+        try
+        {
+            var known = docs.Select(x => x.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var (path, ticks) in Projects.NamesUnder(root))
+                if (known.Add(path)) docs.Add(Parse(path, ticks > 0 ? new DateTimeOffset(new DateTime(ticks).ToUniversalTime()).ToUnixTimeMilliseconds() : 0));
         }
         catch { }
         var map = new Dictionary<string, (Doc, Doc, int)>(StringComparer.OrdinalIgnoreCase);
@@ -250,6 +288,29 @@ static class Memory
         best.Uses++; best.Used = DateTime.Now;
         Save();
         return (best, changed);
+    }
+
+    /// <summary>An answer you liked for a similar question, from ANY Nova feature (email, folder, PDF, chat).</summary>
+    public static (KnowCard Card, List<string> Changed, double Score) FindAny(string question)
+    {
+        if (!On || string.IsNullOrWhiteSpace(question)) return (null, null, 0);
+        KnowCard best = null; double bs = 0;
+        lock (L)
+            foreach (var c in Data.Cards)
+            {
+                var s = Similar(question, c.Q);
+                if (s > bs) { bs = s; best = c; }
+            }
+        if (best == null || bs < 0.55) return (null, null, 0);
+        var changed = new List<string>();
+        foreach (var f in best.Files)
+            try
+            {
+                if (!File.Exists(f)) changed.Add(Path.GetFileName(f) + " (moved or deleted)");
+                else if (best.Times.TryGetValue(f, out var t) && t != 0 && File.GetLastWriteTimeUtc(f).Ticks != t) changed.Add(Path.GetFileName(f) + " (changed)");
+            }
+            catch { }
+        return (best, changed, bs);
     }
 
     /// <summary>👍 — remember the answer, its files and the vocabulary in them.</summary>

@@ -40,6 +40,7 @@ class FolderSearchForm : NovaForm
 
     // ---------------------------------------------------------------- state
     readonly ConcurrentQueue<(FileHit Hit, string Removed)> inbox = new();
+    string namesOnlyFor;   // a drawing number found by name: the next press also searches inside the files
     readonly List<FileHit> all = new();
     readonly Dictionary<string, FileHit> byPath = new(StringComparer.OrdinalIgnoreCase);
     readonly List<FolderIndex.Problem> problems = new();
@@ -615,8 +616,37 @@ class FolderSearchForm : NovaForm
         var k = new HashSet<string>(kinds);
         var m = matcher; var p = pg; var opt = Options();
         bar.Visible = true; bar.Value = 0;
+        // 📛 Names first (shared project file list): files whose NAME matches appear at once, before any file is opened.
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var covered = Projects.Covers(root);
+        var named = covered ? Projects.FindFiles(q, new List<string> { root }, true, false, 300) : new List<Projects.FileRow>();
+        foreach (var f in named)
+        {
+            var idx = f.Name.IndexOf(q, StringComparison.OrdinalIgnoreCase);
+            var nh = new FileHit
+            {
+                Path = f.Path, Root = root, Kind = FileKinds.KindOf(Path.GetExtension(f.Path).ToLowerInvariant()), Size = f.Size,
+                Mtime = f.Modified > DateTime.MinValue ? new DateTimeOffset(f.Modified.ToUniversalTime()).ToUnixTimeMilliseconds() : 0
+            };
+            nh.Pieces.Add(new PieceHit { Loc = "📛 file name" + (f.Status.Length > 0 ? " · " + f.Status : "") + (f.Rev.Length > 0 ? " · Rev " + f.Rev : ""), Goto = "", Text = f.Name, Matches = idx >= 0 ? new() { (idx, q.Length) } : new() });
+            inbox.Enqueue((nh, null));
+        }
+        var num = Revisions.Number(q);
+        var looksNumber = num.Length > 0 && q.Trim().Length <= num.Length + 12;
+        if (covered && named.Count > 0 && looksNumber && namesOnlyFor != q)
+        {
+            namesOnlyFor = q;
+            pg = null;
+            bar.Visible = false;
+            stopBtn.Enabled = pauseBtn.Enabled = false;
+            searchBtn.Text = "🔍 Also search inside files";
+            status.Text = $"📛 {named.Count} file(s) found by name in {clock.ElapsedMilliseconds} ms — press “🔍 Also search inside files” to look for {num} inside the documents too (slower).";
+            return;
+        }
+        namesOnlyFor = null;
+        searchBtn.Text = "🔍 Search";
         stopBtn.Enabled = pauseBtn.Enabled = true; pauseBtn.Text = "⏸ Pause";
-        status.Text = "Searching…";
+        status.Text = named.Count > 0 ? $"📛 {named.Count} found by name · now searching inside the files…" : "Searching…";
         worker = new Thread(() => FolderIndex.Search(root, m, k, h => inbox.Enqueue((h, null)), path => inbox.Enqueue((null, path)), p, my.Token, opt))
         { IsBackground = true, Name = "Nova folder search", Priority = ThreadPriority.BelowNormal };
         worker.SetApartmentState(ApartmentState.STA);
@@ -651,7 +681,13 @@ class FolderSearchForm : NovaForm
                 continue;
             }
             var h = item.Hit;
-            if (byPath.Remove(h.Path, out var prev)) all.Remove(prev);
+            if (byPath.Remove(h.Path, out var prev))
+            {
+                all.Remove(prev);
+                // Found by name first, then inside: keep the 📛 line on top.
+                var np = prev.Pieces.FirstOrDefault(x => (x.Loc ?? "").StartsWith("📛"));
+                if (np != null && !h.Pieces.Any(x => (x.Loc ?? "").StartsWith("📛"))) h.Pieces.Insert(0, np);
+            }
             byPath[h.Path] = h;
             all.Add(h);
             dirty = true;
@@ -915,16 +951,29 @@ class FolderSearchForm : NovaForm
             matcher = new Matcher(string.Join(" ", terms), "any", false, false);
 
             pg = new FolderIndex.Progress();
-            bar.Visible = true; bar.Value = 0;
             var p = pg; var opt = Options();
-            await RunSta(() => FolderIndex.Search(root, null, null, _ => { }, null, p, my.Token, opt));
-            bar.Visible = false;
-            if (my.IsCancellationRequested) { status.Text = "■ Stopped"; return; }
-            await OfferVisionAsync(root);
-
             var sw = System.Diagnostics.Stopwatch.StartNew();
             var boosts = Memory.Boosts(terms);
-            passages = await Task.Run(() => FolderIndex.Retrieve(root, terms, 14, 4, boosts));
+            // 🔎 One Nova search: a project folder is NOT re-read — its file names point to the few files to open (remembered for all features);
+            // your emails, 🧠 Nova Memory and past answers are searched too.
+            var covered = Projects.Covers(root);
+            if (!covered)
+            {
+                bar.Visible = true; bar.Value = 0;
+                await RunSta(() => FolderIndex.Search(root, null, null, _ => { }, null, p, my.Token, opt));
+                bar.Visible = false;
+                if (my.IsCancellationRequested) { status.Text = "■ Stopped"; return; }
+                await OfferVisionAsync(root);
+            }
+            var ui = SynchronizationContext.Current;
+            var proj = Projects.OfFolder(root);
+            var folders = new List<string> { root };
+            if (proj != null) folders.AddRange(Projects.General);
+            var ns = await Task.Run(() => NovaSearch.Run(q, terms, new NovaSearch.Opts { Folders = folders, Project = proj, Docs = covered, Mem = false },
+                stMsg => ui?.Post(_ => { if (!status.IsDisposed) status.Text = stMsg; }, null), my.Token), my.Token);
+            passages = covered ? ns.Drawings.Concat(ns.Docs).ToList() : await Task.Run(() => FolderIndex.Retrieve(root, terms, 14, 4, boosts));
+            passages.AddRange(ns.Emails.Take(3).Concat(ns.History.Take(1)));
+            if (covered) p.Files = (int)Projects.Status.Values.Where(s => (root + "\\").StartsWith(s.Folder.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase)).Sum(s => s.Files);
             bool deep = false;
             if (passages.Count == 0)
             {
@@ -1114,7 +1163,7 @@ class FolderSearchForm : NovaForm
     void ShowSources(List<int> order)
     {
         all.Clear(); byPath.Clear();
-        foreach (var grp in order.Select(i => passages[i]).GroupBy(x => x.Path, StringComparer.OrdinalIgnoreCase))
+        foreach (var grp in order.Select(i => passages[i]).Where(x => !string.IsNullOrEmpty(x.Path)).GroupBy(x => x.Path, StringComparer.OrdinalIgnoreCase))
         {
             var first = grp.First();
             var h = new FileHit { Path = first.Path, Root = first.Root, Kind = first.Kind, Remote = first.Remote };

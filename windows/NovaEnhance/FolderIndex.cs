@@ -246,6 +246,66 @@ static class FolderIndex
         try { return Directory.GetFiles(Dir, "folders.db*").Sum(f => new FileInfo(f).Length) / (1024 * 1024); } catch { return 0; }
     }
 
+    /// <summary>
+    /// The text of a file when ANY Nova feature has read it already and it hasn't changed since (one shared store for
+    /// Search inside a folder, Ask AI, Ask about this email, Nova Chat, the PDF panel and attachments). null = not read yet.
+    /// </summary>
+    public static List<Seg> Known(string path)
+    {
+        try
+        {
+            var fi = new FileInfo(path);
+            if (!fi.Exists) return null;
+            using var c = Open();
+            var id = Scalar(c, "SELECT id FROM files WHERE path=$p AND size=$s AND mtime=$m", ("$p", path), ("$s", fi.Length), ("$m", Ms(fi.LastWriteTime)));
+            if (id == null) return null;
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "SELECT loc,go,text FROM segs WHERE file_id=$f ORDER BY id";
+            cmd.Parameters.AddWithValue("$f", Convert.ToInt64(id));
+            var res = new List<Seg>();
+            using var r = cmd.ExecuteReader();
+            while (r.Read()) res.Add(new Seg(r.IsDBNull(0) ? "" : r.GetString(0), r.IsDBNull(2) ? "" : r.GetString(2), r.IsDBNull(1) ? "" : r.GetString(1)));
+            return res;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Keeps what a feature read from a file, for every other feature (and for Search inside a folder, which then skips it).</summary>
+    public static void Remember(string path, List<Seg> segs)
+    {
+        try
+        {
+            var fi = new FileInfo(path);
+            if (!fi.Exists) return;
+            using var c = Open();
+            using var tx = c.BeginTransaction();
+            var existing = Scalar(c, "SELECT id FROM files WHERE path=$p", ("$p", path));
+            if (existing != null) DeleteFile(c, Convert.ToInt64(existing));
+            Exec(c, "INSERT INTO files(path,size,mtime,kind,note,remote) VALUES($p,$s,$m,$k,$n,NULL)",
+                ("$p", path), ("$s", fi.Length), ("$m", Ms(fi.LastWriteTime)), ("$k", FileKinds.KindOf(fi.Extension.ToLowerInvariant())), ("$n", "read on demand"));
+            var fid = Convert.ToInt64(Scalar(c, "SELECT last_insert_rowid()"));
+            foreach (var sg in segs ?? new())
+            {
+                Exec(c, "INSERT INTO segs(file_id,loc,go,text) VALUES($f,$l,$g,$t)", ("$f", fid), ("$l", sg.Loc ?? ""), ("$g", sg.Goto ?? ""), ("$t", sg.Text ?? ""));
+                if (Fts) Exec(c, "INSERT INTO segs_fts(rowid,text) VALUES(last_insert_rowid(),$t)", ("$t", sg.Text ?? ""));
+            }
+            tx.Commit();
+        }
+        catch (Exception e) { Log.Warn("Folder index", "remember " + Path.GetFileName(path) + ": " + e.Message); }
+    }
+
+    /// <summary>How many files under a folder have been read inside (by any feature).</summary>
+    public static int CountRead(string root)
+    {
+        try
+        {
+            var pre = NormalRoot(root).TrimEnd('\\') + "\\";
+            using var c = Open();
+            return Convert.ToInt32(Scalar(c, "SELECT COUNT(*) FROM files WHERE lower(substr(path,1,$n))=lower($p)", ("$n", pre.Length), ("$p", pre)));
+        }
+        catch { return 0; }
+    }
+
     static void DeleteFile(SqliteConnection c, long id)
     {
         if (Fts)

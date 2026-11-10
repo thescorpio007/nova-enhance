@@ -54,6 +54,7 @@ static class FolderAsk
 
     public static string Label(FolderIndex.Passage p)
     {
+        if (p.Kind is "email" or "memory" or "history") return p.Loc;   // 🔎 shared Nova search: emails, 🧠 memory, 🕘 past answers
         var where = FolderIndex.Where(new PieceHit { Loc = p.Loc, Goto = p.Goto, Text = p.Text, Matches = new() });
         return $"{Path.GetFileName(p.Path)} · {where}";
     }
@@ -98,7 +99,7 @@ static class FolderAsk
     public static async Task<string> Answer(string question, List<FolderIndex.Passage> ps, bool detailed, string history, CancellationToken ct)
     {
         using var privateWork = Ai.Private();   // your emails / documents: the routing rule may keep them on the local AI
-        var sys = (detailed ? DetailRules : ShortRules) + Checks + AdviceRule + Modes.ProfileNote();
+        var sys = (detailed ? DetailRules : ShortRules) + Checks + NovaSearch.SourceRule + AdviceRule + Modes.ProfileNote();
         var user = (string.IsNullOrWhiteSpace(history) ? "" : "Earlier in this conversation:\n" + history + "\n\n") +
                    "Extracts:\n" + Extracts(ps) + "Question: " + question;
         var a = await Ai.Chat(sys, user, !detailed, false, null, ct);

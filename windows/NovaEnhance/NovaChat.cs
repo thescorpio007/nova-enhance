@@ -227,7 +227,7 @@ class NovaChat
             if (!File.Exists(f)) { notes.Add("missing file " + Path.GetFileName(f)); continue; }
             Post(new JsonObject { ["t"] = "progress", ["text"] = "Reading " + Path.GetFileName(f) + "…" });
             List<Seg> segs = null;
-            await RunSta(() => segs = FileText.Extract(f));
+            try { segs = (await Task.Run(() => Projects.Read(f, CancellationToken.None))).Segs; } catch { segs = null; }   // one store: read once, known by all Nova
             segs = (segs ?? new()).Where(s => (s.Text ?? "").Trim().Length > 0).ToList();
             if (segs.Count == 0) { notes.Add("no readable text in " + Path.GetFileName(f)); continue; }
             var total = segs.Sum(s => s.Text.Length);
@@ -246,14 +246,25 @@ class NovaChat
             if (FolderAsk.Sees == "never") notes.Add("folder not sent — Settings → Folder search is set to \"Never send my files\"");
             else
             {
-                Post(new JsonObject { ["t"] = "progress", ["text"] = "Reading the folder (new or changed files only)…" });
-                var pg = new FolderIndex.Progress();
-                using var tick = new System.Threading.Timer(_ => Post(new JsonObject { ["t"] = "progress", ["text"] = $"Reading the folder… {pg.Files:N0} files" }), null, 1500, 1500);
-                await RunSta(() => FolderIndex.Search(folder, null, null, _ => { }, null, pg, CancellationToken.None, null));
-                tick.Change(Timeout.Infinite, Timeout.Infinite);
-                Post(new JsonObject { ["t"] = "progress", ["text"] = "Finding the right passages…" });
+                List<FolderIndex.Passage> ps;
                 var expanded = await FolderAsk.Expand(searchText, null, CancellationToken.None);
-                var ps = await Task.Run(() => FolderIndex.Retrieve(folder, expanded, 14, 4, Memory.Boosts(expanded)));
+                if (Projects.Covers(folder))
+                {
+                    // A project folder: not re-read — the file names point to the few files to open (remembered for all Nova).
+                    var nsd = await Task.Run(() => NovaSearch.Run(searchText, expanded, new NovaSearch.Opts { Folders = new() { folder }, Emails = false, Mem = false, Hist = false },
+                        t => Post(new JsonObject { ["t"] = "progress", ["text"] = t }), CancellationToken.None));
+                    ps = nsd.Drawings.Concat(nsd.Docs).ToList();
+                }
+                else
+                {
+                    Post(new JsonObject { ["t"] = "progress", ["text"] = "Reading the folder (new or changed files only)…" });
+                    var pg = new FolderIndex.Progress();
+                    using var tick = new System.Threading.Timer(_ => Post(new JsonObject { ["t"] = "progress", ["text"] = $"Reading the folder… {pg.Files:N0} files" }), null, 1500, 1500);
+                    await RunSta(() => FolderIndex.Search(folder, null, null, _ => { }, null, pg, CancellationToken.None, null));
+                    tick.Change(Timeout.Infinite, Timeout.Infinite);
+                    Post(new JsonObject { ["t"] = "progress", ["text"] = "Finding the right passages…" });
+                    ps = await Task.Run(() => FolderIndex.Retrieve(folder, expanded, 14, 4, Memory.Boosts(expanded)));
+                }
                 bool send = true;
                 if (ps.Count > 0 && FolderAsk.Sees == "ask")
                 {
@@ -274,6 +285,27 @@ class NovaChat
                 else foreach (var p in ps) sources.Add(new Src { Kind = "passage", Path = p.Path, Loc = p.Loc, Goto = p.Goto, Remote = p.Remote, Label = FolderAsk.Label(p), Text = p.Text });
             }
         }
+
+        // 🔎 One Nova search: when the question names a project or a drawing number, its documents and emails are searched too;
+        // 🧠 Nova Memory and 🕘 past answers always (only close matches are used).
+        if (string.IsNullOrEmpty(folder))
+            try
+            {
+                var proj = Projects.ForText(searchText);
+                var named = proj != null || Revisions.Numbers(searchText).Count > 0;
+                var docsOk = named && FolderAsk.Sees != "never";
+                var ns = await Task.Run(() => NovaSearch.Run(searchText, FolderAsk.LocalTerms(searchText), new NovaSearch.Opts { Project = proj, Docs = docsOk, Drawings = docsOk, Emails = proj != null, MaxFiles = 5, MaxDocs = 10 },
+                    t => Post(new JsonObject { ["t"] = "progress", ["text"] = t }), CancellationToken.None));
+                foreach (var p in ns.Drawings.Concat(ns.Docs)) sources.Add(new Src { Kind = "passage", Path = p.Path, Loc = p.Loc, Goto = p.Goto, Remote = p.Remote, Label = FolderAsk.Label(p), Text = p.Text });
+                foreach (var p in ns.Emails)
+                {
+                    var parts = (p.Remote ?? "").Split('|');
+                    sources.Add(new Src { Kind = "email", Entry = parts.Length > 1 ? parts[1] : "", Store = parts.Length > 2 ? parts[2] : "", Label = p.Loc, Text = p.Text });
+                }
+                foreach (var p in ns.Memory.Concat(ns.History)) sources.Add(new Src { Kind = "note", Label = p.Loc, Text = p.Text });
+                if (ns.Project != null) notes.Add($"📁 project {ns.Project.Code} detected");
+            }
+            catch (Exception ex) { Log.Warn("Nova Chat", "Nova search: " + ex.Message); }
 
         // Emails the user added.
         foreach (var e in (ctx["emails"] as JsonArray ?? new JsonArray()).OfType<JsonObject>())

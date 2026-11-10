@@ -192,6 +192,8 @@ static class Prompts
         var text = (h.Subject ?? "") + " " + (h.Folder ?? "");
         foreach (var w in preferred ?? Enumerable.Empty<string>())
             if (w.Length > 1 && text.Contains(w, StringComparison.OrdinalIgnoreCase)) return w.ToUpperInvariant() == w ? w : char.ToUpperInvariant(w[0]) + w[1..];
+        // 📁 Your projects (Settings → Projects) are the one project system for all of Nova.
+        try { var pj = Projects.ForMail(h); if (pj != null) return pj.Code; } catch { }
         var subj = Outstanding.NormSubject(h.Subject ?? "").ToUpperInvariant();
         var m = Regex.Match(subj, @"^([A-Z]{2,6})\b");
         if (m.Success && m.Value is not ("RE" or "FW" or "THE" or "NEW" or "RFI" or "MAR" or "WIR" or "DRW" or "SDS")) return m.Value;

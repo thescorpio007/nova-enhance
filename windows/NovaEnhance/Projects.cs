@@ -59,12 +59,14 @@ static class Projects
     }
 
     /// <summary>The project an email belongs to (codes in the subject first, then in the text).</summary>
-    public static Project ForMail(MailHit h)
+    public static Project ForMail(MailHit h) => h == null ? null : ForText(h.Subject ?? "", h.FirstLines(1500));
+
+    /// <summary>The project a question, a subject or a file path is about (null when none is named).</summary>
+    public static Project ForText(string subj, string body = "")
     {
-        if (h == null) return null;
+        subj ??= ""; body ??= "";
         var all = All();
-        var subj = h.Subject ?? "";
-        var body = h.FirstLines(1500);
+        foreach (var p in all) if (p.Folders.Any(f => subj.StartsWith(f.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase))) return p;   // a path
         Project best = null; int bestScore = 0;
         foreach (var p in all)
         {
@@ -236,8 +238,7 @@ static class Projects
                 {
                     Exec(c, "CREATE TABLE IF NOT EXISTS pnames(path TEXT PRIMARY KEY, root TEXT, name TEXT, ext TEXT, size INTEGER, mtime INTEGER, seen INTEGER);");
                     Exec(c, "CREATE INDEX IF NOT EXISTS pnames_root ON pnames(root);");
-                    Exec(c, "CREATE TABLE IF NOT EXISTS pread(path TEXT, mtime INTEGER, n INTEGER, loc TEXT, go TEXT, text TEXT);");
-                    Exec(c, "CREATE INDEX IF NOT EXISTS pread_path ON pread(path);");
+                    Exec(c, "DROP TABLE IF EXISTS pread;");   // build 36's separate store: now one store for all of Nova
                     dbReady = true;
                 }
         return c;
@@ -330,7 +331,7 @@ static class Projects
         catch { return 0; }
     }
 
-    static int CountRead(string root) => (int)Count("SELECT COUNT(DISTINCT pread.path) FROM pread JOIN pnames ON pnames.path=pread.path WHERE pnames.root=$r", root);
+    static int CountRead(string root) => FolderIndex.CountRead(root);
 
     /// <summary>True when the folder's file names are in the catalogue.</summary>
     public static bool Listed(string root) => root.Length > 0 && Count("SELECT COUNT(*) FROM (SELECT 1 FROM pnames WHERE root=$r LIMIT 1)", root) > 0;
@@ -361,11 +362,52 @@ static class Projects
     /// Files whose path holds the words: all of them (finder) or any of them (questions). Ranked by where the words are (file name first,
     /// folder names next), the kind of file (PDF and Word first, CAD last), and revision (older revisions marked superseded).
     /// </summary>
+    /// <summary>SQL: the path is inside one of these folders (a project folder or any subfolder of it).</summary>
+    static string Under(SqliteCommand cmd, List<string> roots)
+    {
+        var parts = new List<string>();
+        for (int i = 0; i < roots.Count; i++)
+        {
+            var pre = roots[i].TrimEnd('\\') + "\\";
+            parts.Add($"substr(lower(path),1,$un{i})=$up{i}");
+            cmd.Parameters.AddWithValue("$un" + i, pre.Length);
+            cmd.Parameters.AddWithValue("$up" + i, pre.ToLowerInvariant());
+        }
+        return parts.Count == 0 ? "0" : string.Join(" OR ", parts);
+    }
+
+    /// <summary>Every listed file under a folder (for the revision map of any feature).</summary>
+    public static List<(string Path, long Ticks)> NamesUnder(string folder)
+    {
+        var res = new List<(string, long)>();
+        if (string.IsNullOrEmpty(folder) || GDrive.IsRoot(folder)) return res;
+        try
+        {
+            using var c = Db();
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = $"SELECT path,mtime FROM pnames WHERE {Under(cmd, new List<string> { RootKey(folder) })} LIMIT 200000";
+            using var r = cmd.ExecuteReader();
+            while (r.Read()) res.Add((r.GetString(0), r.IsDBNull(1) ? 0 : r.GetInt64(1)));
+        }
+        catch { }
+        return res;
+    }
+
+    /// <summary>True when the folder (or the project folder it is in) has its file names listed.</summary>
+    public static bool Covers(string folder) =>
+        !string.IsNullOrEmpty(folder) && All().SelectMany(p => p.Folders).Concat(General)
+            .Any(f => (folder.TrimEnd('\\') + "\\").StartsWith(f.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase) && Listed(f));
+
+    /// <summary>The project a folder (or file) belongs to.</summary>
+    public static Project OfFolder(string path) =>
+        string.IsNullOrEmpty(path) ? null : All().FirstOrDefault(p => p.Folders.Any(f => (path.TrimEnd('\\') + "\\").StartsWith(f.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase)));
+
     public static List<FileRow> FindFiles(string query, IEnumerable<string> folders, bool all, bool latestOnly, int max)
     {
         var words = Regex.Split((query ?? "").ToLowerInvariant(), @"[^\p{L}\p{N}\-\.]+").Select(w => w.Trim('.', '-')).Where(w => w.Length >= 2).Distinct().Take(10).ToList();
         var roots = folders.Where(f => f.Length > 0).Select(RootKey).Distinct().ToList();
         var res = new List<FileRow>();
+        var boosts = Memory.Boosts(words);
         if (words.Count == 0 || roots.Count == 0) return res;
         var stems = words.Select(Stem).ToList();
         var rows = new List<(string Path, string Name, long Size, long M)>();
@@ -373,10 +415,8 @@ static class Projects
         {
             using var c = Db();
             using var cmd = c.CreateCommand();
-            var rIn = string.Join(",", roots.Select((_, i) => "$r" + i));
             var cond = string.Join(all ? " AND " : " OR ", stems.Select((_, i) => "path LIKE $w" + i));
-            cmd.CommandText = $"SELECT path,name,size,mtime FROM pnames WHERE root IN ({rIn}) AND ({cond}) LIMIT 6000";
-            for (int i = 0; i < roots.Count; i++) cmd.Parameters.AddWithValue("$r" + i, roots[i]);
+            cmd.CommandText = $"SELECT path,name,size,mtime FROM pnames WHERE ({Under(cmd, roots)}) AND ({cond}) LIMIT 6000";
             for (int i = 0; i < stems.Count; i++) cmd.Parameters.AddWithValue("$w" + i, "%" + stems[i] + "%");
             using var r = cmd.ExecuteReader();
             while (r.Read()) rows.Add((r.GetString(0), r.GetString(1), r.IsDBNull(2) ? 0 : r.GetInt64(2), r.IsDBNull(3) ? 0 : r.GetInt64(3)));
@@ -396,7 +436,7 @@ static class Projects
                 else if (dir.Contains(stems[i])) s += 1;
             }
             var ext = System.IO.Path.GetExtension(x.Path).ToLowerInvariant();
-            s += KindScore(ext) + (x.M > recent ? 0.5 : 0);
+            s += KindScore(ext) + (x.M > recent ? 0.5 : 0) + (boosts.TryGetValue(x.Path, out var bo) ? Math.Min(6, bo) : 0);   // 🧠 files you confirmed before
             res.Add(new FileRow { Path = x.Path, Name = x.Name, Size = x.Size, Modified = x.M > 0 ? new DateTime(x.M) : DateTime.MinValue, Score = s, Project = ProjectOf(x.Path, projects) });
         }
         // Revisions: within one document (same number, same kind of file), only the latest is current.
@@ -419,7 +459,7 @@ static class Projects
     public static List<DocHit> FindDoc(string number, IEnumerable<string> folders)
     {
         var res = new List<DocHit>();
-        var num = number.Trim();
+        var num = Revisions.Number(number) is { Length: > 0 } nn ? nn : number.Trim();
         if (num.Length < 4) return res;
         var roots = folders.Where(f => f.Length > 0).ToList();
         var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -427,9 +467,7 @@ static class Projects
         {
             using var c = Db();
             using var cmd = c.CreateCommand();
-            var rIn = string.Join(",", roots.Select((_, i) => "$r" + i));
-            cmd.CommandText = $"SELECT path FROM pnames WHERE root IN ({rIn}) AND name LIKE $q LIMIT 80";
-            for (int i = 0; i < roots.Count; i++) cmd.Parameters.AddWithValue("$r" + i, RootKey(roots[i]));
+            cmd.CommandText = $"SELECT path FROM pnames WHERE ({Under(cmd, roots.Select(RootKey).ToList())}) AND name LIKE $q LIMIT 80";
             cmd.Parameters.AddWithValue("$q", "%" + num + "%");
             using var r = cmd.ExecuteReader();
             while (r.Read()) paths.Add(r.GetString(0));
@@ -437,7 +475,7 @@ static class Projects
         catch { }
         // A folder not listed yet: look on the disk by name.
         if (paths.Count == 0)
-            foreach (var root in roots.Where(f => Directory.Exists(f) && !Listed(f)))
+            foreach (var root in roots.Where(f => Directory.Exists(f) && !Covers(f)))
                 try
                 {
                     foreach (var f in Directory.EnumerateFiles(root, "*" + num + "*", new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true }).Take(40))
@@ -464,41 +502,17 @@ static class Projects
     /// <summary>The text of a file: from memory when it was read before and hasn't changed, otherwise read now (OCR included) and remembered.</summary>
     public static (List<Seg> Segs, bool Remembered) Read(string path, CancellationToken ct)
     {
-        long m = 0;
-        try { m = File.GetLastWriteTime(path).Ticks; } catch { }
-        try
-        {
-            using var c = Db();
-            using var cmd = c.CreateCommand();
-            cmd.CommandText = "SELECT loc,go,text,mtime FROM pread WHERE path=$p ORDER BY n";
-            cmd.Parameters.AddWithValue("$p", path);
-            var segs = new List<Seg>(); long had = -1;
-            using (var r = cmd.ExecuteReader()) while (r.Read()) { had = r.GetInt64(3); segs.Add(new Seg(r.GetString(0), r.GetString(2), r.GetString(1))); }
-            if (had == m && segs.Count > 0) return (segs, true);
-        }
-        catch { }
+        // One store for all Nova: read once by any feature = known by all.
+        var known = FolderIndex.Known(path);
+        if (known != null) return (known, true);
         List<Seg> got = null; Exception err = null;
         var t = new Thread(() => { try { got = FileText.Extract(path); } catch (Exception e) { err = e; } }) { IsBackground = true, Name = "Nova read" };
         t.SetApartmentState(ApartmentState.STA);
         t.Start();
         while (!t.Join(200)) ct.ThrowIfCancellationRequested();
         if (err != null) throw err;
-        got = (got ?? new()).Where(s => s.Text.Trim().Length > 0).Take(600).ToList();
-        if (got.Count == 0) got.Add(new Seg("file", "(no readable text)"));
-        try
-        {
-            using var c = Db();
-            using var tx = c.BeginTransaction();
-            using (var del = c.CreateCommand()) { del.Transaction = tx; del.CommandText = "DELETE FROM pread WHERE path=$p"; del.Parameters.AddWithValue("$p", path); del.ExecuteNonQuery(); }
-            using var ins = c.CreateCommand();
-            ins.Transaction = tx;
-            ins.CommandText = "INSERT INTO pread(path,mtime,n,loc,go,text) VALUES($p,$m,$n,$l,$g,$t)";
-            var pn = ins.Parameters.Add("$n", SqliteType.Integer); var pl = ins.Parameters.Add("$l", SqliteType.Text); var pg = ins.Parameters.Add("$g", SqliteType.Text); var pt = ins.Parameters.Add("$t", SqliteType.Text);
-            ins.Parameters.AddWithValue("$p", path); ins.Parameters.AddWithValue("$m", m);
-            for (int i = 0; i < got.Count; i++) { pn.Value = i; pl.Value = got[i].Loc ?? ""; pg.Value = got[i].Goto ?? ""; pt.Value = got[i].Text; ins.ExecuteNonQuery(); }
-            tx.Commit();
-        }
-        catch (Exception e) { Log.Warn("projects", "remember " + Path.GetFileName(path) + ": " + e.Message); }
+        got = (got ?? new()).Where(s => (s.Text ?? "").Trim().Length > 0).Take(800).ToList();
+        FolderIndex.Remember(path, got);
         foreach (var st in Status.Values.Where(s => path.StartsWith(s.Folder.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase))) st.Read++;
         return (got, false);
     }

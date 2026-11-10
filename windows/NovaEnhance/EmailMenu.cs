@@ -62,8 +62,8 @@ static class EmailMenu
             var r = RefRx.Match(h.Subject ?? "");
             Screens.AskFor(r.Success ? $"emails about {r.Value}" : $"emails with the subject \"{Outstanding.NormSubject(h.Subject ?? "")}\"");
         });
-        var dwg = Projects.DocNumber.Match((h.Subject ?? "") + "\n" + (h.NewPart.Length > 0 ? h.NewPart : h.Body ?? ""));
-        if (dwg.Success) Add("📂 Find " + dwg.Value + " in the project files", () => Screens.FindFile(dwg.Value));
+        var dwg = Revisions.Numbers((h.Subject ?? "") + "\n" + (h.NewPart.Length > 0 ? h.NewPart : h.Body ?? "")).FirstOrDefault();
+        if (dwg != null) Add("📂 Find " + dwg + " in the project files", () => Screens.FindFile(dwg));
         var names = (h.AttNames ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(n => !Regex.IsMatch(n, @"^image\d*\.(png|jpe?g|gif)$", RegexOptions.IgnoreCase)).ToList();
         foreach (var n in names.Take(8))
         {
