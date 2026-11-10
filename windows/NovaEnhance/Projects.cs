@@ -364,13 +364,13 @@ static class Projects
     /// folder names next), the kind of file (PDF and Word first, CAD last), and revision (older revisions marked superseded).
     /// </summary>
     /// <summary>SQL: the path is inside one of these folders (a project folder or any subfolder of it).</summary>
-    static string Under(SqliteCommand cmd, List<string> roots)
+    static string Under(SqliteCommand cmd, List<string> roots, string col = "path")
     {
         var parts = new List<string>();
         for (int i = 0; i < roots.Count; i++)
         {
             var pre = roots[i].TrimEnd('\\') + "\\";
-            parts.Add($"substr(lower(path),1,$un{i})=$up{i}");
+            parts.Add($"substr(lower({col}),1,$un{i})=$up{i}");
             cmd.Parameters.AddWithValue("$un" + i, pre.Length);
             cmd.Parameters.AddWithValue("$up" + i, pre.ToLowerInvariant());
         }
@@ -582,6 +582,7 @@ static class Projects
         static readonly ConcurrentQueue<(string Root, string Path)> changes = new();
         static readonly ConcurrentDictionary<string, bool> relist = new(StringComparer.OrdinalIgnoreCase);
         static readonly List<FileSystemWatcher> watchers = new();
+        static DateTime readCounted = DateTime.MinValue;
         public static bool On { get => Store.Bool("win_proj_index", true); set { Store.SetBool("win_proj_index", value); Wake(); } }
 
         public static void Start()
@@ -654,7 +655,13 @@ static class Projects
                     }
                 }
                 catch (Exception e) { Log.Warn("projects", e.Message); }
-                wake.WaitOne(TimeSpan.FromSeconds(changes.IsEmpty ? 60 : 3));
+                // "read inside" numbers, kept live (any feature may have read files since).
+                if (DateTime.Now - readCounted > TimeSpan.FromSeconds(60))
+                {
+                    readCounted = DateTime.Now;
+                    foreach (var st in Status.Values.ToList()) if (st.Phase == "listed") try { st.Read = CountRead(st.Folder); } catch { }
+                }
+                wake.WaitOne(TimeSpan.FromSeconds(changes.IsEmpty ? 30 : 3));
             }
         }
 
@@ -719,6 +726,7 @@ static class Projects
         public static volatile string Phase = "off", Current = "";
         public static List<Prog> Counts = new();
         public static TimeSpan? Left;
+        public static volatile string Error = "";
 
         static readonly string[] Readable = { ".pdf", ".doc", ".docx", ".docm", ".rtf", ".odt", ".xls", ".xlsx", ".xlsm", ".xlsb", ".csv", ".ppt", ".pptx", ".pptm", ".txt", ".msg", ".eml" };
         static readonly AutoResetEvent wake = new(false);
@@ -749,6 +757,7 @@ static class Projects
         static void Recount()
         {
             var list = new List<Prog>();
+            Error = "";
             long max = (long)FolderIndex.MaxMb * 1024 * 1024;
             foreach (var p in Chosen())
                 try
@@ -756,13 +765,15 @@ static class Projects
                     using var c = Db();
                     using var cmd = c.CreateCommand();
                     cmd.CommandText = $"SELECT COUNT(*), SUM(CASE WHEN f.id IS NULL THEN 0 ELSE 1 END) FROM pnames p LEFT JOIN files f ON f.path=p.path " +
-                                      $"WHERE ({Under(cmd, p.Folders.Select(RootKey).ToList())}) AND p.ext IN ({ExtIn(cmd)}) AND p.size <= $max";
+                                      $"WHERE ({Under(cmd, p.Folders.Select(RootKey).ToList(), "p.path")}) AND p.ext IN ({ExtIn(cmd)}) AND p.size <= $max";
                     cmd.Parameters.AddWithValue("$max", max);
                     using var r = cmd.ExecuteReader();
                     if (r.Read()) list.Add(new Prog { Code = p.Code, Total = r.GetInt32(0), Done = r.IsDBNull(1) ? 0 : r.GetInt32(1) });
                 }
-                catch (Exception e) { Log.Warn("read all", "count: " + e.Message); }
+                catch (Exception e) { Error = e.Message; Log.Warn("read all", "count: " + e.Message); }
             Counts = list;
+            // The "read" number of every project line, kept live while reading.
+            foreach (var st in Status.Values.ToList()) try { st.Read = CountRead(st.Folder); } catch { }
             var remaining = list.Sum(x => x.Total - x.Done);
             Left = remaining > 0 ? TimeSpan.FromSeconds(remaining * secsPerFile) : TimeSpan.Zero;
             counted = DateTime.Now;
@@ -770,7 +781,7 @@ static class Projects
 
         static List<string> Pending(int n)
         {
-            var res = new List<string>();
+            List<string> res = new();
             long max = (long)FolderIndex.MaxMb * 1024 * 1024;
             var folders = Chosen().SelectMany(p => p.Folders).Select(RootKey).ToList();
             if (folders.Count == 0) return res;
@@ -779,12 +790,12 @@ static class Projects
                 using var c = Db();
                 using var cmd = c.CreateCommand();
                 // Newest files first: the documents you work on now are ready soonest.
-                cmd.CommandText = $"SELECT p.path FROM pnames p LEFT JOIN files f ON f.path=p.path WHERE ({Under(cmd, folders)}) AND p.ext IN ({ExtIn(cmd)}) AND p.size <= $max AND f.id IS NULL ORDER BY p.mtime DESC LIMIT {n}";
+                cmd.CommandText = $"SELECT p.path FROM pnames p LEFT JOIN files f ON f.path=p.path WHERE ({Under(cmd, folders, "p.path")}) AND p.ext IN ({ExtIn(cmd)}) AND p.size <= $max AND f.id IS NULL ORDER BY p.mtime DESC LIMIT {n}";
                 cmd.Parameters.AddWithValue("$max", max);
                 using var r = cmd.ExecuteReader();
                 while (r.Read()) res.Add(r.GetString(0));
             }
-            catch (Exception e) { Log.Warn("read all", "pending: " + e.Message); }
+            catch (Exception e) { Error = e.Message; Log.Warn("read all", "pending: " + e.Message); return null; }
             return res;
         }
 
@@ -803,6 +814,8 @@ static class Projects
                     if (Paused) { Phase = "⏸ paused"; Current = ""; wake.WaitOne(TimeSpan.FromSeconds(30)); continue; }
                     if (!MayRun()) { Phase = $"⏸ paused — you are working (resumes after {Gentle.EndHour}:00 or when the PC is idle)"; Current = ""; wake.WaitOne(TimeSpan.FromSeconds(60)); continue; }
                     var batch = Pending(40);
+                    if (batch == null) { Phase = "⚠ could not find the files to read — see Settings → Error log (" + Error + ")"; wake.WaitOne(TimeSpan.FromMinutes(2)); continue; }
+                    if (batch.Count == 0 && (Error.Length > 0 || Counts.Count == 0)) { Phase = "⚠ could not count the files — see Settings → Error log" + (Error.Length > 0 ? " (" + Error + ")" : ""); wake.WaitOne(TimeSpan.FromMinutes(2)); counted = DateTime.MinValue; continue; }
                     if (batch.Count == 0) { Phase = "✓ complete"; Current = ""; Rush = false; Recount(); wake.WaitOne(TimeSpan.FromMinutes(10)); continue; }
                     Phase = Rush ? "⚡ reading at full speed" : "reading";
                     foreach (var path in batch)
