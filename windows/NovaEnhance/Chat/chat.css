@@ -63,3 +63,8 @@ b,strong{color:#fff}
   .ma .acts{grid-column:1 / -1;grid-row:3}
   .mu{max-width:60%}
 }
+
+.tblwrap{overflow-x:auto;margin:8px 0}table.cmp{border-collapse:collapse;font-size:13px;min-width:60%}
+table.cmp th{background:#2E2A55;color:#fff;text-align:left;padding:6px 10px;border:1px solid #3A4256}
+table.cmp td{padding:5px 10px;border:1px solid #2E3546;vertical-align:top;white-space:normal}
+table.cmp tr.diff td{background:rgba(255,170,60,.10)}table.cmp tr.best td{background:rgba(80,200,120,.10)}

@@ -190,6 +190,7 @@ class PdfPanel : NovaForm
     string path = "";
     List<Seg> segs;
     string lastAnswer = "", lastQuestion = "";
+    AttachBar attach;
     CancellationTokenSource cts;
 
     public PdfPanel()
@@ -218,6 +219,10 @@ class PdfPanel : NovaForm
         r0.Controls.Add(Th.B("🔍 Ask", () => Ask(ask.Text, false), true));
         r0.Controls.Add(Th.B("✦ Summary / check drawing", Summary));
         r0.Controls.Add(Th.B("✎", () => { pInstr.Visible = !pInstr.Visible; if (pInstr.Visible) pInstr.Focus(); s.FitAll(); }));
+        // 📎 Other files to read, check or compare with this PDF (attach, Ctrl+V, drop).
+        attach = s.Add(new AttachBar(), true);
+        attach.Changed += () => s.FitAll();
+        Shown += (_, _) => attach.Hook(ask, this);
 
         var r1 = s.Add(Th.Row());
         r1.Controls.Add(Th.B("🔤 OCR this PDF", Ocr));
@@ -238,6 +243,11 @@ class PdfPanel : NovaForm
         answer.LinkClicked += (_, e) => { if (e.Link?.LinkData is int p) GoTo(p); };
         var r3 = s.Add(Th.Row());
         r3.Controls.Add(Th.B("⧉ Copy", () => { if (lastAnswer.Length > 0) Clipboard.SetText(lastAnswer); }));
+        r3.Controls.Add(Th.B("📊 Table → Excel", () =>
+        {
+            try { var x = FileTalk.ExportXlsx(lastAnswer, Path.GetFileNameWithoutExtension(path)); Shell.Open(x); status.Text = "📊 Saved: " + x; }
+            catch (Exception ex) { status.Text = "⚠ " + ex.Message; }
+        }));
         r3.Controls.Add(Th.B("More detail", () => { if (lastQuestion.Length > 0) Ask(lastQuestion, true); else Summary(); }));
         r3.Controls.Add(Th.B("👍", () =>
         {
@@ -344,7 +354,10 @@ class PdfPanel : NovaForm
         using var privateWork = Ai.Private();   // your emails / documents: the routing rule may keep them on the local AI
         if (q == ask.Text) { Speller.FixBeforeSearch(ask, () => Ask(ask.Text, detailed)); q = ask.Text; }
         q = (q ?? "").Trim();
+        var files = attach?.Files.ToList() ?? new List<string>();
+        if (q.Length == 0 && files.Count > 0) q = "Compare this document with the attached file(s) in a comparison table, then the key differences.";
         if (q.Length == 0) { ask.Focus(); return; }
+        if (files.Count > 0) detailed = true;
         cts?.Cancel(); var my = cts = new CancellationTokenSource();
         var (card, changed) = detailed ? ((KnowCard)null, (List<string>)null) : Memory.Find(q, path, "pdf");
         if (card != null) ShowAnswer($"🧠 Nova remembers (you liked this on {card.Saved:dd MMM yyyy}):\n{card.A}" + (changed.Count > 0 ? "\n⚠ Changed since: " + string.Join(", ", changed) : "") + "\n↻ Checking again…");
@@ -362,7 +375,15 @@ class PdfPanel : NovaForm
                       "After each fact put its page in square brackets, e.g. [p.3]. Quote exact values (dimensions, materials, ratings, references, revisions). " +
                       (detailed ? "Give a complete, structured answer. " : "Answer in 2 to 6 short lines, the direct answer first. ") +
                       "If the document does not say, write so plainly. Reply in the language of the question." + FolderAsk.AdviceRule + Modes.ProfileNote();
-            var a = await Ai.Chat(sys, $"Document: {Path.GetFileName(path)}\n\n{Extracts(pick, 60000)}\nQuestion: {q}" + (pInstr.Text.Trim().Length > 0 ? "\nInstructions from the user (follow them for content, format, length and language): " + pInstr.Text.Trim() : ""), !detailed, false, prov, my.Token);
+            var attached = new System.Text.StringBuilder();
+            int fi = 1;
+            foreach (var f in files)
+            {
+                var txt = await FileTalk.Text(f, this, my.Token, stMsg => status.Text = stMsg);
+                attached.Append($"[F{fi++}] {Path.GetFileName(f)}\n{(txt.Length > 9000 ? txt[..9000] : txt)}\n\n");
+            }
+            if (files.Count > 0) sys += " The main document's pages are cited [p.N]; the user also attached other files, cited [F1], [F2]… (the main document is the first column when comparing)." + FileTalk.Rules;
+            var a = await Ai.Chat(sys, $"Document: {Path.GetFileName(path)}\n\n{Extracts(pick, 60000)}\n" + (attached.Length > 0 ? "ATTACHED FILES:\n" + attached + "\n" : "") + $"Question: {q}" + (pInstr.Text.Trim().Length > 0 ? "\nInstructions from the user (follow them for content, format, length and language): " + pInstr.Text.Trim() : ""), !detailed, false, prov, my.Token);
             if (my.IsCancellationRequested) return;
             History.Add("ask", prov.Id, Store.Model(prov.Id), "pdf", Path.GetFileName(path) + " · " + q, a);
             if (pdfConv?.Ref != path) pdfConv = null;

@@ -150,20 +150,35 @@ static class Conversations
         "details{margin-top:4px}summary{cursor:pointer;color:#B9B0FF}li.ok{color:#BFEAD6}li.part{color:#FFC27A}li.no{color:#FF9A9A;text-decoration:line-through}" +
         ".acts{margin-top:8px}.acts a{font-size:12.5px;color:#B9B0FF;margin-right:14px;text-decoration:none}.acts a:hover{color:#fff}" +
         "mark{background:#5A4A00;color:#FFE08A;border-radius:2px}.srcs{font-size:12px;color:#9AA3B5;margin-top:8px}.muted{color:#9AA3B5}.wait{color:#B9B0FF;font-style:italic}" +
-        ".head{border-bottom:1px solid #2A3040;padding-bottom:10px;margin-bottom:16px}.sign{text-align:right;color:#7C6CFF;font-weight:bold;font-size:12px;margin-top:20px}";
+        ".head{border-bottom:1px solid #2A3040;padding-bottom:10px;margin-bottom:16px}.sign{text-align:right;color:#7C6CFF;font-weight:bold;font-size:12px;margin-top:20px}" + FileTalk.TableCss;
 
     /// <summary>One Nova answer as HTML: [E1]/[A2]/[D3] become links, ⚠ lines orange, 🎓 advice green, the technical check underneath.</summary>
     public static string AnswerHtml(ConvMsg m, int index, bool actions)
     {
         var ids = m.Src.Select(s => s.Id).ToHashSet();
-        string Links(string line) => Regex.Replace(Esc(line), @"\[((?:[EAD]\d{1,2})(?:\s*,\s*[EAD]\d{1,2})*)\]", x =>
+        string Links(string line) => Regex.Replace(Esc(line), @"\[((?:[EADFMH]\d{1,2})(?:\s*,\s*[EADFMH]\d{1,2})*)\]", x =>
             string.Join(" ", x.Groups[1].Value.Split(',').Select(i => i.Trim()).Select(id => ids.Contains(id)
                 ? $"<a class=src href=\"https://nova.src/{index}/{id}\" title=\"{Esc(m.Src.First(s => s.Id == id).Title)}\">{id}</a>" : $"[{id}]")));
         var sb = new StringBuilder();
         bool advice = false;
-        foreach (var raw in (m.Text ?? "").Replace("\r\n", "\n").Split('\n'))
+        var allLines = (m.Text ?? "").Replace("\r\n", "\n").Split('\n');
+        var table = new List<string>();
+        void FlushTable()
+        {
+            if (table.Count == 0) return;
+            var t = FileTalk.Tables(string.Join("\n", table));
+            if (t.Count > 0) sb.Append(Links2(FileTalk.TableHtml(t[0])));
+            else foreach (var l in table) sb.Append("<div>").Append(Esc(l)).Append("</div>");
+            table.Clear();
+        }
+        // In a table cell, [F1]/[D2] become links too.
+        string Links2(string html) => Regex.Replace(html, @"\[((?:[EADFMH]\d{1,2})(?:\s*,\s*[EADFMH]\d{1,2})*)\]", x =>
+            string.Join(" ", x.Groups[1].Value.Split(',').Select(i => i.Trim()).Select(id => ids.Contains(id) ? $"<a class=src href=\"https://nova.src/{index}/{id}\">{id}</a>" : $"[{id}]")));
+        foreach (var raw in allLines)
         {
             var line = raw.TrimEnd();
+            if (line.TrimStart().StartsWith("|")) { table.Add(line); continue; }
+            FlushTable();
             if (line.Contains("🎓")) { if (advice) sb.Append("</div>"); advice = true; sb.Append("<div class=advice><b>").Append(Esc(line)).Append("</b>"); continue; }
             if (line.Trim().Length == 0) { sb.Append("<br>"); continue; }
             var html = Regex.Replace(Links(line), @"\*\*(.+?)\*\*", "<b>$1</b>");
@@ -171,6 +186,7 @@ static class Conversations
             var cls = line.TrimStart().StartsWith("⚠") ? " class=warn" : line.Contains("Not found in your", StringComparison.OrdinalIgnoreCase) ? " class=nf" : "";
             sb.Append($"<div{cls}>").Append(html).Append("</div>");
         }
+        FlushTable();
         if (advice) sb.Append("</div>");
         if (m.Check.Length > 0)
         {
@@ -188,7 +204,7 @@ static class Conversations
             sb.Append("<details class=srcs><summary>").Append(m.Src.Count).Append(" sources</summary>")
               .Append(string.Join("", m.Src.Select(s => $"<div><a class=src href=\"https://nova.src/{index}/{s.Id}\">{s.Id}</a> {Esc(s.Title)}</div>"))).Append("</details>");
         if (actions)
-            sb.Append($"<div class=acts><a href=\"https://nova.act/draft/{index}\">✦ Draft reply</a><a href=\"https://nova.act/copy/{index}\">⧉ Copy</a><a href=\"https://nova.act/task/{index}\">📌 Save as task</a><a href=\"https://nova.act/good/{index}\">👍</a><a href=\"https://nova.act/bad/{index}\">👎</a></div>");
+            sb.Append($"<div class=acts><a href=\"https://nova.act/draft/{index}\">✦ Draft reply</a><a href=\"https://nova.act/copy/{index}\">⧉ Copy</a><a href=\"https://nova.act/task/{index}\">📌 Save as task</a>{(FileTalk.Tables(m.Text).Count > 0 ? $"<a href=\"https://nova.act/xlsx/{index}\">📊 Comparison sheet → Excel</a><a href=\"https://nova.act/tsv/{index}\">⧉ Copy table</a>" : "")}<a href=\"https://nova.act/good/{index}\">👍</a><a href=\"https://nova.act/bad/{index}\">👎</a></div>");
         return sb.ToString();
     }
 
@@ -273,7 +289,7 @@ class ChatHistoryForm : NovaForm
                 {
                     if (e.Uri.StartsWith("about:") || e.Uri.StartsWith("data:")) return;
                     e.Cancel = true;
-                    var m = Regex.Match(e.Uri, @"nova\.src/(\d+)/([EAD]\d+)");
+                    var m = Regex.Match(e.Uri, @"nova\.src/(\d+)/([EADFMH]\d+)");
                     if (m.Success && shown != null && int.Parse(m.Groups[1].Value) < shown.Msgs.Count)
                     {
                         var s = shown.Msgs[int.Parse(m.Groups[1].Value)].Src.FirstOrDefault(x => x.Id == m.Groups[2].Value);

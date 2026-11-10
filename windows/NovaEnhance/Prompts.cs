@@ -345,7 +345,7 @@ static class Prompts
     static string Col(int i) { var s = ""; i++; while (i > 0) { var m = (i - 1) % 26; s = (char)('A' + m) + s; i = (i - 1) / 26; } return s; }
 
     /// <summary>A real .xlsx (header row bold and frozen, filters on, column widths).</summary>
-    static void Xlsx(string path, string title, string[] head, List<string[]> data)
+    internal static void Xlsx(string path, string title, string[] head, List<string[]> data)
     {
         using var fs = File.Create(path);
         using var z = new ZipArchive(fs, ZipArchiveMode.Create);

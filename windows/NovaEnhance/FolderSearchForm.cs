@@ -40,7 +40,8 @@ class FolderSearchForm : NovaForm
 
     // ---------------------------------------------------------------- state
     readonly ConcurrentQueue<(FileHit Hit, string Removed)> inbox = new();
-    string namesOnlyFor;   // a drawing number found by name: the next press also searches inside the files
+    string namesOnlyFor;
+    AttachBar attach;   // a drawing number found by name: the next press also searches inside the files
     readonly List<FileHit> all = new();
     readonly Dictionary<string, FileHit> byPath = new(StringComparer.OrdinalIgnoreCase);
     readonly List<FolderIndex.Problem> problems = new();
@@ -111,6 +112,10 @@ class FolderSearchForm : NovaForm
             top.FitAll(); AskAi();
         });
         instrRow.Controls.Add(fp);
+        // 📎 Files for the question: attach, Ctrl+V or drop — read (OCR), check against this folder, or compare them in a table.
+        attach = new AttachBar();
+        instrRow.Controls.Add(attach);
+        Shown += (_, _) => attach.Hook(query, this);
         fInstr = top.Add(Th.Prose(Th.Box(true, 3)), true);
         fInstr.PlaceholderText = "Optional — e.g. Only from the IFC specification and the BOQ · ignore superseded revisions · give a table: item, value, source · in Arabic · export to Word";
         fInstr.Visible = Prompts.ShowMore && Store.Str("win_fs_instr").Length > 0;
@@ -204,6 +209,11 @@ class FolderSearchForm : NovaForm
             if (lastQuestion.Length == 0) { status.Text = "Ask a question first"; return; }
             var sp = Prompts.AskSave(this, new SavedPrompt { Name = lastQuestion.Length > 40 ? lastQuestion[..40] : lastQuestion, Question = lastQuestion, Instructions = fInstr.Text.Trim(), Where = "folder|" + lastRoot });
             if (sp != null) status.Text = $"⭐ Saved “{sp.Name}” — find it under ⭐ My prompts";
+        }));
+        arow.Controls.Add(Th.B("📊 Table → Excel", () =>
+        {
+            try { var x = FileTalk.ExportXlsx(lastAnswer, lastQuestion.Length > 0 ? lastQuestion : "Comparison"); Shell.Open(x); status.Text = "📊 Saved: " + x; }
+            catch (Exception ex) { status.Text = "⚠ " + ex.Message; }
         }));
         arow.Controls.Add(Th.B("👍", Good));
         arow.Controls.Add(Th.B("👎 Right file is…", Bad));
@@ -918,6 +928,7 @@ class FolderSearchForm : NovaForm
         var root = CurrentRoot();
         Speller.FixBeforeSearch(query, AskAi);
         var q = query.Text.Trim();
+        if (q.Length == 0 && attach.Files.Count > 0) q = attach.Files.Count >= 2 ? "Compare the attached files in a comparison table, then the key differences and your recommendation." : "Read the attached file and check it against this folder.";
         if (q.Length == 0) { status.Text = "Type your question"; query.Focus(); return; }
         if (!CheckRoot(root)) return;
         if (asking) return;
@@ -973,6 +984,14 @@ class FolderSearchForm : NovaForm
                 stMsg => ui?.Post(_ => { if (!status.IsDisposed) status.Text = stMsg; }, null), my.Token), my.Token);
             passages = covered ? ns.Drawings.Concat(ns.Docs).ToList() : await Task.Run(() => FolderIndex.Retrieve(root, terms, 14, 4, boosts));
             passages.AddRange(ns.Emails.Take(3).Concat(ns.History.Take(1)));
+            // 📎 Attached files first.
+            var att = new List<FolderIndex.Passage>();
+            foreach (var f in attach.Files.ToList())
+            {
+                var txt = await FileTalk.Text(f, this, my.Token, stMsg => status.Text = stMsg);
+                att.Add(new FolderIndex.Passage { Kind = "file", Path = f, Root = Path.GetDirectoryName(f) ?? "", Loc = "📎 attached", Goto = "", Text = txt.Length > 7000 ? txt[..7000] : txt });
+            }
+            passages.InsertRange(0, att);
             if (covered) p.Files = (int)Projects.Status.Values.Where(s => (root + "\\").StartsWith(s.Folder.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase)).Sum(s => s.Files);
             bool deep = false;
             if (passages.Count == 0)
@@ -1011,7 +1030,7 @@ class FolderSearchForm : NovaForm
                 return;
             }
             if (sees == "ask" && !Confirm(nFiles)) return;
-            await Answer(false, my.Token);
+            await Answer(att.Count > 0, my.Token);
 
             // The extracts didn't hold the answer: one deep search with wider words (asked again before sending more).
             if (!deep && FolderAsk.NotFound(lastAnswer) && !my.IsCancellationRequested)
@@ -1106,6 +1125,7 @@ class FolderSearchForm : NovaForm
         {
             var ins = fInstr.Text.Trim();
             var qq = lastQuestion + (ins.Length > 0 ? "\n\nInstructions from the user (follow them for what to include or exclude, the format, the length and the language): " + ins : "");
+            if (passages.Any(x => x.Loc == "📎 attached")) qq += "\n\nThe extracts marked “📎 attached” are the files the user attached (in this order: F1, F2…)." + FileTalk.Rules;
             var fresh = history.Length == 0 && !detailed;
             var a = await FolderAsk.Answer(qq, passages, detailed, detailed ? "" : history, ct);
             lastAnswer = a;

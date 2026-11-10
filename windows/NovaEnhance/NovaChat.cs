@@ -102,6 +102,26 @@ class NovaChat
                     if (d.ShowDialog(owner) == DialogResult.OK) Post(new JsonObject { ["t"] = "files", ["paths"] = new JsonArray(d.FileNames.Select(x => (JsonNode)x).ToArray()) });
                     break;
                 }
+                case "pasteFile":
+                    // 📎 A screenshot or files pasted / dropped in the chat: saved, then attached.
+                    try
+                    {
+                        var path = FileTalk.SaveBytes(m["name"]?.ToString() ?? "", Convert.FromBase64String(m["b64"]?.ToString() ?? ""));
+                        Post(new JsonObject { ["t"] = "files", ["paths"] = new JsonArray(path) });
+                    }
+                    catch (Exception e) { Post(new JsonObject { ["t"] = "error", ["text"] = "Could not add the file: " + e.Message }); }
+                    break;
+                case "pasteClipboard":
+                {
+                    var got = FileTalk.FromClipboard();
+                    if (got.Count > 0) Post(new JsonObject { ["t"] = "files", ["paths"] = new JsonArray(got.Select(x => (JsonNode)x).ToArray()) });
+                    break;
+                }
+                case "exportTable":
+                    try { var x = FileTalk.ExportXlsx(m["text"]?.ToString() ?? "", m["title"]?.ToString() ?? "Comparison"); Shell.Open(x); }
+                    catch (Exception e) { Post(new JsonObject { ["t"] = "error", ["text"] = e.Message }); }
+                    break;
+                case "copyTable": Clipboard.SetText(FileTalk.Tsv(m["text"]?.ToString() ?? "") is { Length: > 0 } tsv ? tsv : " "); break;
                 case "findEmail": FindEmail(m["q"]?.ToString() ?? ""); break;
                 case "send": await Send(m); break;
                 case "openSource": OpenSource(m["src"] as JsonObject); break;
@@ -229,6 +249,12 @@ class NovaChat
             List<Seg> segs = null;
             try { segs = (await Task.Run(() => Projects.Read(f, CancellationToken.None))).Segs; } catch { segs = null; }   // one store: read once, known by all Nova
             segs = (segs ?? new()).Where(s => (s.Text ?? "").Trim().Length > 0).ToList();
+            if (segs.Sum(x => x.Text.Length) < 30 && (FileTalk.IsPicture(f) || f.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)))
+            {
+                // 📎 A screenshot or a scan: read by vision (asked first unless the local AI does it).
+                var v = await FileTalk.Text(f, owner, CancellationToken.None, t => Post(new JsonObject { ["t"] = "progress", ["text"] = t }));
+                if (!v.StartsWith("(")) segs = new List<Seg> { new("read by vision", v) };
+            }
             if (segs.Count == 0) { notes.Add("no readable text in " + Path.GetFileName(f)); continue; }
             var total = segs.Sum(s => s.Text.Length);
             var pick = total <= 14000 ? segs : segs.OrderByDescending(s => terms.Count(w => s.Text.Contains(w, StringComparison.OrdinalIgnoreCase))).Take(8).OrderBy(s => segs.IndexOf(s)).ToList();
@@ -335,6 +361,8 @@ class NovaChat
                        "If two extracts disagree, write a line starting with ⚠ and cite both. If the extracts do not contain the answer, say so plainly, then you may add general knowledge clearly marked as such. Never invent document content. ");
         else sys.Append("Answer from general knowledge and say when something must be checked against the project documents or the local code/authority. ");
         sys.Append(detailed ? "Give a complete, well-structured answer with headings or bullets where useful. " : "Be concise: the direct answer first, then at most 6 short lines or bullets. ");
+        if (sources.Any(x => x.Kind == "file"))
+            sys.Append(" Here the ATTACHED FILES are the extracts from the user's files (their labels are file names); cite them by their numbers." + FileTalk.Rules);
         if (about) sys.Append(Modes.ProfileNote());
 
         var user = new StringBuilder();

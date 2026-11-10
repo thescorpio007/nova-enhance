@@ -58,7 +58,7 @@
   function emptyView() {
     var e = el("div", "empty");
     e.appendChild(el("div", "big", "✦ Nova Chat"));
-    var p = el("div"); p.innerHTML = "Ask anything. Add <b>About me</b>, a <b>folder</b>, <b>files</b> or <b>emails</b> below and Nova answers from them, with sources you can open.";
+    var p = el("div"); p.innerHTML = "Ask anything. Add <b>About me</b>, a <b>folder</b>, <b>files</b> or <b>emails</b> below and Nova answers from them, with sources you can open. 📎 Paste (Ctrl+V) a screenshot or copied files, or drop files here — then ask: <b>read it</b> · <b>check it</b> · <b>compare them in a table</b>.";
     e.appendChild(p);
     var ex = el("div", "ex");
     ["Which doors need a 90-minute fire rating in this folder?", "Summarise the attached email and list what I must reply to.", "Rewrite this method statement paragraph in clear professional English:", "What are the usual clear widths for escape corridors in offices?"].forEach(function (t) {
@@ -91,6 +91,10 @@
     }
     var acts = el("div", "acts");
     btn("⧉ Copy", function () { post({ t: "copy", text: m.text }); });
+    if (/^\s*\|.*\|/m.test(m.text || "")) {
+      btn("📊 Comparison sheet → Excel", function () { post({ t: "exportTable", text: m.text, title: (cur && cur.title) || "Comparison" }); });
+      btn("⧉ Copy table", function () { post({ t: "copyTable", text: m.text }); });
+    }
     if (cur.ctxUsed && cur.ctxUsed.emails && cur.ctxUsed.emails.length) btn("✉ Draft reply to " + cur.ctxUsed.emails[0].from.split(" ")[0], function () { post({ t: "draftReply", id: cur.id, idx: idx }); });
     btn("⇩ Save as Word", function () { post({ t: "saveWord", id: cur.id, idx: idx }); });
     btn("📌 Save as task", function () { post({ t: "saveTask", id: cur.id, idx: idx }); });
@@ -101,8 +105,28 @@
   }
   // Light formatting: **bold**, bullets, and [n] citations that open the source.
   function render(box, text, sources) {
-    var lines = text.split("\n");
+    var lines = text.split("\n"), tbl = null;
+    // 📊 Markdown tables (comparison sheets) become real tables.
+    function flushTable() {
+      if (!tbl) return;
+      var rows = tbl.filter(function (l) { return !/^\|?\s*:?-{2,}/.test(l.trim()); }).map(function (l) {
+        return l.trim().replace(/^\||\|$/g, "").split("|").map(function (c) { return c.trim().replace(/\*\*(.+?)\*\*/g, "$1"); });
+      });
+      tbl = null;
+      if (rows.length < 2) return;
+      var wrap = el("div", "tblwrap"), t = el("table", "cmp");
+      rows.forEach(function (r, ri) {
+        var tr = el("tr");
+        var note = r[r.length - 1] || "";
+        if (ri > 0 && note.indexOf("⚠") >= 0) tr.className = "diff"; else if (ri > 0 && note.indexOf("✓") >= 0) tr.className = "best";
+        for (var i = 0; i < rows[0].length; i++) tr.appendChild(el(ri === 0 ? "th" : "td", null, r[i] || ""));
+        t.appendChild(tr);
+      });
+      wrap.appendChild(t); box.appendChild(wrap);
+    }
     lines.forEach(function (line, li) {
+      if (/^\s*\|.*\|/.test(line)) { (tbl = tbl || []).push(line); return; }
+      flushTable();
       var bullet = /^\s*[-*•]\s+/.test(line);
       if (bullet) line = "• " + line.replace(/^\s*[-*•]\s+/, "");
       line = line.replace(/^#{1,4}\s+/, "");
@@ -120,6 +144,7 @@
       });
       if (li < lines.length - 1) box.appendChild(document.createTextNode("\n"));
     });
+    flushTable();
   }
 
   function ctxLabel(c) {
@@ -196,6 +221,26 @@
   $("mic").onclick = function () { post({ t: "mic", on: !recording }); };
   $("pclose").onclick = function () { $("picker").className = "hide"; };
   $("pq").onkeydown = function (e) { if (e.key === "Enter") { $("presults").innerHTML = "<div class='muted small'>Searching…</div>"; post({ t: "findEmail", q: $("pq").value }); } if (e.key === "Escape") $("picker").className = "hide"; };
+  // 📎 Paste (Ctrl+V a screenshot or files copied in Explorer) or drop files: attached to the question.
+  function sendFile(f) {
+    if (f.size > 40 * 1024 * 1024) { thinking("⚠ " + f.name + " is too big to drop here — use 📄 Files"); return; }
+    var r = new FileReader();
+    r.onload = function () { var s = String(r.result); post({ t: "pasteFile", name: f.name || "", b64: s.substring(s.indexOf(",") + 1) }); };
+    r.readAsDataURL(f);
+  }
+  document.addEventListener("paste", function (e) {
+    var cd = e.clipboardData; if (!cd) return;
+    var types = Array.prototype.slice.call(cd.types || []);
+    if (types.indexOf("Files") < 0) return;
+    e.preventDefault();
+    post({ t: "pasteClipboard" });
+  });
+  document.addEventListener("dragover", function (e) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; });
+  document.addEventListener("drop", function (e) {
+    e.preventDefault();
+    var fs = e.dataTransfer && e.dataTransfer.files;
+    if (fs) for (var i = 0; i < fs.length && i < 6; i++) sendFile(fs[i]);
+  });
   if (W) W.addEventListener("message", function (e) { onMsg(e.data); });
   drawChips(); drawChat();
   post({ t: "init" });

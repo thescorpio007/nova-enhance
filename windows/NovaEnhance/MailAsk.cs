@@ -59,6 +59,7 @@ class MailAskForm : NovaForm
     readonly List<(string Name, string Path, Seg Seg)> attPool = new();
     Conversation conv;
     string pendingHtml;
+    AttachBar attach;
 
     public MailAskForm()
     {
@@ -67,7 +68,7 @@ class MailAskForm : NovaForm
         MinimumSize = new Size(760, 560);
         top = new Stack { Dock = DockStyle.Top, AutoScroll = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(16, 10, 16, 6) };
         webHost = new Panel { Dock = DockStyle.Fill, BackColor = Th.Bg };
-        var bottom = new Panel { Dock = DockStyle.Bottom, Height = 116, BackColor = Color.FromArgb(0x0E, 0x11, 0x17), Padding = new Padding(16, 8, 16, 6) };
+        var bottom = new Panel { Dock = DockStyle.Bottom, Height = 152, BackColor = Color.FromArgb(0x0E, 0x11, 0x17), Padding = new Padding(16, 8, 16, 6) };
         Controls.Add(webHost); Controls.Add(bottom); Controls.Add(top);
 
         var hr = top.Add(Th.Row());
@@ -105,6 +106,10 @@ class MailAskForm : NovaForm
         row.Controls.Add(prompt, 0, 0);
         row.Controls.Add(btns, 1, 0);
         bottom.Controls.Add(row);
+        // 📎 Files for this conversation: attach, Ctrl+V a screenshot or copied files, or drop them — read (OCR), check, compare.
+        attach = new AttachBar { Dock = DockStyle.Top };
+        bottom.Controls.Add(attach);
+        attach.Hook(prompt, this);
 
         ResizeEnd += (_, _) => { if (WindowState == FormWindowState.Normal) { Store.SetInt("win_mailask_w", Width); Store.SetInt("win_mailask_h", Height); } };
         FormClosing += (_, e) => { if (e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; cts?.Cancel(); Hide(); } };
@@ -347,7 +352,10 @@ class MailAskForm : NovaForm
         if (anchor == null) { status.Text = "No email — open Nova from an email."; return; }
         Speller.FixBeforeSearch(prompt, Ask);
         var p = prompt.Text.Trim();
-        if (p.Length == 0) p = "Give me the key technical points of this email, what they ask from me, and a solid technical answer.";
+        var files = attach?.Files.ToList() ?? new List<string>();
+        if (p.Length == 0) p = files.Count >= 2 ? "Compare the attached files in a comparison table, then the key differences and your recommendation."
+                             : files.Count == 1 ? "Read the attached file and tell me what matters for this email."
+                             : "Give me the key technical points of this email, what they ask from me, and a solid technical answer.";
         using var privateWork = Ai.Private();
         if (Ai.Current() == null) { status.Text = "Add an AI in Settings → AI & API keys."; return; }
         cts?.Cancel();
@@ -356,7 +364,7 @@ class MailAskForm : NovaForm
         conv ??= new Conversation { Kind = "email", Title = anchor.Subject ?? "Email", Ref = anchor.Entry ?? "", RefStore = anchor.StoreId ?? "" };
         conv.Folder = folder;
         var history = string.Join("\n", conv.Msgs.TakeLast(6).Select(m => (m.Role == "user" ? "User: " : "Nova: ") + Cut(m.Text, 1500)));
-        var userMsg = new ConvMsg { Role = "user", Text = p };
+        var userMsg = new ConvMsg { Role = "user", Text = p + (files.Count > 0 ? "\n📎 " + string.Join(" · ", files.Select(Path.GetFileName)) : "") };
         conv.Msgs.Add(userMsg);
         prompt.Text = "";
         Draw("✦ Nova is reading the email and its sources…");
@@ -371,6 +379,13 @@ class MailAskForm : NovaForm
             var words = terms.SelectMany(t => Regex.Split(t.ToLowerInvariant(), @"\W+")).Where(w => w.Length > 2).Distinct().ToList();
 
             var sources = new List<AskSource> { new() { Id = "E0", Mail = anchor, Title = $"This email · {(anchor.Sent ? "You" : anchor.FromName)} · {anchor.Date:dd MMM yyyy}", Text = Cut(fullBody, 9000) } };
+            // 📎 Attached files: [F1]… (read once, kept in the one Nova store).
+            int fi = 1;
+            foreach (var f in files)
+            {
+                var txt = await FileTalk.Text(f, this, my.Token, stMsg => status.Text = stMsg);
+                sources.Add(new AskSource { Id = "F" + fi++, Title = "📎 " + Path.GetFileName(f), Text = Cut(txt, files.Count > 1 ? 7000 : 12000), Path = f });
+            }
             sources.AddRange(thread);
             int a = 1;
             var firstOf = attPool.GroupBy(x => x.Name).Select(g => g.First());
@@ -492,7 +507,7 @@ class MailAskForm : NovaForm
             status.Text = $"✦ {label} is writing the answer from {sources.Count} sources…";
             Draw($"✦ {label} is writing the answer from {sources.Count} sources…");
             var user = (history.Length > 0 ? "EARLIER IN THIS CONVERSATION:\n" + history + "\n\n" : "") + "SOURCES:\n" + block + "\nTHE USER'S PROMPT:\n" + p;
-            var ans = (await Ai.Chat(AnswerRules + NovaSearch.SourceRule + " [M…] = 🧠 Nova Memory, [H…] = 🕘 an earlier conversation." + FolderAsk.AdviceRule + Modes.ProfileNote(), user, false, false, null, my.Token)).Trim();
+            var ans = (await Ai.Chat(AnswerRules + NovaSearch.SourceRule + " [M…] = 🧠 Nova Memory, [H…] = 🕘 an earlier conversation." + (files.Count > 0 ? FileTalk.Rules : "") + FolderAsk.AdviceRule + Modes.ProfileNote(), user, false, false, null, my.Token)).Trim();
 
             status.Text = "🔎 Technical check — your AI re-reads its answer against the sources…";
             Draw("🔎 Technical check — re-reading the answer against the sources…");
@@ -553,7 +568,7 @@ class MailAskForm : NovaForm
         {
             if (e.Uri.StartsWith("about:", StringComparison.OrdinalIgnoreCase) || e.Uri.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) return;
             e.Cancel = true;
-            var m = Regex.Match(e.Uri, @"nova\.src/(\d+)/([EAD]\d+)");
+            var m = Regex.Match(e.Uri, @"nova\.src/(\d+)/([EADFMH]\d+)");
             if (m.Success) { OpenSource(int.Parse(m.Groups[1].Value), m.Groups[2].Value); return; }
             var act = Regex.Match(e.Uri, @"nova\.act/(\w+)/(\d+)");
             if (act.Success) { Act(act.Groups[1].Value, int.Parse(act.Groups[2].Value)); return; }
@@ -584,6 +599,11 @@ class MailAskForm : NovaForm
         switch (what)
         {
             case "copy": Clipboard.SetText(m.Text); status.Text = "⧉ Copied"; break;
+            case "xlsx":
+                try { var x = FileTalk.ExportXlsx(m.Text, anchor?.Subject ?? "Comparison"); Shell.Open(x); status.Text = "📊 Saved: " + x; }
+                catch (Exception ex) { status.Text = "⚠ " + ex.Message; }
+                break;
+            case "tsv": Clipboard.SetText(FileTalk.Tsv(m.Text)); status.Text = "⧉ Table copied — paste it into Excel or a Word table"; break;
             case "draft": DraftReply(m.Text); break;
             case "task":
                 var t = Work.FromText($"{anchor?.Subject} — Nova answer", q, $"✎ {q}\n\n{m.Text}", "ask-email",
@@ -611,7 +631,7 @@ class MailAskForm : NovaForm
         try
         {
             using var privateWork = Ai.Private();
-            var clean = Regex.Replace(answer, @"\s*\[(?:[EAD]\d{1,2})(?:\s*,\s*[EAD]\d{1,2})*\]", "");
+            var clean = Regex.Replace(answer, @"\s*\[(?:[EADFMH]\d{1,2})(?:\s*,\s*[EADFMH]\d{1,2})*\]", "");
             clean = Regex.Replace(clean, @"🎓[\s\S]*$", "").Trim();
             var d = await Assistant.Draft(anchor, "Base the reply on this checked technical answer (keep its facts and values; do not add new facts): \n" + clean + (extra.Trim().Length > 0 ? "\n\nThe user's instructions for the reply: " + extra : ""), CancellationToken.None);
             Outlook.Reply(anchor.Entry, anchor.StoreId, d, true);
