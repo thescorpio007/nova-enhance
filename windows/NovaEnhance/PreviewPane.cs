@@ -177,6 +177,7 @@ static class OfficePdf
 {
     public static string Get(string path)
     {
+        path = LongPath.Usable(path);
         var fi = new FileInfo(path);
         var key = Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes(path.ToLowerInvariant() + "|" + fi.LastWriteTimeUtc.Ticks + "|" + fi.Length)))[..20];
         var dir = Path.Combine(Paths.Cache, "preview");
@@ -230,6 +231,7 @@ class PreviewPane : UserControl
     readonly FlowLayoutPanel thumbs;
     readonly PageCanvas canvas;
     readonly RichTextBox textView;
+    readonly SheetView sheetView;
     readonly Button fitW, fitP, fullBtn, popBtn;
 
     FileHit hit;
@@ -289,6 +291,8 @@ class PreviewPane : UserControl
         textView = new RichTextBox { Dock = DockStyle.Fill, ReadOnly = true, BorderStyle = BorderStyle.None, BackColor = Th.Card, ForeColor = Th.Text, Font = Th.F(11), Visible = false, DetectUrls = false };
         hint = new Label { Dock = DockStyle.Bottom, Height = 22, ForeColor = Th.Muted, BackColor = BackColor, Font = Th.F(8.5f), TextAlign = ContentAlignment.MiddleCenter,
             Text = "Ctrl + wheel = zoom · drag = move · ← → = hits · PgUp/PgDn = pages · double-click = zoom on the yellow mark" };
+        sheetView = new SheetView { Dock = DockStyle.Fill, Visible = false };
+        Controls.Add(sheetView);
         Controls.Add(canvas);
         Controls.Add(textView);
         Controls.Add(thumbs);
@@ -322,7 +326,7 @@ class PreviewPane : UserControl
 
     public void ShowMessage(string s)
     {
-        canvas.Visible = true; textView.Visible = false;
+        canvas.Visible = true; textView.Visible = false; sheetView.Visible = false;
         canvas.SetPage(null, new SizeF(816, 1056), new());
         canvas.Message = s;
         canvas.Invalidate();
@@ -347,6 +351,14 @@ class PreviewPane : UserControl
         }
         var my = ++loadId;
         hit = h; matcher = m;
+        // ✓ The file is really there (followed when its folder was renamed or moved).
+        if (string.IsNullOrEmpty(h.Remote) && !string.IsNullOrEmpty(h.Path))
+        {
+            var real = await Task.Run(() => FileCheck.Resolve(h.Path, out var w) is { } r ? (r, w) : ((string)null, w));
+            if (my != loadId) return;
+            if (real.Item1 == null) { title.Text = "👁 " + h.Name; ShowText(h, m, "⚠ " + real.Item2 + "\nWhat Nova had read from it:\n\n"); return; }
+            if (!real.Item1.Equals(h.Path, StringComparison.OrdinalIgnoreCase)) h.Path = real.Item1;
+        }
         hits.Clear(); marks.Clear();
         foreach (var p in h.Pieces)
         {
@@ -359,10 +371,25 @@ class PreviewPane : UserControl
         if (tempFile != null) { try { File.Delete(tempFile); } catch { } tempFile = null; }
         thumbs.Controls.Clear();
         var paged = hits.Any(x => x.Page > 0);
-        // A whole file to look at (an email attachment, no search hits): draw its pages from page 1.
         var ext = Path.GetExtension(h.Path ?? "").ToLowerInvariant();
-        var whole = h.Pieces.Count == 0 && ext is ".pdf" or ".jpg" or ".jpeg" or ".png" or ".tif" or ".tiff" or ".bmp" or ".docx" or ".docm" or ".doc" or ".rtf" or ".odt" or ".pptx" or ".pptm" or ".ppt";
-        if (!paged && !whole) { ShowText(h, m); return; }
+        // 📊 Excel: Nova's own sheet view, found cells in yellow.
+        if (string.IsNullOrEmpty(h.Remote) && ext is ".xlsx" or ".xlsm" or ".xls" or ".xlsb" or ".csv")
+        {
+            canvas.Visible = false; textView.Visible = false; sheetView.Visible = true;
+            pageOf.Text = ""; pageBox.Text = "";
+            hitLbl.Text = $"{h.Pieces.Sum(p => Math.Max(1, p.Matches?.Count ?? 1))} hits";
+            sheetView.Load(h.Path, m, h.Pieces.FirstOrDefault(p => (p.Goto ?? "").StartsWith("cell:"))?.Goto);
+            return;
+        }
+        // CAD / BIM / models: not previewed.
+        if (FileType.IsModel(h.Path))
+        {
+            ShowText(h, m, "📐 CAD / BIM file — not previewed. Double-click to open it in its program, or right-click → 📁 Show in folder. What Nova found in it:\n\n");
+            return;
+        }
+        // PDF, Word, PowerPoint, pictures: always the real page — the mark is searched page by page when the page isn't known.
+        var drawable = ext is ".pdf" or ".jpg" or ".jpeg" or ".png" or ".tif" or ".tiff" or ".bmp" or ".docx" or ".docm" or ".doc" or ".rtf" or ".odt" or ".pptx" or ".pptm" or ".ppt";
+        if (!paged && !drawable) { ShowText(h, m); return; }
         ShowMessage("Opening the page…");
         try
         {
@@ -370,7 +397,7 @@ class PreviewPane : UserControl
             if (my != loadId) { d?.Dispose(); return; }
             doc = d;
             if (doc == null) { ShowText(h, m); return; }
-            canvas.Visible = true; textView.Visible = false;
+            canvas.Visible = true; textView.Visible = false; sheetView.Visible = false;
             pageOf.Text = $"of {doc.Pages:N0}";
             if (hits.Count == 0)
             {
@@ -426,7 +453,7 @@ class PreviewPane : UserControl
     /// <summary>Excel, text, emails, CAD/BIM: the found places as text with the words in yellow.</summary>
     void ShowText(FileHit h, Matcher m, string intro = "")
     {
-        canvas.Visible = false; textView.Visible = true;
+        canvas.Visible = false; textView.Visible = true; sheetView.Visible = false;
         pageOf.Text = ""; pageBox.Text = "";
         hitLbl.Text = $"{h.Pieces.Sum(p => p.Matches?.Count ?? 0)} hits";
         textView.Clear();
@@ -468,6 +495,18 @@ class PreviewPane : UserControl
         hitLbl.Text = $"{i + 1} / {hits.Count}";
         await ShowPage(pg > 0 ? pg : 1, fit);
         var list = await GetMarks(page);
+        // The page isn't known (found by name, or in remembered text): look for the mark page by page.
+        if (list.Count == 0 && hits[i].Page == 0 && matcher != null && doc.Pages > 1)
+        {
+            hitLbl.Text = "looking for the mark…";
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            for (int p2 = 2; p2 <= Math.Min(doc.Pages, 400) && sw.Elapsed.TotalSeconds < 12; p2++)
+            {
+                var l2 = await GetMarks(p2);
+                if (l2.Count > 0) { hits[i] = (p2, hits[i].K); await ShowPage(p2, false); list = l2; break; }
+            }
+            hitLbl.Text = $"{i + 1} / {hits.Count}";
+        }
         // Word page numbers can differ by a page or two once printed: look at the neighbours.
         if (list.Count == 0 && hits[i].Page > 0)
             foreach (var d in new[] { 1, -1, 2, -2 })

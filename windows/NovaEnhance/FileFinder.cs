@@ -44,9 +44,17 @@ class FileFinderForm : NovaForm
             Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, MultiSelect = true, BackColor = Th.Card, ForeColor = Th.Text,
             BorderStyle = BorderStyle.None, Font = Th.F(10), HideSelection = false
         };
-        foreach (var (h, w) in new[] { ("File", 430), ("Project", 80), ("Rev", 60), ("Status", 110), ("Modified", 110), ("Size", 80), ("Folder", 520) })
+        foreach (var (h, w) in new[] { ("File", 430), ("Type", 80), ("Project", 80), ("Rev", 60), ("Status", 110), ("Modified", 110), ("Size", 80), ("Folder", 520) })
             lv.Columns.Add(h, w);
         lv.DoubleClick += (_, _) => OpenSel();
+        // Click a column header to sort (Type, Project, Modified, Size…); click again to reverse.
+        int sortCol = -1; bool desc = false;
+        lv.ColumnClick += (_, e) =>
+        {
+            desc = sortCol == e.Column ? !desc : e.Column is 5 or 6; sortCol = e.Column;
+            lv.ListViewItemSorter = new Cmp(e.Column, desc);
+            lv.Sort();
+        };
         lv.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) { OpenSel(); e.Handled = true; } };
         lv.MouseUp += (_, e) => { if (e.Button == MouseButtons.Right && Sel().Count > 0) Menu().Show(lv, e.Location); };
 
@@ -106,7 +114,7 @@ class FileFinderForm : NovaForm
         {
             var it = new ListViewItem(new[]
             {
-                f.Name, f.Project, f.Rev, f.Status == "latest" ? "✓ latest" : f.Status == "superseded" ? "superseded" : f.Status,
+                f.Name, FileType.Of(f.Path), f.Project, f.Rev, f.Status == "latest" ? "✓ latest" : f.Status == "superseded" ? "superseded" : f.Status,
                 f.Modified > DateTime.MinValue ? f.Modified.ToString("dd MMM yyyy") : "", Projects.Size(f.Size), Path.GetDirectoryName(f.Path) ?? ""
             }) { Tag = f };
             if (f.Status == "superseded" || f.Status.StartsWith("in an old")) it.ForeColor = Th.Muted;
@@ -148,5 +156,24 @@ class FileFinderForm : NovaForm
             box.Text = Revisions.Parse(s[0].Path, 0).Key;
         });
         return m;
+    }
+
+    sealed class Cmp : System.Collections.IComparer
+    {
+        readonly int col; readonly bool desc;
+        public Cmp(int c, bool d) { col = c; desc = d; }
+        public int Compare(object a, object b)
+        {
+            var x = (ListViewItem)a; var y = (ListViewItem)b;
+            var fx = (Projects.FileRow)x.Tag; var fy = (Projects.FileRow)y.Tag;
+            int r = col switch
+            {
+                5 => fx.Modified.CompareTo(fy.Modified),
+                6 => fx.Size.CompareTo(fy.Size),
+                _ => string.Compare(x.SubItems[col].Text, y.SubItems[col].Text, StringComparison.OrdinalIgnoreCase)
+            };
+            if (r == 0) r = string.Compare(x.Text, y.Text, StringComparison.OrdinalIgnoreCase);
+            return desc ? -r : r;
+        }
     }
 }

@@ -376,6 +376,24 @@ static class Projects
         return parts.Count == 0 ? "0" : string.Join(" OR ", parts);
     }
 
+    /// <summary>Files with exactly this name anywhere in your projects (to find a file that moved).</summary>
+    public static List<FileRow> ByFileName(string name)
+    {
+        var res = new List<FileRow>();
+        if (string.IsNullOrEmpty(name)) return res;
+        try
+        {
+            using var c = Db();
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "SELECT path,size,mtime FROM pnames WHERE lower(name)=lower($n) LIMIT 20";
+            cmd.Parameters.AddWithValue("$n", name);
+            using var r = cmd.ExecuteReader();
+            while (r.Read()) res.Add(new FileRow { Path = r.GetString(0), Name = name, Size = r.IsDBNull(1) ? 0 : r.GetInt64(1), Modified = r.IsDBNull(2) ? DateTime.MinValue : new DateTime(r.GetInt64(2)) });
+        }
+        catch { }
+        return res;
+    }
+
     /// <summary>Every listed file under a folder (for the revision map of any feature).</summary>
     public static List<(string Path, long Ticks)> NamesUnder(string folder)
     {
@@ -502,11 +520,14 @@ static class Projects
     /// <summary>The text of a file: from memory when it was read before and hasn't changed, otherwise read now (OCR included) and remembered.</summary>
     public static (List<Seg> Segs, bool Remembered) Read(string path, CancellationToken ct)
     {
+        // ✓ The file is really there (followed when its folder moved).
+        path = FileCheck.Resolve(path, out var why) ?? throw new FileNotFoundException(why);
         // One store for all Nova: read once by any feature = known by all.
         var known = FolderIndex.Known(path);
         if (known != null) return (known, true);
         List<Seg> got = null; Exception err = null;
-        var t = new Thread(() => { try { got = FileText.Extract(path); } catch (Exception e) { err = e; } }) { IsBackground = true, Name = "Nova read" };
+        var readPath = LongPath.Usable(path);   // a folder name Windows can't open: read through a copy
+        var t = new Thread(() => { try { got = FileText.Extract(readPath); } catch (Exception e) { err = e; } }) { IsBackground = true, Name = "Nova read" };
         t.SetApartmentState(ApartmentState.STA);
         t.Start();
         while (!t.Join(200)) ct.ThrowIfCancellationRequested();

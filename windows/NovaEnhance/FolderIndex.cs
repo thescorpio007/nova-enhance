@@ -294,6 +294,43 @@ static class FolderIndex
         catch (Exception e) { Log.Warn("Folder index", "remember " + Path.GetFileName(path) + ": " + e.Message); }
     }
 
+    /// <summary>A file or a whole folder moved / renamed: what Nova read there is moved with it (nothing is read again).</summary>
+    public static void Relink(string oldPath, string newPath, string oldDir, string newDir)
+    {
+        try
+        {
+            using var c = Open();
+            if (oldDir != null && newDir != null)
+            {
+                using (var tx = c.BeginTransaction())
+                {
+                    Exec(c, "UPDATE OR IGNORE files SET path = $nd || substr(path, $n + 1) WHERE substr(lower(path),1,$n) = lower($od)", ("$nd", newDir), ("$od", oldDir), ("$n", oldDir.Length));
+                    Exec(c, "UPDATE OR IGNORE vision SET path = $nd || substr(path, $n + 1) WHERE substr(lower(path),1,$n) = lower($od)", ("$nd", newDir), ("$od", oldDir), ("$n", oldDir.Length));
+                    Exec(c, "UPDATE OR IGNORE roots SET path = $nd || substr(path, $n + 1) WHERE substr(lower(path || '\\'),1,$n) = lower($od)", ("$nd", newDir), ("$od", oldDir), ("$n", oldDir.Length));
+                    tx.Commit();
+                }
+                // Already known at both places: the old copy goes.
+                var left = new List<long>();
+                using (var cmd = c.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT id FROM files WHERE substr(lower(path),1,$n) = lower($od)";
+                    cmd.Parameters.AddWithValue("$n", oldDir.Length); cmd.Parameters.AddWithValue("$od", oldDir);
+                    using var r = cmd.ExecuteReader();
+                    while (r.Read()) left.Add(r.GetInt64(0));
+                }
+                if (left.Count > 0) { using var tx2 = c.BeginTransaction(); foreach (var id in left) DeleteFile(c, id); tx2.Commit(); }
+                Log.Warn("Folder index", $"Folder moved: {oldDir} → {newDir} (what Nova read there was kept)");
+            }
+            else
+            {
+                Exec(c, "UPDATE OR IGNORE files SET path=$n WHERE path=$o", ("$n", newPath), ("$o", oldPath));
+                var id = Scalar(c, "SELECT id FROM files WHERE path=$o", ("$o", oldPath));
+                if (id != null) DeleteFile(c, Convert.ToInt64(id));
+            }
+        }
+        catch (Exception e) { Log.Warn("Folder index", "relink: " + e.Message); }
+    }
+
     /// <summary>How many files under a folder have been read inside (by any feature).</summary>
     public static int CountRead(string root)
     {
@@ -888,6 +925,12 @@ static class FolderIndex
             res.Add(p);
             if (res.Count >= max) break;
         }
+        // ✓ Only files that are really there (followed when their folder was renamed or moved).
+        foreach (var x in res.Where(x => string.IsNullOrEmpty(x.Remote) && !File.Exists(x.Path)).ToList())
+        {
+            var real = FileCheck.Resolve(x.Path, out _);
+            if (real == null) res.Remove(x); else x.Path = real;
+        }
         return res;
     }
 
@@ -930,10 +973,20 @@ static class FolderIndex
         else if (like != null) cmd.Parameters.AddWithValue("$like", like);
         using var r = cmd.ExecuteReader();
         FileHit cur = null;
+        // ✓ A remembered result is shown only when the file is really there — followed when its folder was renamed or moved.
+        void Emit(FileHit h)
+        {
+            if (h.Pieces.Count == 0) return;
+            if (!string.IsNullOrEmpty(h.Remote) || File.Exists(h.Path)) { onHit(h); return; }
+            var real = FileCheck.Resolve(h.Path, out _);
+            if (real == null) return;
+            h.Path = real;
+            onHit(h);
+        }
         while (r.Read() && !ct.IsCancellationRequested)
         {
             var path = r.GetString(0);
-            if (cur != null && !cur.Path.Equals(path, StringComparison.OrdinalIgnoreCase)) { if (cur.Pieces.Count > 0) onHit(cur); cur = null; }
+            if (cur != null && !cur.Path.Equals(path, StringComparison.OrdinalIgnoreCase)) { Emit(cur); cur = null; }
             var kind = r.IsDBNull(1) ? "J" : r.GetString(1);
             if (!KindOk(kinds, kind)) continue;
             if (!opt.NoFilters && !opt.Accept(path.Length > pre.Length ? path[pre.Length..] : path, Path.GetFileName(path), r.GetInt64(6), r.GetInt64(7))) continue;
@@ -943,7 +996,7 @@ static class FolderIndex
             cur ??= new FileHit { Path = path, Root = pre.TrimEnd('\\'), Kind = kind, Remote = r.IsDBNull(5) ? null : r.GetString(5), Size = r.GetInt64(6), Mtime = r.GetInt64(7) };
             if (cur.Pieces.Count < 200) cur.Pieces.Add(new PieceHit { Loc = r.GetString(2), Goto = r.IsDBNull(3) ? "" : r.GetString(3), Text = text, Matches = found });
         }
-        if (cur != null && cur.Pieces.Count > 0) onHit(cur);
+        if (cur != null) Emit(cur);
     }
 
     public static string Export(string title, IEnumerable<FileHit> hits)
@@ -1054,7 +1107,11 @@ static class Opener
             Shell.Open(GDrive.WebLink(parts[0], parts.Length > 1 ? parts[1] : ""));
             return;
         }
-        var path = h.Path;
+        // ✓ The file is really there (followed when its folder was renamed or moved).
+        var real = FileCheck.Resolve(h.Path, out var why);
+        if (real == null) { MessageBox.Show(why, "Nova Enhance · file not found", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+        h.Path = real;
+        var path = LongPath.ForApps(real);
         var go = p?.Goto ?? "";
         try
         {

@@ -241,10 +241,10 @@ class FolderSearchForm : NovaForm
         tabs.Controls.Add(tabFiles); tabs.Controls.Add(tabProblems); tabs.Controls.Add(viewBtn);
         left.Controls.Add(tabs, 0, 0);
         var mid = new Panel { Dock = DockStyle.Fill, BackColor = Th.Bg, Margin = new Padding(0) };
-        filesList = NewList(("Name", 330), ("Hits", 60), ("Folder", 220), ("Modified", 100), ("Size", 80));
+        filesList = NewList(("Name", 330), ("Type", 90), ("Hits", 60), ("Folder", 220), ("Modified", 100), ("Size", 80));
         filesList.SelectedIndexChanged += (_, _) => FileSelected();
         filesList.DoubleClick += (_, _) => { if (Selected() is { } h) Opener.Open(h, h.Pieces.FirstOrDefault(), matcher?.Query); };
-        filesList.ColumnClick += (_, e) => { sortDesc = sortCol == e.Column ? !sortDesc : e.Column is 1 or 3 or 4; sortCol = e.Column; dirty = true; RefreshList(); };
+        filesList.ColumnClick += (_, e) => { sortDesc = sortCol == e.Column ? !sortDesc : e.Column is 2 or 4 or 5; sortCol = e.Column; dirty = true; RefreshList(); };
         filesList.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter && Selected() is { } h) Opener.Open(h, h.Pieces.FirstOrDefault(), matcher?.Query); };
         var menu = new ContextMenuStrip { Font = Th.F(10) };
         menu.Items.Add("Open", null, (_, _) => { if (Selected() is { } h) Opener.Open(h, h.Pieces.FirstOrDefault(), matcher?.Query); });
@@ -379,10 +379,11 @@ class FolderSearchForm : NovaForm
         q = sortCol switch
         {
             0 => sortDesc ? q.OrderByDescending(h => h.Name) : q.OrderBy(h => h.Name),
-            1 => sortDesc ? q.OrderByDescending(h => h.Hits) : q.OrderBy(h => h.Hits),
-            2 => sortDesc ? q.OrderByDescending(h => h.Folder) : q.OrderBy(h => h.Folder),
-            3 => sortDesc ? q.OrderByDescending(h => h.Mtime) : q.OrderBy(h => h.Mtime),
-            4 => sortDesc ? q.OrderByDescending(h => h.Size) : q.OrderBy(h => h.Size),
+            1 => sortDesc ? q.OrderByDescending(h => FileType.Of(h.Path)).ThenBy(h => h.Name) : q.OrderBy(h => FileType.Of(h.Path)).ThenBy(h => h.Name),
+            2 => sortDesc ? q.OrderByDescending(h => h.Hits) : q.OrderBy(h => h.Hits),
+            3 => sortDesc ? q.OrderByDescending(h => h.Folder) : q.OrderBy(h => h.Folder),
+            4 => sortDesc ? q.OrderByDescending(h => h.Mtime) : q.OrderBy(h => h.Mtime),
+            5 => sortDesc ? q.OrderByDescending(h => h.Size) : q.OrderBy(h => h.Size),
             _ => q
         };
         filesList.BeginUpdate();
@@ -392,7 +393,7 @@ class FolderSearchForm : NovaForm
             var rel = h.Folder.StartsWith(h.Root, StringComparison.OrdinalIgnoreCase) ? "." + h.Folder[h.Root.Length..] : h.Folder;
             var it = new ListViewItem(new[]
             {
-                $"{KindIcon(h.Kind)} {h.Name}", h.Hits.ToString("N0"), rel.Length <= 1 ? "." : rel,
+                $"{KindIcon(h.Kind)} {h.Name}", FileType.Of(h.Path), h.Hits.ToString("N0"), rel.Length <= 1 ? "." : rel,
                 h.Mtime > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(h.Mtime).LocalDateTime.ToString("dd MMM yyyy") : "", FmtSize(h.Size)
             }) { Tag = h };
             filesList.Items.Add(it);

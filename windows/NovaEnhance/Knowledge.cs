@@ -279,7 +279,7 @@ static class Memory
         foreach (var f in best.Files)
             try
             {
-                if (!File.Exists(f)) changed.Add(Path.GetFileName(f) + " (moved or deleted)");
+                if (!File.Exists(f)) { var nf = FileCheck.Resolve(f, out _); changed.Add(Path.GetFileName(f) + (nf == null ? " (moved or deleted)" : " (moved — found at its new place)")); }
                 else if (best.Times.TryGetValue(f, out var t) && t != 0 && File.GetLastWriteTimeUtc(f).Ticks != t) changed.Add(Path.GetFileName(f));
             }
             catch { }
@@ -306,7 +306,7 @@ static class Memory
         foreach (var f in best.Files)
             try
             {
-                if (!File.Exists(f)) changed.Add(Path.GetFileName(f) + " (moved or deleted)");
+                if (!File.Exists(f)) { var nf = FileCheck.Resolve(f, out _); changed.Add(Path.GetFileName(f) + (nf == null ? " (moved or deleted)" : " (moved — found at its new place)")); }
                 else if (best.Times.TryGetValue(f, out var t) && t != 0 && File.GetLastWriteTimeUtc(f).Ticks != t) changed.Add(Path.GetFileName(f) + " (changed)");
             }
             catch { }

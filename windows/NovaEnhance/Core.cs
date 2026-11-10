@@ -40,7 +40,14 @@ static class Shell
         {
             // A Nova folder that hasn't been used yet (e.g. Search Results before the first export) is created instead of failing.
             if (path.StartsWith(Paths.Root, StringComparison.OrdinalIgnoreCase) && !File.Exists(path) && !Directory.Exists(path)) Directory.CreateDirectory(path);
-            Process.Start(new ProcessStartInfo(LongPath.Short(path)) { UseShellExecute = true });
+            // ✓ A file that moved is followed; one that is gone says which folder is wrong.
+            if (System.Text.RegularExpressions.Regex.IsMatch(path, @"^[A-Za-z]:\\|^\\\\[^?]") && !File.Exists(path) && !Directory.Exists(path))
+            {
+                var real = FileCheck.Resolve(path, out var why);
+                if (real == null) { MessageBox.Show(why, "Nova Enhance · file not found", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+                path = real;
+            }
+            Process.Start(new ProcessStartInfo(File.Exists(path) ? LongPath.ForApps(path) : LongPath.Short(path)) { UseShellExecute = true });
         }
         catch (Exception e) { Log.Error("open " + path, e); }
     }
@@ -54,6 +61,9 @@ static class Shell
         if (string.IsNullOrEmpty(file)) return;
         try
         {
+            var real = FileCheck.Resolve(file, out var why);
+            if (real == null) { MessageBox.Show(why, "Nova Enhance · file not found", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            file = real;
             var shortP = LongPath.Short(file);
             var pidl = ILCreateFromPathW(shortP);
             if (pidl != IntPtr.Zero)
@@ -90,7 +100,7 @@ static class LongPath
     /// <summary>The 8.3 form of a long path (same file), or the path unchanged.</summary>
     public static string Short(string p)
     {
-        if (!IsLong(p) || p.StartsWith(@"\\?\")) return p;
+        if ((!IsLong(p) && FileCheck.OddName(p) == null) || p.StartsWith(@"\\?\")) return p;
         try
         {
             var unc = p.StartsWith(@"\\") ? @"\\?\UNC\" + p[2..] : @"\\?\" + p;
@@ -105,21 +115,26 @@ static class LongPath
         catch { return p; }
     }
 
+    /// <summary>For other apps (PDF-XChange, Word…): the path as is, its short form, or a copy when a folder name can't be opened.</summary>
+    public static string ForApps(string p) => Usable(p);
+
     /// <summary>A path every Windows component can open: the short form, else a temporary copy (kept while unchanged).</summary>
     public static string Usable(string p)
     {
-        if (!IsLong(p)) return p;
+        if (string.IsNullOrEmpty(p)) return p;
+        var plainOk = File.Exists(p);
+        if (!IsLong(p) && (plainOk || !File.Exists(FileCheck.Exact(p)))) return p;
         var s = Short(p);
-        if (!IsLong(s)) return s;
+        if (!IsLong(s) && File.Exists(s) && FileCheck.OddName(s) == null) return s;
         try
         {
             var dir = Path.Combine(Path.GetTempPath(), "Nova Enhance", "long");
             Directory.CreateDirectory(dir);
             var key = Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes(p.ToLowerInvariant())))[..16];
             var copy = Path.Combine(dir, key + Path.GetExtension(p));
-            var src = new FileInfo(p);
+            var src = new FileInfo(FileCheck.Exact(p));
             if (!File.Exists(copy) || File.GetLastWriteTimeUtc(copy) < src.LastWriteTimeUtc || new FileInfo(copy).Length != src.Length)
-                File.Copy(p, copy, true);
+                File.Copy(FileCheck.Exact(p), copy, true);
             return copy;
         }
         catch { return p; }
