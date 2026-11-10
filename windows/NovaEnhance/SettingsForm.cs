@@ -473,11 +473,22 @@ class SettingsForm : NovaForm
     // ------------------------------------------------------------------ 📁 Projects
     static List<ProjectProposal> lastScan;
     static Projects.ScanProgress scanPg;
+    Action ReadAllLive;
+
+    /// <summary>A thin progress bar: the back panel and its fill.</summary>
+    static (Panel Back, Panel Fill) Bar(Color c)
+    {
+        var back = new Panel { Height = 9, Width = 600, BackColor = Color.FromArgb(0x23, 0x28, 0x38), Margin = new Padding(0, 0, 0, 4) };
+        var fill = new Panel { Height = 9, Width = 0, BackColor = c, Dock = DockStyle.Left };
+        back.Controls.Add(fill);
+        return (back, fill);
+    }
     static CancellationTokenSource scanCts;
     Label projLive;
 
     void ProjectsPage()
     {
+        ReadAllLive = null;
         Note("Give Nova your work folder. It reads only the folder and file NAMES (never the contents) and proposes your projects: a folder that starts with a number (1-, 2-, 3-…) is a project — the name after the number is the project, a bracket like (SAH) is its code. Folders that start with \"_\" are general reference used with every project. Private-looking folders (wallet, password, bank…) are 🔒 never read. Nothing is indexed until you tick ✓ Use and press Save.");
         var wr = page.Add(Th.Row(false));
         var wf = Th.Box(false);
@@ -515,6 +526,31 @@ class SettingsForm : NovaForm
         wr.Controls.Add(Th.B("🌐 + network shortcuts", () => Run(true)));
         wr.Controls.Add(Th.B("■ Stop", () => scanCts?.Cancel()));
         page.Add(scanStatus);
+
+        // 📊 The overall line: all your project folders together.
+        var ov = page.Add(new Panel { Height = 112, BackColor = Color.FromArgb(0x18, 0x1C, 0x24), Padding = new Padding(12, 8, 12, 8) }, true);
+        var ovTitle = new Label { AutoSize = true, Font = Th.F(12, true), ForeColor = Th.Text, Location = new Point(12, 8) };
+        var ovNames = new Label { AutoSize = true, Font = Th.F(10), ForeColor = Th.Text, Location = new Point(12, 36) };
+        var ovRead = new Label { AutoSize = true, Font = Th.F(10), ForeColor = Th.Text, Location = new Point(12, 70) };
+        var (nb, nbFill) = Bar(Color.FromArgb(0x3F, 0xAF, 0x84)); nb.Location = new Point(12, 58);
+        var (rb, rbFill) = Bar(Th.Accent); rb.Location = new Point(12, 92);
+        ov.Controls.AddRange(new Control[] { ovTitle, ovNames, nb, ovRead, rb });
+        void Overall()
+        {
+            var o = Projects.Overall();
+            var root = Projects.WorkFolder.Length > 0 ? Projects.WorkFolder : "your projects";
+            ovTitle.Text = $"📁 {root} · {o.Names:N0} files in your projects";
+            ovNames.Text = o.Listing ? "📛 File names  " + o.ListingText : $"📛 File names  ✓ 100%  ·  {o.Names:N0} listed  ·  kept up to date (new, renamed, deleted within seconds)";
+            var ra = Projects.ReadAll.Counts; var rt = ra.Sum(x => x.Total); var rd = ra.Sum(x => x.Done);
+            ovRead.Text = Projects.ReadAll.On && rt > 0
+                ? $"📖 Read inside  {rd:N0} of {rt:N0} readable files · {100L * rd / rt}%  ·  {Projects.ReadAll.Phase}"
+                : $"📖 Read inside  {o.Read:N0} files · {(o.Names > 0 ? 100L * o.Read / o.Names : 0)}%  ·  grows as you ask (or switch on 📖 Read everything below)";
+            var w = Math.Max(200, ov.ClientSize.Width - 24);
+            nb.Width = rb.Width = w;
+            nbFill.Width = o.Listing ? w / 2 : w;
+            rbFill.Width = (int)(w * (Projects.ReadAll.On && rt > 0 ? (double)rd / rt : o.Names > 0 ? (double)o.Read / o.Names : 0));
+        }
+        Overall();
 
         if (lastScan != null)
         {
@@ -581,7 +617,8 @@ class SettingsForm : NovaForm
         {
             var st = p.Folders.Select(f => Projects.Status.TryGetValue(f, out var s) ? s : null).FirstOrDefault(s => s != null);
             var sts = p.Folders.Select(f => Projects.Status.TryGetValue(f, out var s) ? s : null).Where(s => s != null).ToList();
-            var stt = st == null ? "waiting" : sts.Any(s => s.Phase == "listing") ? $"listing names… {sts.Sum(s => s.Files):N0}" : sts.All(s => s.Phase == "listed") ? $"✓ {sts.Sum(s => s.Files):N0} file names · {sts.Sum(s => s.Read)} read inside · {st.Last:dd MMM HH:mm}" : st.Phase;
+            var nf = sts.Sum(s => s.Files); var nr = sts.Sum(s => s.Read);
+            var stt = st == null ? "waiting" : sts.Any(s => s.Phase == "listing") ? $"listing names… {nf:N0}" : sts.All(s => s.Phase == "listed") ? $"✓ {nf:N0} names · 📖 {nr:N0} read ({(nf > 0 ? 100L * nr / nf : 0)}%) · {st.Last:dd MMM HH:mm}" : st.Phase;
             return $"{p.Code}  ·  {p.Name}  ·  email codes: {string.Join(", ", p.Codes)}  ·  {string.Join(" + ", p.Folders)}  ·  {stt}";
         }
         foreach (var p in list) lb.Items.Add(Line(p));
@@ -594,6 +631,8 @@ class SettingsForm : NovaForm
             var all = Projects.All();
             for (int i = 0; i < all.Count && i < lb.Items.Count; i++) { var s = Line(all[i]); if ((string)lb.Items[i] != s) lb.Items[i] = s; }
             projLive.Text = Projects.Indexer.Line();
+            Overall();
+            ReadAllLive?.Invoke();
         };
         lt.Start();
         Project Sel() => lb.SelectedIndex >= 0 && lb.SelectedIndex < list.Count ? list[lb.SelectedIndex] : null;
@@ -639,6 +678,61 @@ class SettingsForm : NovaForm
         var gr = page.Add(Th.Row(false));
         gr.Controls.Add(Th.B("➕ Add", () => { using var d = new FolderBrowserDialog(); if (d.ShowDialog(this) == DialogResult.OK && !Projects.Private.IsMatch(d.SelectedPath)) { var l = Projects.General; l.Add(d.SelectedPath); Projects.General = l; Projects.Indexer.Wake(); Draw("📁 Projects"); } }));
         gr.Controls.Add(Th.B("Clear", () => { Projects.General = new(); Draw("📁 Projects"); }));
+
+        // 📖 B · Read everything in the background (optional).
+        page.Add(Th.Section("📖 Read everything in the background (optional)"));
+        page.Add(Th.Check("📖 Read inside every PDF, Word, Excel and PowerPoint file of my projects (CAD / BIM and pictures skipped) — only after working hours or when the PC is idle",
+            Projects.ReadAll.On, v => { Projects.ReadAll.On = v; Draw("📁 Projects"); }));
+        if (Projects.ReadAll.On)
+        {
+            var rows = new List<(string Code, Label L, Panel Fill, Panel Back)>();
+            var ra = page.Add(new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, BackColor = Color.FromArgb(0x18, 0x1C, 0x24), Padding = new Padding(12, 8, 12, 8) }, true);
+            foreach (var code in Projects.ReadAll.Counts.Select(x => x.Code).Append("All projects"))
+            {
+                var l = new Label { AutoSize = true, Font = Th.F(9.5f, code == "All projects"), ForeColor = Th.Text, Margin = new Padding(0, 4, 0, 2) };
+                var (b, f) = Bar(Th.Accent);
+                ra.Controls.Add(l); ra.Controls.Add(b);
+                rows.Add((code, l, f, b));
+            }
+            var phase = new Label { AutoSize = true, Font = Th.F(9.5f), ForeColor = Th.Muted, Margin = new Padding(0, 6, 0, 0) };
+            ra.Controls.Add(phase);
+            ReadAllLive = () =>
+            {
+                if (ra.IsDisposed) return;
+                var cs = Projects.ReadAll.Counts;
+                var w = Math.Max(200, ra.Parent?.ClientSize.Width - 80 ?? 600);
+                foreach (var (code, l, f, b) in rows)
+                {
+                    int t, d;
+                    if (code == "All projects") { t = cs.Sum(x => x.Total); d = cs.Sum(x => x.Done); }
+                    else { var c = cs.FirstOrDefault(x => x.Code == code); t = c?.Total ?? 0; d = c?.Done ?? 0; }
+                    l.Text = $"{code}   📖 {d:N0} of {t:N0} readable files · {(t > 0 ? 100L * d / t : 0)}%";
+                    b.Width = w; f.Width = t > 0 ? (int)(w * (double)d / t) : 0;
+                }
+                var left = Projects.ReadAll.Left;
+                phase.Text = Projects.ReadAll.Phase + (Projects.ReadAll.Current.Length > 0 ? " · " + Projects.ReadAll.Current : "") +
+                             (left is { } lf && lf > TimeSpan.Zero ? $" · about {(lf.TotalHours >= 1 ? $"{lf.TotalHours:0} h" : $"{Math.Max(1, (int)lf.TotalMinutes)} min")} of reading time left" : "");
+            };
+            ReadAllLive();
+            var rr = page.Add(Th.Row(false));
+            rr.Controls.Add(Th.B("⚡ Read now at full speed", () => { Projects.ReadAll.Now(); ReadAllLive?.Invoke(); }, true));
+            rr.Controls.Add(Th.B(Projects.ReadAll.Paused ? "▶ Resume" : "⏸ Pause", () => { Projects.ReadAll.Paused = !Projects.ReadAll.Paused; Draw("📁 Projects"); }));
+            rr.Controls.Add(Th.B("Choose projects…", () =>
+            {
+                using var f = new NovaForm { Text = "📖 Projects to read in the background", Width = 420, Height = 420, StartPosition = FormStartPosition.CenterParent };
+                var cl = new CheckedListBox { Dock = DockStyle.Fill, BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.None, Font = Th.F(10.5f), CheckOnClick = true };
+                var only = Projects.ReadAll.Only;
+                foreach (var p in Projects.All()) cl.Items.Add($"{p.Code} · {p.Name}", only.Count == 0 || only.Contains(p.Code, StringComparer.OrdinalIgnoreCase));
+                var ok = Th.B("✓ Save", () => f.DialogResult = DialogResult.OK, true); ok.Dock = DockStyle.Bottom;
+                f.Controls.Add(cl); f.Controls.Add(ok);
+                if (f.ShowDialog(this) != DialogResult.OK) return;
+                var all = Projects.All();
+                var chosen = cl.CheckedIndices.Cast<int>().Select(i => all[i].Code).ToList();
+                Projects.ReadAll.Only = chosen.Count == all.Count ? new() : chosen;
+                Draw("📁 Projects");
+            }));
+            Note("Reading takes many hours for big projects (OCR on scanned drawings). Newest files are read first, so what you work on now is ready soonest. Nova pauses while you work and continues after working hours or when the PC is idle (Settings → Email & AI → Gentle indexing); ⚡ reads at full speed until complete.");
+        }
 
         page.Add(Th.Section("How Nova knows your files"));
         page.Add(Th.Check("Keep the list of file names up to date (new, renamed and deleted files within seconds; a full check every day)", Projects.Indexer.On, v => Projects.Indexer.On = v));

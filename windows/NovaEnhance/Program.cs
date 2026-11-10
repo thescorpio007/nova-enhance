@@ -79,8 +79,21 @@ class NovaContext : ApplicationContext
         // ⏳ Pointing at the tray icon shows the email index progress.
         IndexProgress.Start();
         Projects.Indexer.Start();
+        Projects.ReadAll.Start();
         var trayTip = new System.Windows.Forms.Timer { Interval = 5000 };
-        trayTip.Tick += (_, _) => { try { tray.Text = IndexProgress.Tray(); } catch { } };
+        trayTip.Tick += (_, _) =>
+        {
+            try
+            {
+                // ⏳ Email index, then 📁 your project files (names, read inside, 📖 background reading).
+                var t = IndexProgress.Tray();
+                var o = Projects.Overall();
+                if (o.Names > 0)
+                    t += "\n📁 " + (o.Listing ? "listing…" : $"{o.Names:N0} names ✓") + $" · {o.Read:N0} read" + (Projects.ReadAll.Line() is { Length: > 0 } ra ? " · " + ra : "");
+                tray.Text = t.Length > 127 ? t[..127] : t;
+            }
+            catch { }
+        };
         trayTip.Start();
         var m = new ContextMenuStrip { Font = Th.F(10) };
         m.Items.Add("✦  Enhance selected text      Ctrl+Shift+E", null, (_, _) => Screens.Enhance());
