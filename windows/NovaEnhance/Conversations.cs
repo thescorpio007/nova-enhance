@@ -152,6 +152,9 @@ static class Conversations
         "mark{background:#5A4A00;color:#FFE08A;border-radius:2px}.srcs{font-size:12px;color:#9AA3B5;margin-top:8px}.muted{color:#9AA3B5}.wait{color:#B9B0FF;font-style:italic}" +
         ".head{border-bottom:1px solid #2A3040;padding-bottom:10px;margin-bottom:16px}.sign{text-align:right;color:#7C6CFF;font-weight:bold;font-size:12px;margin-top:20px}" + FileTalk.TableCss;
 
+    /// <summary>The label of the draft link under answers ("✍ Put into my draft" while you are writing an email).</summary>
+    public static string DraftAction = "✦ Draft reply";
+
     /// <summary>One Nova answer as HTML: [E1]/[A2]/[D3] become links, ⚠ lines orange, 🎓 advice green, the technical check underneath.</summary>
     public static string AnswerHtml(ConvMsg m, int index, bool actions)
     {
@@ -204,7 +207,7 @@ static class Conversations
             sb.Append("<details class=srcs><summary>").Append(m.Src.Count).Append(" sources</summary>")
               .Append(string.Join("", m.Src.Select(s => $"<div><a class=src href=\"https://nova.src/{index}/{s.Id}\">{s.Id}</a> {Esc(s.Title)}</div>"))).Append("</details>");
         if (actions)
-            sb.Append($"<div class=acts><a href=\"https://nova.act/draft/{index}\">✦ Draft reply</a><a href=\"https://nova.act/copy/{index}\">⧉ Copy</a><a href=\"https://nova.act/task/{index}\">📌 Save as task</a>{(FileTalk.Tables(m.Text).Count > 0 ? $"<a href=\"https://nova.act/xlsx/{index}\">📊 Comparison sheet → Excel</a><a href=\"https://nova.act/tsv/{index}\">⧉ Copy table</a>" : "")}<a href=\"https://nova.act/good/{index}\">👍</a><a href=\"https://nova.act/bad/{index}\">👎</a></div>");
+            sb.Append($"<div class=acts><a href=\"https://nova.act/draft/{index}\">{DraftAction}</a><a href=\"https://nova.act/copy/{index}\">⧉ Copy</a><a href=\"https://nova.act/task/{index}\">📌 Save as task</a>{(FileTalk.Tables(m.Text).Count > 0 ? $"<a href=\"https://nova.act/xlsx/{index}\">📊 Comparison sheet → Excel</a><a href=\"https://nova.act/tsv/{index}\">⧉ Copy table</a>" : "")}<a href=\"https://nova.act/good/{index}\">👍</a><a href=\"https://nova.act/bad/{index}\">👎</a></div>");
         return sb.ToString();
     }
 

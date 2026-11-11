@@ -150,7 +150,7 @@ class MailAskForm : NovaForm
     }
 
     /// <summary>From the Outlook panel: the email selected (or open) in Outlook right now.</summary>
-    public async void LoadCurrent(string subjectHint)
+    public async void LoadCurrent(string subjectHint, Conversation resume = null)
     {
         head.Text = "Reading the email from Outlook…";
         try
@@ -159,7 +159,8 @@ class MailAskForm : NovaForm
             var h = await Sta(() => Outlook.CurrentMail());
             if (h == null && subjectHint.Length > 0)
                 h = MailIndex.Search(new MailQuery { Phrase = subjectHint, Limit = 1 }).FirstOrDefault();
-            ShowMail(h);
+            ShowMail(h, resume);
+            if (h?.IsDraft == true) status.Text = "💬 Your draft: ask anything about it — ✍ under each answer puts the text into your email.";
         }
         catch (Exception e) { ShowMail(null); status.Text = "⚠ " + e.Message; Log.Error("ask about email", e); }
     }
@@ -546,6 +547,7 @@ class MailAskForm : NovaForm
 
     void Draw(string waiting = null)
     {
+        Conversations.DraftAction = anchor?.IsDraft == true ? "✍ Put into my draft" : "✦ Draft reply";
         var body = conv == null || conv.Msgs.Count == 0
             ? "<p class=muted>Write your prompt below and press Enter. Nova reads this email, its attachments, the earlier emails with the same subject or references, and your project folder — then checks its answer against them. Follow-ups keep this email as the reference. Every conversation is saved in 🕘 Chat history.</p>"
             : Conversations.Body(conv, true);
@@ -591,7 +593,7 @@ class MailAskForm : NovaForm
         catch (Exception e) { status.Text = "⚠ Could not open it: " + e.Message; }
     }
 
-    void Act(string what, int i)
+    async void Act(string what, int i)
     {
         if (conv == null || i < 0 || i >= conv.Msgs.Count) return;
         var m = conv.Msgs[i];
@@ -604,7 +606,17 @@ class MailAskForm : NovaForm
                 catch (Exception ex) { status.Text = "⚠ " + ex.Message; }
                 break;
             case "tsv": Clipboard.SetText(FileTalk.Tsv(m.Text)); status.Text = "⧉ Table copied — paste it into Excel or a Word table"; break;
-            case "draft": DraftReply(m.Text); break;
+            case "draft":
+                if (anchor?.IsDraft == true)
+                {
+                    // ✍ The email you are writing: the answer goes into it (the ✍ part when Nova wrote one).
+                    var mm = System.Text.RegularExpressions.Regex.Match(m.Text, @"✍ START\s*(.*?)\s*✍ END", System.Text.RegularExpressions.RegexOptions.Singleline);
+                    var txt = System.Text.RegularExpressions.Regex.Replace(mm.Success ? mm.Groups[1].Value : m.Text, @"\s*\[(?:[EADFMH]\d{1,2}(?:\s*,\s*)?)+\]", "");
+                    try { status.Text = await Sta(() => Outlook.InsertIntoDraft(anchor.Subject, txt)) ? "✍ Put into your draft (at the cursor)." : "⚠ The draft is not open in Outlook any more — ⧉ Copy and paste it."; }
+                    catch (Exception ex) { status.Text = "⚠ " + ex.Message; }
+                }
+                else DraftReply(m.Text);
+                break;
             case "task":
                 var t = Work.FromText($"{anchor?.Subject} — Nova answer", q, $"✎ {q}\n\n{m.Text}", "ask-email",
                     anchor != null ? new[] { Work.FromHit(anchor) } : null);

@@ -421,21 +421,21 @@ static class Projects
     public static Project OfFolder(string path) =>
         string.IsNullOrEmpty(path) ? null : All().FirstOrDefault(p => p.Folders.Any(f => (path.TrimEnd('\\') + "\\").StartsWith(f.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase)));
 
-    public static List<FileRow> FindFiles(string query, IEnumerable<string> folders, bool all, bool latestOnly, int max)
+    public static List<FileRow> FindFiles(string query, IEnumerable<string> folders, bool all, bool latestOnly, int max, bool everyFile = false)
     {
         var words = Regex.Split((query ?? "").ToLowerInvariant(), @"[^\p{L}\p{N}\-\.]+").Select(w => w.Trim('.', '-')).Where(w => w.Length >= 2).Distinct().Take(10).ToList();
         var roots = folders.Where(f => f.Length > 0).Select(RootKey).Distinct().ToList();
         var res = new List<FileRow>();
         var boosts = Memory.Boosts(words);
-        if (words.Count == 0 || roots.Count == 0) return res;
+        if ((words.Count == 0 && !everyFile) || roots.Count == 0) return res;
         var stems = words.Select(Stem).ToList();
         var rows = new List<(string Path, string Name, long Size, long M)>();
         try
         {
             using var c = Db();
             using var cmd = c.CreateCommand();
-            var cond = string.Join(all ? " AND " : " OR ", stems.Select((_, i) => "path LIKE $w" + i));
-            cmd.CommandText = $"SELECT path,name,size,mtime FROM pnames WHERE ({Under(cmd, roots)}) AND ({cond}) LIMIT 6000";
+            var cond = stems.Count == 0 ? "1" : string.Join(all ? " AND " : " OR ", stems.Select((_, i) => "path LIKE $w" + i));
+            cmd.CommandText = $"SELECT path,name,size,mtime FROM pnames WHERE ({Under(cmd, roots)}) AND ({cond}) LIMIT {(everyFile ? 120000 : 6000)}";
             for (int i = 0; i < stems.Count; i++) cmd.Parameters.AddWithValue("$w" + i, "%" + stems[i] + "%");
             using var r = cmd.ExecuteReader();
             while (r.Read()) rows.Add((r.GetString(0), r.GetString(1), r.IsDBNull(2) ? 0 : r.GetInt64(2), r.IsDBNull(3) ? 0 : r.GetInt64(3)));

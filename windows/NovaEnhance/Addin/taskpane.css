@@ -25,3 +25,8 @@ input{width:100%;margin:2px 0 4px}textarea{width:100%;resize:vertical}
 .diff del,.del{background:#4A1F24;color:#FF9A9A}.diff ins,.ins{background:#1E3A2C;color:#9FE6BF;text-decoration:none}
 .ver{background:#181C24;border:1px solid #2E3546;border-radius:6px;padding:6px 8px;margin:4px 0;cursor:pointer;font-size:12px}
 .ver:hover{border-color:#7C6CFF}.ver b{color:#fff}.ver .p{color:#9AA3B5}
+
+.dlog{background:#181C24;border:1px solid #2E3546;border-radius:6px;padding:8px;margin:4px 0 6px;max-height:340px;overflow:auto;font-size:12.5px;line-height:1.5}
+.dlog .q{color:#B9B0FF;font-weight:bold;margin-top:8px}.dlog .q:first-child{margin-top:0}
+.dlog .a{white-space:pre-wrap;margin-top:2px}.dlog .src{color:#9AA3B5;font-size:11px;margin-top:4px}
+.dlog .wait{color:#9AA3B5;font-style:italic}

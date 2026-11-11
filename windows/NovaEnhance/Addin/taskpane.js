@@ -499,6 +499,69 @@
     };
     $("keep").onclick = function () { show("out", false); show("diff", false); show("diffnote", false); show("keep", false); status("✗ Kept yours — nothing changed in the email", "good"); };
     $("versions").onclick = function () { viewKey = null; showVersions(); };
+
+    // ---------------------------------------------------------------- 💬 Ask Nova about the email you are writing
+    var dLast = "", dLastDraft = "";
+    function dAdd(cls, text) { var d = document.createElement("div"); d.className = cls; d.appendChild(document.createTextNode(text)); $("dlog").appendChild(d); $("dlog").scrollTop = 1e6; show("dlog", true); return d; }
+    function readDraft(cb) {
+      var it = Office.context.mailbox.item, out = { conv: it.conversationId || "" };
+      draftKey(function (key, subj) {
+        out.key = key; out.subject = subj;
+        var names = function (r) { var v = r && r.value || []; var a = []; for (var i = 0; i < v.length; i++) a.push(v[i].displayName || v[i].emailAddress); return a.join("; "); };
+        var getTo = function (next) { if (it.to && it.to.getAsync) it.to.getAsync(function (r) { out.to = names(r); next(); }); else next(); };
+        var getCc = function (next) { if (it.cc && it.cc.getAsync) it.cc.getAsync(function (r) { out.cc = names(r); next(); }); else next(); };
+        getTo(function () { getCc(function () {
+          it.body.getAsync(Office.CoercionType.Html, function (b) {
+            var parts = splitHtml(b.value || "");
+            out.own = htmlText(parts.own);
+            out.quoted = htmlText(parts.rest);
+            cb(out);
+          });
+        }); });
+      });
+    }
+    function dAsk() {
+      var q = trim($("dq").value);
+      if (!q) { $("dq").focus(); return; }
+      dAdd("q", "You: " + q);
+      var w = dAdd("a wait", "Nova is reading your draft, the thread, your emails and project files…");
+      $("dask").disabled = true; $("dq").value = "";
+      readDraft(function (d) {
+        d.q = q;
+        api("askdraft", d, function (r) {
+          $("dask").disabled = false;
+          w.parentNode.removeChild(w);
+          if (!r || r.error) { dAdd("a", (r && r.error) || "⚠ Nova Enhance is not answering on this PC."); return; }
+          dLast = r.answer || ""; dLastDraft = r.draft || "";
+          dAdd("a", dLast);
+          var s = r.sources || [], t = [];
+          for (var i = 0; i < s.length && i < 8; i++) t.push("[" + s[i].id + "] " + s[i].title);
+          if (t.length) dAdd("src", "Sources: " + t.join(" · ") + (r.project ? "  ·  📁 " + r.project : "") + (r.ai ? "  ·  " + r.ai : ""));
+          show("dacts", true); show("dnew", true);
+          $("dput").innerHTML = dLastDraft ? "✍ Put Nova's text into my draft" : "✍ Put the answer into my draft";
+        });
+      });
+    }
+    $("dask").onclick = dAsk;
+    $("dq").onkeydown = function (e) { if ((e.ctrlKey || e.metaKey) && (e.keyCode === 13 || e.key === "Enter")) { e.preventDefault(); dAsk(); } };
+    $("dput").onclick = function () {
+      var text = dLastDraft || dLast.replace(/\s*\[(?:[EADFMH]\d{1,2}(?:\s*,\s*)?)+\]/g, "");
+      if (!text) return;
+      lastLabel = "💬 Nova's text";
+      putText(text, false, true, function (ok, err) { status(ok ? "✍ Put into your draft at the cursor — 🕘 Versions keeps the text before." : "⚠ " + err, ok ? "good" : "bad"); });
+    };
+    $("dcopy").onclick = function () {
+      var ta = document.createElement("textarea"); ta.value = dLastDraft || dLast; document.body.appendChild(ta); ta.select();
+      try { document.execCommand("copy"); status("⧉ Copied", "good"); } catch (e) { }
+      document.body.removeChild(ta);
+    };
+    $("dfull").onclick = function () {
+      draftKey(function (key, subj) {
+        api("open", { what: "askdraft", key: key, subject: subj }, function () { status("↗ The conversation continues in Nova's window on your desktop", "good"); });
+      });
+    };
+    $("dnew").onclick = function () { $("dlog").innerHTML = ""; show("dlog", false); show("dacts", false); show("dnew", false); dLast = dLastDraft = "";
+      draftKey(function (key) { api("askdraft/new", { key: key }, function () { }); }); };
     $("insert").onclick = function () { putText($("result").value, false, true, function (ok, err) { status(ok ? "✓ Inserted" : "⚠ " + err, ok ? "good" : "bad"); }); };
     $("copy").onclick = function () { var t = $("result"); t.select(); try { document.execCommand("copy"); status("⧉ Copied", "good"); } catch (e) { status("Press Ctrl + C to copy"); } };
     $("putback").onclick = function () {

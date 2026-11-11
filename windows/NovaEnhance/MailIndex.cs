@@ -110,6 +110,33 @@ static class Outlook
         m.Display(false);
     }
 
+    /// <summary>✍ Puts text into the email you are writing (at the cursor, or over the selected text) — the open draft with this subject.</summary>
+    public static bool InsertIntoDraft(string subject, string text)
+    {
+        dynamic app = Running();
+        if (app == null) return false;
+        dynamic insps = app.Inspectors;
+        int n = (int)insps.Count;
+        for (int i = 1; i <= n; i++)
+        {
+            dynamic insp = insps.Item(i);
+            try
+            {
+                dynamic it = insp.CurrentItem;
+                bool sent = true; try { sent = (bool)it.Sent; } catch { }
+                if (sent) continue;
+                if (!string.IsNullOrEmpty(subject) && !string.Equals(S(() => it.Subject), subject, StringComparison.OrdinalIgnoreCase) && n > 1) continue;
+                dynamic doc = insp.WordEditor;
+                dynamic sel = doc.Windows(1).Selection;
+                sel.TypeText(text);
+                try { insp.Activate(); } catch { }
+                return true;
+            }
+            catch { }
+        }
+        return false;
+    }
+
     /// <summary>The text you highlighted in the open email (reading or reply window), or "".</summary>
     public static string SelectedText()
     {
@@ -142,6 +169,15 @@ static class Outlook
         DateTime date = DateTime.Now;
         try { date = (DateTime)item.ReceivedTime; } catch { try { date = (DateTime)item.SentOn; } catch { } }
         var from = S(() => item.SenderEmailAddress);
+        bool draft = false;
+        try { draft = !(bool)item.Sent; } catch { }
+        if (draft)
+            return new MailHit
+            {
+                Entry = entry, StoreId = store, Conv = S(() => item.ConversationID), Folder = "Draft", Subject = S(() => item.Subject),
+                FromName = "You (draft)", FromAddr = "", To = S(() => item.To), Cc = S(() => item.CC), Body = S(() => item.Body),
+                AttNames = string.Join(";", atts.Where(x => x.Length > 0)), Date = DateTime.Now, Sent = true, IsDraft = true
+            };
         return new MailHit
         {
             Entry = entry, StoreId = store, Conv = S(() => item.ConversationID), Folder = S(() => item.Parent.Name), Subject = S(() => item.Subject),
@@ -201,7 +237,7 @@ class MailHit
 {
     public long Id;
     public string Entry, StoreId, Conv, Folder, FromName, FromAddr, To, Cc, ToAddr, CcAddr, Subject, Body, AttNames;
-    public bool Sent, Unread;
+    public bool Sent, Unread, IsDraft;   // IsDraft: the email you are writing now (not sent yet)
     public int Importance;
     public DateTime Date;
     /// <summary>needs · week · fyi · follow · "" (plain search)</summary>

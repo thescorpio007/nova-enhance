@@ -310,6 +310,14 @@ static class Screens
         if (h != null) mailAsk.ShowMail(h); else mailAsk.LoadCurrent(subjectHint ?? "");
     }
 
+    /// <summary>💬 The full conversation about the email you are writing (continues what was asked in the Outlook pane).</summary>
+    public static void MailAskDraft(Conversation c, string subjectHint)
+    {
+        if (mailAsk == null || mailAsk.IsDisposed) mailAsk = new MailAskForm();
+        Show(mailAsk);
+        mailAsk.LoadCurrent(subjectHint ?? "", c);
+    }
+
     /// <summary>↻ Continue a saved email conversation from 🕘 Chat history.</summary>
     public static void MailAskContinue(string path)
     {

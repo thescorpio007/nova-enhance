@@ -567,6 +567,9 @@ static class Server
 
     static string S(JsonObject o, string k) => o[k]?.ToString() ?? "";
 
+    /// <summary>💬 The conversation of each draft (pane and full window continue the same one).</summary>
+    static readonly Dictionary<string, Conversation> DraftConvs = new();
+
     static async Task<JsonObject> Api(string p, JsonObject r)
     {
         switch (p)
@@ -684,6 +687,62 @@ static class Server
                 History.Add("ask", Ai.Active()?.Id ?? "", "", "draft", S(r, "subject"), a);
                 return new JsonObject { ["result"] = a };
             }
+            case "/api/askdraft/new":
+            {
+                lock (DraftConvs) DraftConvs.Remove(S(r, "key"));
+                return new JsonObject { ["ok"] = true };
+            }
+            case "/api/askdraft":
+            {
+                // 💬 Ask Nova about the email you are writing — your draft, the thread below it, and the one Nova search.
+                if (!Store.AiSeesFull && !ConfirmSend.LocalHandlesPrivate)
+                    return new JsonObject { ["error"] = "💬 needs Settings → Email & AI → AI sees C or D (or the local AI) — Nova must read your draft and emails." };
+                var key = S(r, "key"); var q = S(r, "q"); var subject = S(r, "subject");
+                var own = S(r, "own"); var quoted = S(r, "quoted"); var convId = S(r, "conv");
+                if (q.Length == 0) return new JsonObject { ["error"] = "Type your question first." };
+                try
+                {
+                    using var _priv = Ai.Private();
+                    Conversation c; lock (DraftConvs) DraftConvs.TryGetValue(key, out c);
+                    var proj = Projects.ForText(subject, own + "\n" + quoted);
+                    var src = new List<(string Id, string Title, string Text, string Path)>();
+                    int e = 1, d = 1;
+                    if (convId.Length > 0)
+                        foreach (var h in MailIndex.ByConv(convId, 8).OrderByDescending(x => x.Date).Take(4))
+                        {
+                            var t = h.NewPart.Length > 0 ? h.NewPart : h.Body ?? "";
+                            src.Add(("E" + e++, $"✉ {(h.Sent ? "You" : h.FromName)} · {h.Date:dd MMM yyyy} · {h.Subject}", t.Length > 2500 ? t[..2500] : t, ""));
+                        }
+                    var nums = Revisions.Numbers(q + "\n" + own + "\n" + quoted).Take(6);
+                    var qx = q + " " + subject + " " + string.Join(" ", nums);
+                    var docsOk = FolderAsk.Sees != "never" || ConfirmSend.LocalHandlesPrivate;
+                    var ns = await Task.Run(() => NovaSearch.Run(qx, FolderAsk.LocalTerms(q + " " + subject), new NovaSearch.Opts { Project = proj, ExcludeConv = convId, MaxEmails = 4, MaxDocs = 10, MaxFiles = 5, Docs = docsOk, Drawings = docsOk }, null, CancellationToken.None));
+                    foreach (var p in ns.Drawings.Concat(ns.Docs)) src.Add(("D" + d++, FolderAsk.Label(p), p.Text.Length > 1400 ? p.Text[..1400] : p.Text, p.Path));
+                    foreach (var p in ns.Emails) src.Add(("E" + e++, p.Loc, p.Text, ""));
+                    int mi = 1, hi = 1;
+                    foreach (var p in ns.Memory) src.Add(("M" + mi++, p.Loc, p.Text, ""));
+                    foreach (var p in ns.History) src.Add(("H" + hi++, p.Loc, p.Text, ""));
+                    var sb = new System.Text.StringBuilder();
+                    sb.Append($"MY DRAFT (the email I am writing now)\nSubject: {subject}\nTo: {S(r, "to")}\nCc: {S(r, "cc")}\n\n{own}\n\n");
+                    if (quoted.Trim().Length > 0) sb.Append("THE EMAILS BELOW MY DRAFT (the thread I reply to):\n").Append(quoted.Length > 6000 ? quoted[..6000] : quoted).Append("\n\n");
+                    if (src.Count > 0) { sb.Append("SOURCES:\n"); foreach (var x in src) sb.Append($"[{x.Id}] {x.Title}\n{x.Text}\n\n"); }
+                    if (c != null) { sb.Append("EARLIER IN THIS CONVERSATION:\n"); foreach (var m in c.Msgs.TakeLast(6)) sb.Append(m.Role == "user" ? "Q: " : "A: ").Append(m.Text.Length > 1500 ? m.Text[..1500] : m.Text).Append("\n"); sb.Append("\n"); }
+                    sb.Append("MY QUESTION: ").Append(q);
+                    var sys = "You are Nova, the assistant of an architect / technical coordinator, helping with an email he is WRITING now. Answer his question about this draft: check it, find the facts, " +
+                              "say what is missing or wrong, suggest wording. Use ONLY the draft, the thread and the numbered sources for facts, and cite them like [E1] [D2]; if something isn't in them, say so. " +
+                              "When you write text meant to go into the email, put exactly that text between a line ✍ START and a line ✍ END (no citations inside it), in the language and tone of the draft." +
+                              NovaSearch.SourceRule + FolderAsk.AdviceRule + Modes.ProfileNote();
+                    var a = await Ai.Chat(sys, sb.ToString(), false);
+                    Conversations.Add(ref c, "email", subject.Length > 0 ? "✍ " + subject : "✍ Draft", "", q, a);
+                    lock (DraftConvs) DraftConvs[key] = c;
+                    var mm = System.Text.RegularExpressions.Regex.Match(a, @"✍ START\s*(.*?)\s*✍ END", System.Text.RegularExpressions.RegexOptions.Singleline);
+                    var shown = System.Text.RegularExpressions.Regex.Replace(a, @"✍ START\s*", "✍ For your email:\n").Replace("✍ END", "").Trim();
+                    var arr = new JsonArray();
+                    foreach (var x in src) arr.Add(new JsonObject { ["id"] = x.Id, ["title"] = x.Title, ["path"] = x.Path });
+                    return new JsonObject { ["answer"] = shown, ["draft"] = mm.Success ? mm.Groups[1].Value : "", ["sources"] = arr, ["project"] = ns.Project?.Code ?? "", ["ai"] = Ai.LabelOf(Ai.Current()) };
+                }
+                catch (Exception ex) { return new JsonObject { ["error"] = "⚠ " + ex.Message }; }
+            }
             case "/api/open":
             {
                 var what = S(r, "what");
@@ -691,6 +750,7 @@ static class Server
                 Program.UiContext?.Post(_ =>
                 {
                     if (what == "askmail") Screens.MailAsk(null, subj);
+                    else if (what == "askdraft") { Conversation dc; lock (DraftConvs) DraftConvs.TryGetValue(S(r, "key"), out dc); Screens.MailAskDraft(dc, subj); }
                     else if (what == "ask") Screens.Ask();
                     else if (what == "folder") Screens.FolderSearch(null);
                     else if (what == "brief") Screens.Brief();
