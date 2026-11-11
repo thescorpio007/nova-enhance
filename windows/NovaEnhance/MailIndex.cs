@@ -266,6 +266,8 @@ class MailQuery
     public bool? HasAttach, Unread;
     public bool Unanswered, FollowUp;
     public int Limit = 50;
+    /// <summary>📁 Project: "" = all, "?" = unsorted, else the project code (emails not sorted yet are kept while Nova sorts).</summary>
+    public string Project = "";
 }
 
 /// <summary>
@@ -938,6 +940,13 @@ static class MailIndex
         if (q.HasAttach == true) where.Add("m.att_names <> ''");
         if (q.HasAttach == false) where.Add("m.att_names = ''");
         if (q.Unread == true) where.Add("m.unread=1");
+        if (!string.IsNullOrEmpty(q.Project))
+        {
+            try { MailProjects.Ensure(); } catch { }
+            where.Add(q.Project == "?"
+                ? "m.id NOT IN (SELECT id FROM mproj WHERE proj<>'')"
+                : $"(m.id IN (SELECT id FROM mproj WHERE proj={P(q.Project)}) OR m.id NOT IN (SELECT id FROM mproj))");
+        }
 
         var words = q.Words.Select(Fold).Where(w => w.Length > 0).ToList();
         var phrase = Fold(q.Phrase ?? "");

@@ -81,6 +81,7 @@ class NovaContext : ApplicationContext
         Projects.Indexer.Start();
         Projects.ReadAll.Start();
         Semantic.Start();
+        MailProjects.Start();
         var trayTip = new System.Windows.Forms.Timer { Interval = 5000 };
         trayTip.Tick += (_, _) =>
         {

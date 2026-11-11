@@ -104,7 +104,7 @@ static class SmartSearch
                 var terms = (g as JsonArray)?.Select(x => x?.ToString() ?? "").Where(x => x.Trim().Length > 1).SelectMany(Abbrev.Forms).Distinct(StringComparer.OrdinalIgnoreCase).Take(8).ToList();
                 if (terms is { Count: > 0 }) res.Add(terms);
             }
-        if (res.Count == 0) res = Abbrev.Groups(question);
+        if (res.Count == 0) res = Abbrev.Groups(f?["clean"]?.ToString() ?? question);
         // 🧠 Your own words for things (from Nova Memory).
         try { foreach (var g in res) foreach (var (a, full) in Memory.VocabFor(string.Join(" ", g)).Take(3)) foreach (var v in new[] { a, full }) if (!g.Contains(v, StringComparer.OrdinalIgnoreCase)) g.Add(v); } catch { }
         return res.Take(8).ToList();
@@ -113,7 +113,7 @@ static class SmartSearch
     static MailQuery Clone(MailQuery q) => new()
     {
         From = q.From.ToList(), To = q.To.ToList(), Cc = q.Cc.ToList(), MeIn = q.MeIn, After = q.After, Before = q.Before, Folder = q.Folder,
-        HasAttach = q.HasAttach, Unread = q.Unread, Unanswered = q.Unanswered, FollowUp = q.FollowUp, Limit = 400
+        HasAttach = q.HasAttach, Unread = q.Unread, Unanswered = q.Unanswered, FollowUp = q.FollowUp, Limit = 400, Project = q.Project
     };
 
     public static async Task<Result> Mail(string question, MailQuery baseQ, List<List<string>> groups, CancellationToken ct, bool rerank = true)

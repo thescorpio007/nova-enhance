@@ -46,6 +46,7 @@ static class EmailMenu
         }
         if (add.DropDownItems.Count == 0) add.DropDownItems.Add(new ToolStripLabel("No open tasks yet"));
         m.Items.Add(add);
+        m.Items.Add(ProjectItems(new List<MailHit> { h }));
         Sep();
         Add("💾 Save as…", () => MailFile.SaveAs(h, form));
         Add("⧉ Copy as file (.msg)", () => MailFile.Copy(h, form));
@@ -88,14 +89,44 @@ static class EmailMenu
         m.Items.Add(new ToolStripSeparator());
         void Add(string text, Action a) => m.Items.Add(text, null, (_, _) => { try { a(); } catch (Exception e) { MessageBox.Show(e.Message, "Nova Enhance"); } });
         foreach (var (text, act) in Bulk.Actions(hs, form, handledMany, askMany)) if (text == "-") m.Items.Add(new ToolStripSeparator()); else Add(text, act);
+        m.Items.Add(new ToolStripSeparator());
+        m.Items.Add(ProjectItems(hs));
         foreach (ToolStripItem i in m.Items) Dark(i);
         m.Show(screen);
+    }
+
+    /// <summary>📁 Move to project… (and ✋ Always: this sender → project) — your correction always wins.</summary>
+    static ToolStripMenuItem ProjectItems(List<MailHit> hs)
+    {
+        var cur = hs.Count == 1 ? MailProjects.Of(hs[0].Id) : "";
+        var mv = new ToolStripMenuItem("📁 Move to project" + (cur.Length > 0 ? $" (now {cur})" : "") + "…");
+        foreach (var (code, label) in MailProjects.Choices())
+        {
+            var cc = code;
+            var it = new ToolStripMenuItem(label) { Checked = cur == code };
+            it.Click += (_, _) => { MailProjects.Move(hs, cc); Program.Tray?.ShowBalloonTip(2500, "📁 Nova", $"{hs.Count} email(s) → {cc}", ToolTipIcon.Info); };
+            mv.DropDownItems.Add(it);
+        }
+        var senders = hs.Where(h => !h.Sent).Select(h => (h.FromAddr ?? "").ToLowerInvariant()).Where(a => a.Length > 0).Distinct().ToList();
+        if (senders.Count == 1)
+        {
+            mv.DropDownItems.Add(new ToolStripSeparator());
+            var al = new ToolStripMenuItem($"✋ Always: {senders[0]} →");
+            foreach (var (code, label) in MailProjects.Choices())
+            {
+                var cc = code;
+                al.DropDownItems.Add(label, null, (_, _) => { MailProjects.AlwaysSender(senders[0], cc); Program.Tray?.ShowBalloonTip(2500, "📁 Nova", $"Emails from {senders[0]} → {cc}", ToolTipIcon.Info); });
+            }
+            mv.DropDownItems.Add(al);
+        }
+        if (mv.DropDownItems.Count == 0) mv.DropDownItems.Add(new ToolStripLabel("Add your projects first (Settings → 📁 Projects)"));
+        return mv;
     }
 
     static void Dark(ToolStripItem i)
     {
         i.ForeColor = Th.Text;
-        if (i is ToolStripMenuItem mi) foreach (ToolStripItem k in mi.DropDownItems) { k.ForeColor = Th.Text; k.BackColor = Color.FromArgb(0x1D, 0x21, 0x30); }
+        if (i is ToolStripMenuItem mi) foreach (ToolStripItem k in mi.DropDownItems) { k.ForeColor = Th.Text; k.BackColor = Color.FromArgb(0x1D, 0x21, 0x30); Dark(k); }
     }
 
     /// <summary>Hooks right-click (and the Menu key / Shift+F10 on the form) onto a card and everything inside it.</summary>

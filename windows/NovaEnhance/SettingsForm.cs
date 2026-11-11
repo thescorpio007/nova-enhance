@@ -769,10 +769,135 @@ class SettingsForm : NovaForm
             Note("Reading takes many hours for big projects (OCR on scanned drawings). Newest files are read first, so what you work on now is ready soonest. Nova pauses while you work and continues after working hours or when the PC is idle (Settings → Email & AI → Gentle indexing); ⚡ reads at full speed until complete.");
         }
 
+        EmailProjectsSection();
+
         page.Add(Th.Section("How Nova knows your files"));
         page.Add(Th.Check("Keep the list of file names up to date (new, renamed and deleted files within seconds; a full check every day)", Projects.Indexer.On, v => Projects.Indexer.On = v));
         Note("1 · Names only: Nova lists every file name, folder, date and revision of your projects — a few minutes, then instant.\n2 · Inside only when needed: when you ask something, Nova picks the likely files by their names and opens just those (OCR included for scanned drawings).\n3 · Remembered for ALL of Nova: a file read once (by Ask about this email, Ask AI, Search inside a folder, Nova Chat…) is known by every feature; if the file changes, it is read again when needed.\n4 · One Nova search: every question also looks at your emails, 🧠 Nova Memory and past answers in 🕘 Chat history, and your projects are the one project list everywhere (Ask Nova groups, Brief, prompts).\n📂 Find a project file (tray menu, or here): type a drawing number or a few words — results as you type, latest revision first, Enter opens, right-click to attach it to an email.");
         Note("📐 Drawing numbers: when an email (or the text you highlight in Outlook) mentions a drawing or document number, 💬 Talk about this email finds the file by its name in the project — the latest PDF first, then Word / Excel, CAD last (never used for the answer) — and marks older revisions as superseded.");
+    }
+
+    // ------------------------------------------------------------------ ✉ Emails per project
+
+    void EmailProjectsSection()
+    {
+        page.Add(Th.Section("✉ Emails per project"));
+        Note("Nova sorts every email of the index into one of your projects, on this PC. The 📁 project button in 🔍 Search for email (and the conversations) uses it. Your corrections always win.");
+        var prog = page.Add(Th.L("", 10.5f, Th.Text, true));
+        var (pb, pf) = Bar(Th.Accent);
+        page.Add(pb);
+        var counts = Note("", Th.Muted);
+        var phase = Note("", Th.Muted);
+        void Live()
+        {
+            if (prog.IsDisposed) return;
+            int t = MailProjects.Total, d = MailProjects.Done, so = MailProjects.Sorted;
+            prog.Text = t == 0 ? "Waiting for the email index…" : $"{d:N0} of {t:N0} emails checked · {(t > 0 ? 100L * d / t : 0)}%  ·  {so:N0} sorted into a project";
+            var w = Math.Max(200, page.ClientSize.Width - 80);
+            pb.Width = w; pf.Width = t > 0 ? (int)(w * (double)d / t) : 0;
+            var cs = MailProjects.Counts;
+            counts.Text = string.Join(" · ", MailProjects.Choices().Select(c => $"{c.Code} {(cs.TryGetValue(c.Code, out var n) ? n : 0):N0}")) + $" · ❔ Unsorted {(cs.TryGetValue("", out var u) ? u : 0):N0}";
+            phase.Text = MailProjects.Phase;
+        }
+        Live();
+        var lt = new System.Windows.Forms.Timer { Interval = 3000 };
+        lt.Tick += (_, _) => { if (prog.IsDisposed) { lt.Stop(); lt.Dispose(); return; } Live(); };
+        lt.Start();
+        var br = page.Add(Th.Row(false));
+        br.Controls.Add(Th.B("❔ Review unsorted", () => { Store.Set("win_ask_proj", "?"); Screens.AskFor("latest emails"); }));
+        br.Controls.Add(Th.B("↻ Sort everything again", () =>
+        {
+            if (MessageBox.Show(this, "Sort all emails again with the current codes, names, folders and rules? (Your own corrections are kept.)", "Nova Enhance", MessageBoxButtons.YesNo) == DialogResult.Yes) MailProjects.SortAgain();
+        }));
+
+        page.Add(Th.Section("Sorting rules · first strong match wins (▲ ▼ change the order, untick to switch a rule off)"));
+        var order = MailProjects.Order;
+        for (int k = 0; k < order.Count; k++)
+        {
+            var r = order[k]; var idx = k;
+            var row = page.Add(new FlowLayoutPanel { AutoSize = true, WrapContents = false, BackColor = Color.FromArgb(0x18, 0x1C, 0x24), Padding = new Padding(6, 4, 6, 4), Margin = new Padding(0, 2, 0, 2) }, true);
+            var up = Th.B("▲", () => { var o = MailProjects.Order; if (idx > 0) { (o[idx - 1], o[idx]) = (o[idx], o[idx - 1]); MailProjects.Order = o; Draw("📁 Projects"); } });
+            var dn = Th.B("▼", () => { var o = MailProjects.Order; if (idx < o.Count - 1) { (o[idx + 1], o[idx]) = (o[idx], o[idx + 1]); MailProjects.Order = o; Draw("📁 Projects"); } });
+            up.Font = dn.Font = Th.F(8); up.Padding = dn.Padding = new Padding(2, 0, 2, 0);
+            row.Controls.Add(up); row.Controls.Add(dn);
+            var ck = Th.Check($"{k + 1} · {MailProjects.RuleNames[r]}", MailProjects.RuleOn(r), v => MailProjects.SetRule(r, v));
+            ck.Font = Th.F(10, true); ck.Width = 300; ck.AutoSize = false;
+            row.Controls.Add(ck);
+            var help = Th.L(MailProjects.RuleHelp[r], 9, Th.Muted); help.Margin = new Padding(0, 6, 10, 0);
+            row.Controls.Add(help);
+            var st = Th.L(MailProjects.RuleStrength[r], 8.5f, r <= 2 || r == 4 ? Th.Good : r <= 5 ? Th.Warn : Th.Muted, true); st.Margin = new Padding(0, 6, 10, 0);
+            row.Controls.Add(st);
+            row.Controls.Add(Th.L($"{MailProjects.RuleCounts[r]:N0} emails", 9, Th.Muted));
+        }
+        Note($"✋ Your corrections always win: right-click an email → 📁 Move to project… / ✋ Always: this sender → project ({MailProjects.RuleCounts[8] + MailProjects.RuleCounts[9]:N0} emails). Two projects tie → ❔ Unsorted (no guessing). After changing rules: ↻ Sort everything again.");
+
+        page.Add(Th.Section("Projects · what Nova looks for in emails"));
+        var learned = MailProjects.Learned;
+        foreach (var (code, label) in MailProjects.Choices())
+        {
+            var cc = code;
+            var p = Projects.All().FirstOrDefault(x => x.Code == code);
+            var cfg = MailProjects.CfgOf(code);
+            var box = page.Add(new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, BackColor = Color.FromArgb(0x18, 0x1C, 0x24), Padding = new Padding(10, 6, 10, 6), Margin = new Padding(0, 3, 0, 3) }, true);
+            box.Controls.Add(Th.L($"📁 {label}   ·   {MailProjects.CountOf(code):N0} emails", 10.5f, Th.Text, true));
+            var codes = p == null ? new List<string>() : p.Codes.Append(p.Code).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var lines = new[]
+            {
+                ("🏷 Codes in subjects / numbers", codes.Count > 0 ? string.Join(", ", codes) : "—"),
+                ("📛 Names & email codes", string.Join(", ", (p != null && p.Name.Length > 3 ? new[] { p.Name } : Array.Empty<string>()).Concat(cfg.Names)) is { Length: > 0 } nm ? nm : "—"),
+                ("🗂 Outlook folders", cfg.Folders.Count > 0 ? string.Join(", ", cfg.Folders) : "— (none linked)"),
+                ("👤 Senders", string.Join(", ", cfg.Senders.Select(x => "✋ " + x).Concat(learned.Where(x => x.Value == code).Select(x => x.Key).Take(8))) is { Length: > 0 } sn ? sn : "(learning…)")
+            };
+            foreach (var (k, v) in lines) { var l = Th.L($"{k}:  {v}", 9.5f, Th.Muted); l.MaximumSize = new Size(Math.Max(400, page.ClientSize.Width - 100), 0); box.Controls.Add(l); }
+            var eb = new FlowLayoutPanel { AutoSize = true, WrapContents = true, BackColor = Color.Transparent };
+            if (p != null)
+                eb.Controls.Add(Th.B("✎ Codes", () =>
+                {
+                    var v = Prompt.Ask(this, "🏷 Codes · " + cc, "Codes written in subjects and document numbers (comma separated), e.g. SLV, SLV-EUW", string.Join(", ", p.Codes));
+                    if (v == null) return;
+                    var all = Projects.All(); var pp = all.First(x => x.Code == cc);
+                    pp.Codes = v.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+                    Projects.SaveAll(all); Draw("📁 Projects");
+                }));
+            eb.Controls.Add(Th.B("✎ Names", () =>
+            {
+                var v = Prompt.Ask(this, "📛 Names · " + cc, "Other names people write for this project (comma separated), e.g. Sea La Vie, 1-Sea La vie", string.Join(", ", cfg.Names));
+                if (v == null) return;
+                cfg.Names = v.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList(); MailProjects.SaveCfg(cc, cfg); Draw("📁 Projects");
+            }));
+            eb.Controls.Add(Th.B("🗂 Outlook folders", () =>
+            {
+                var v = Prompt.Ask(this, "🗂 Outlook folders · " + cc, "Outlook folder names (comma separated) — emails in these folders and their sub-folders belong to this project, e.g. SLV, Projects › Sea La Vie", string.Join(", ", cfg.Folders));
+                if (v == null) return;
+                cfg.Folders = v.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select(x => x.Replace("›", "").Trim()).ToList(); MailProjects.SaveCfg(cc, cfg); Draw("📁 Projects");
+            }));
+            eb.Controls.Add(Th.B("👤 Senders", () =>
+            {
+                var v = Prompt.Ask(this, "👤 Senders · " + cc, "Email addresses or @company.com (comma separated) whose emails always belong to this project", string.Join(", ", cfg.Senders));
+                if (v == null) return;
+                var list = v.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select(x => x.ToLowerInvariant()).ToList();
+                foreach (var s0 in list.Except(cfg.Senders)) MailProjects.AlwaysSender(s0, cc);
+                var c2 = MailProjects.CfgOf(cc); c2.Senders = list; MailProjects.SaveCfg(cc, c2); Draw("📁 Projects");
+            }));
+            box.Controls.Add(eb);
+        }
+        var fx = MailProjects.Corrections();
+        page.Add(Th.Row(false)).Controls.Add(Th.B($"✋ My corrections ({fx.Count})", () =>
+        {
+            using var f = new NovaForm { Text = "✋ My corrections", Width = 720, Height = 460, StartPosition = FormStartPosition.CenterParent };
+            var lb = new ListBox { Dock = DockStyle.Fill, BackColor = Th.Card, ForeColor = Th.Text, Font = Th.F(10), BorderStyle = BorderStyle.None, SelectionMode = SelectionMode.MultiExtended };
+            foreach (var (_, pj, subj) in fx) lb.Items.Add($"{pj}  ·  {subj}");
+            var undo = Th.B("↩ Undo selected", () => { foreach (int i in lb.SelectedIndices) MailProjects.Undo(fx[i].Entry); f.Close(); }, true);
+            undo.Dock = DockStyle.Bottom;
+            f.Controls.Add(lb); f.Controls.Add(undo);
+            f.ShowDialog(this);
+            Draw("📁 Projects");
+        }));
+
+        page.Add(Th.Section("✦ AI for the unclear ones"));
+        Opt("B · Ask the AI for emails the rules can't settle (subject + first lines only)", "Uses your Default AI, about 30 emails per request, gently in the background.", MailProjects.AiOn, () => MailProjects.AiOn = true);
+        Opt("A · Only the rules on this PC", "Unclear emails stay in ❔ Unsorted until you move them.", !MailProjects.AiOn, () => MailProjects.AiOn = false);
+        Note("🔒 Folders marked “never read” and emails that mention wallet / bank / password / passport / salary are never sent.", Th.Warn);
     }
 
     // ------------------------------------------------------------------ Folder search

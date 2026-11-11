@@ -210,6 +210,8 @@ class MailList : FlowLayoutPanel
         if (h.Status == "follow") meta += $" · no answer for {h.DaysWaiting} days";
         if (h.Status == "fyi" && !grey) meta += " · FYI";
         if (h.Earlier > 0) meta += $" · +{h.Earlier} earlier in this topic";
+        var pj = MailProjects.Of(h.Id);
+        if (pj.Length > 0) meta = "📁 " + pj + " · " + meta;
         var ml = Th.L(meta, 9, grey ? Th.Muted : h.Status == "needs" ? Th.Warn : Th.Muted);
         ml.MaximumSize = new Size(width - 24, 0);
         card.Controls.Add(ml);
@@ -342,13 +344,31 @@ class ReadPane : Panel
     public ReadPane()
     {
         BackColor = Th.Card; Padding = new Padding(4);
-        body = new Panel { Dock = DockStyle.Fill, BackColor = Th.Card };
+        // The whole pane scrolls: header, buttons, then the email at the full height of the pane.
+        AutoScroll = true;
+        body = new Panel { Dock = DockStyle.Top, Height = 500, BackColor = Th.Card };
         textView = new Stack { BackColor = Th.Card, Padding = new Padding(16, 6, 16, 12) };
         body.Controls.Add(textView);
         s = new Stack { Dock = DockStyle.Top, AutoScroll = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = Th.Card, Padding = new Padding(16, 12, 16, 0) };
         Controls.Add(body);
         Controls.Add(s);
+        s.SizeChanged += (_, _) => Fit();
+        Resize += (_, _) => Fit();
         Empty();
+    }
+
+    bool fitting;
+    void Fit()
+    {
+        if (fitting) return;
+        fitting = true;
+        try
+        {
+            var h = Math.Max(ClientSize.Height - 10, 420);
+            if (body.Height != h) body.Height = h;
+            AutoScrollMinSize = new Size(0, s.Height + body.Height + Padding.Vertical);
+        }
+        finally { fitting = false; }
     }
 
     void Empty()
@@ -383,7 +403,7 @@ class ReadPane : Panel
         else if (!h.Sent && h.Status is "needs" or "week") top.Controls.Add(Th.L($"  waiting {h.DaysWaiting} day{(h.DaysWaiting == 1 ? "" : "s")}", 9.5f, Th.Warn, true));
         var hdr = h.Sent ? $"From: you\nTo: {h.To}" : $"From: {h.FromName}  <{h.FromAddr}>\nTo: {h.To}";
         if (h.Cc.Length > 0) hdr += "\nCc: " + h.Cc;
-        hdr += $"\n{h.Date:dddd dd MMM yyyy HH:mm}" + (h.Earlier > 0 ? $"   ·   +{h.Earlier} earlier email{(h.Earlier == 1 ? "" : "s")} in this topic" : "");
+        hdr += $"\n{h.Date:dddd dd MMM yyyy HH:mm}" + (MailProjects.Of(h.Id) is { Length: > 0 } pjc ? "   ·   📁 " + pjc : "") + (h.Earlier > 0 ? $"   ·   +{h.Earlier} earlier email{(h.Earlier == 1 ? "" : "s")} in this topic" : "");
         s.Add(Th.Wrap(hdr, 9.5f, Color.FromArgb(0xC9, 0xCE, 0xD8)));
         if (h.AttNames.Length > 0)
         {
@@ -432,6 +452,8 @@ class ReadPane : Panel
         foreach (Control c in s.Controls) if (c is not Button) EmailMenu.Hook(c, h, pt => { EmailMenu.Show(h, this, pt, OnSummary, OnDraft, OnHandled, _ => { }); return true; });
         s.ResumeLayout();
         textView.AutoScrollPosition = new Point(0, 0);
+        AutoScrollPosition = new Point(0, 0);
+        Fit();
         Switch();
     }
 
@@ -579,7 +601,8 @@ class AskForm : NovaForm
     readonly TalkPanel talk;
     readonly PickBar pickBar;
     // ⏸ Pause / ■ Stop · 📁 project files & drawings found with the emails
-    readonly Button pauseBtn, stopBtn;
+    readonly Button pauseBtn, stopBtn, projBtn;
+    static string Project { get => Store.Str("win_ask_proj", ""); set => Store.Set("win_ask_proj", value ?? ""); }
     readonly FlowLayoutPanel filesBox;
     readonly PreviewPane filePreview;
     List<FileRow> fileRows = new();
@@ -627,7 +650,7 @@ class AskForm : NovaForm
         fbtn.Margin = new Padding(16, 2, 0, 0);
         head.Controls.Add(fbtn);
 
-        var qrow = stack.Add(new TableLayoutPanel { ColumnCount = 5, RowCount = 1, AutoSize = false, Height = 40, BackColor = Color.Transparent, Margin = new Padding(0, 4, 0, 6) }, true);
+        var qrow = stack.Add(new TableLayoutPanel { ColumnCount = 6, RowCount = 1, AutoSize = false, Height = 40, BackColor = Color.Transparent, Margin = new Padding(0, 4, 0, 6) }, true);
         qrow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         qrow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         qrow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -637,20 +660,27 @@ class AskForm : NovaForm
         question.Font = Th.F(12);
         question.Dock = DockStyle.Fill;
         question.PlaceholderText = "e.g. Did Hamza send an email to Ibrahim while I was in Cc?";
-        qrow.Controls.Add(question, 0, 0);
+        qrow.ColumnStyles.Insert(0, new ColumnStyle(SizeType.AutoSize));
+        // 📁 Project: the emails Nova sorted per project (Settings → 📁 Projects → Emails per project).
+        projBtn = Th.B(MailProjects.Label(Project) + " ▾", null);
+        projBtn.Margin = new Padding(0, 0, 8, 0);
+        projBtn.Click += (_, _) => ProjectMenu();
+        new ToolTip().SetToolTip(projBtn, "Search only the emails, files and drawings of one project (Nova sorts every email per project)");
+        qrow.Controls.Add(projBtn, 0, 0);
+        qrow.Controls.Add(question, 1, 0);
         // ⏸ Pause / ■ Stop: for a search that takes long (a slow AI, a big mailbox).
         pauseBtn = Th.B("⏸ Pause", TogglePause);
         pauseBtn.Margin = new Padding(8, 0, 0, 0); pauseBtn.Enabled = false; pauseBtn.ForeColor = Color.FromArgb(0xFF, 0xD2, 0x7A);
-        qrow.Controls.Add(pauseBtn, 1, 0);
+        qrow.Controls.Add(pauseBtn, 2, 0);
         stopBtn = Th.B("■ Stop", StopSearch);
         stopBtn.Margin = new Padding(6, 0, 0, 0); stopBtn.Enabled = false; stopBtn.ForeColor = Color.FromArgb(0xFF, 0x9A, 0xA0);
-        qrow.Controls.Add(stopBtn, 2, 0);
+        qrow.Controls.Add(stopBtn, 3, 0);
         micBtn = Th.B("🎤", ToggleMic);
         micBtn.Margin = new Padding(8, 0, 0, 0);
-        qrow.Controls.Add(micBtn, 3, 0);
+        qrow.Controls.Add(micBtn, 4, 0);
         var askBtn = Th.B("Ask", () => Run(question.Text, false), true);
         askBtn.Margin = new Padding(8, 0, 0, 0);
-        qrow.Controls.Add(askBtn, 4, 0);
+        qrow.Controls.Add(askBtn, 5, 0);
 
         // ✎ More instructions for my AI · filter level · ⭐ My prompts
         var prow = stack.Add(Th.Row(false));
@@ -882,6 +912,34 @@ class AskForm : NovaForm
 
     async void Run(string q, bool followUp) => await RunAsync(q, followUp, false);
 
+    void SetProject(string code)
+    {
+        Project = code;
+        projBtn.Text = MailProjects.Label(code) + " ▾";
+    }
+
+    void ProjectMenu()
+    {
+        var m = new ContextMenuStrip { Font = Th.F(10), ShowImageMargin = false };
+        var head = new ToolStripLabel(MailProjects.Done < MailProjects.Total ? $"EMAILS PER PROJECT · sorting {100L * MailProjects.Done / Math.Max(1, MailProjects.Total)}%…" : "EMAILS PER PROJECT") { Font = Th.F(8.5f, true), ForeColor = Color.Gray };
+        m.Items.Add(head);
+        void Add(string code, string label)
+        {
+            var n = MailProjects.CountOf(code);
+            var it = new ToolStripMenuItem($"{label}    {(n > 0 ? n.ToString("N0") : "")}") { Checked = Project == code };
+            if (Project == code) it.Font = Th.F(10, true);
+            it.Click += (_, _) => { SetProject(code); if (lastQuestion.Length > 0) Run(question.Text, false); };
+            m.Items.Add(it);
+        }
+        Add("", "🌐 All projects");
+        foreach (var (code, label) in MailProjects.Choices()) Add(code, "📁 " + label);
+        m.Items.Add(new ToolStripSeparator());
+        Add("?", "❔ Unsorted");
+        m.Items.Add(new ToolStripSeparator());
+        m.Items.Add("⚙ Sorting rules & progress…", null, (_, _) => Screens.Settings("📁 Projects"));
+        m.Show(projBtn, new Point(0, projBtn.Height));
+    }
+
     void TogglePause()
     {
         if (SearchGate.Paused) { SearchGate.Resume(); pauseBtn.Text = "⏸ Pause"; info.Text = "▶ Resumed — searching…"; }
@@ -915,6 +973,7 @@ class AskForm : NovaForm
             ShowMessage("Microsoft 365 connection comes in build 2 (your IT admin approves it once). Choose \"Outlook on this PC\" or \"Both\" in Settings → Email & AI to search now.");
             return;
         }
+        projBtn.Text = MailProjects.Label(Project) + " ▾";
         cts?.Cancel();
         SearchGate.Resume();
         var my = cts = new CancellationTokenSource();
@@ -931,7 +990,8 @@ class AskForm : NovaForm
             // 📐 A document / drawing number: its emails at once (no AI needed), while Nova keeps searching.
             if (In("mail") && !followUp && Revisions.Numbers(mainQ).Count > 0)
             {
-                var early = await Task.Run(() => Assistant.ByNumber(mainQ), my.Token);
+                var proj0 = Project;
+                var early = (await Task.Run(() => Assistant.ByNumber(mainQ), my.Token)).Where(h => proj0.Length == 0 || proj0 == "?" || MailProjects.Of(h.Id) is var pj && (pj.Length == 0 || pj == proj0)).ToList();
                 if (my.IsCancellationRequested) return;
                 if (early.Count > 0)
                 {
@@ -939,8 +999,11 @@ class AskForm : NovaForm
                     info.Text = $"📐 {early.Count} email(s) with {string.Join(", ", Revisions.Numbers(mainQ).Take(3))} found at once — still searching for more…";
                 }
             }
+            // 📁 A project named in the question picks it (the button follows).
+            var named = Projects.ForText(mainQ);
+            if (named != null && named.Code.Length > 0 && !named.Code.Equals(Project, StringComparison.OrdinalIgnoreCase)) SetProject(named.Code);
             var ans = In("mail")
-                ? await Assistant.Ask(mainQ, followUp ? lastFilter : null, hits, my.Token, fromTalk)
+                ? await Assistant.Ask(mainQ, followUp ? lastFilter : null, hits, my.Token, fromTalk, Project)
                 : new Assistant.Answer { Explain = "emails not searched (✉ is off in Search in)" };
             if (my.IsCancellationRequested) return;
             if (ans.Intent is "summarize" or "draft")
@@ -1018,12 +1081,13 @@ class AskForm : NovaForm
         info.Text = prev + " · 📁 looking in project files and drawings…";
         var terms = FolderAsk.LocalTerms(q);
         fileTerms = string.Join(" ", terms.Concat(Revisions.Numbers(q)));
+        var pobj = Project.Length > 1 ? Projects.All().FirstOrDefault(x => x.Code.Equals(Project, StringComparison.OrdinalIgnoreCase)) : null;
         var rows = await Task.Run(() =>
         {
             var res = new List<FileRow>();
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var nums = Revisions.Numbers(q);
-            var all = Projects.All().SelectMany(p => p.Folders).Concat(Projects.General).Where(f => f.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var all = (pobj != null ? Projects.FoldersOf(pobj) : Projects.All().SelectMany(p => p.Folders).Concat(Projects.General)).Where(f => f.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             static bool IsDrawing(string path) => Regex.IsMatch(Path.GetFileName(path), @"\.(dwg|dxf|rvt)$|[-_ ](SD|SHD|DWG|GA|DD|IFC|IFT)[-_ ]", RegexOptions.IgnoreCase);
             void AddFile(string path, string sub, string loc, string go, string text)
             {
@@ -1046,7 +1110,7 @@ class AskForm : NovaForm
             // 📖 Text already read by any feature, 🧠 Memory, 🕘 past answers (the one Nova search, emails left out).
             try
             {
-                var ns = NovaSearch.Run(q, terms, new NovaSearch.Opts { Emails = false, Docs = files || draw, Drawings = draw, Mem = mem, Hist = hist, ReadFiles = false, MaxDocs = 8 }, null, ct);
+                var ns = NovaSearch.Run(q, terms, new NovaSearch.Opts { Project = pobj, Folders = pobj != null ? all : null, Emails = false, Docs = files || draw, Drawings = draw, Mem = mem, Hist = hist, ReadFiles = false, MaxDocs = 8 }, null, ct);
                 foreach (var p in ns.Drawings.Concat(ns.Docs))
                     AddFile(p.Path, $"{Path.GetDirectoryName(p.Path)}{(string.IsNullOrEmpty(p.Loc) ? "" : " · " + p.Loc)}", p.Loc ?? "", p.Goto ?? "", p.Text ?? "");
                 foreach (var p in ns.Memory) res.Add(new FileRow("🧠", "", p.Loc, Short(p.Text), "", "", p.Text));

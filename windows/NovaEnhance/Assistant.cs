@@ -59,7 +59,7 @@ Rules:
         return res.OrderByDescending(h => h.Date).ToList();
     }
 
-    public static async Task<Answer> Ask(string question, JsonObject previous, List<MailHit> currentHits, CancellationToken ct, bool smart = false)
+    public static async Task<Answer> Ask(string question, JsonObject previous, List<MailHit> currentHits, CancellationToken ct, bool smart = false, string project = "")
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var ans = new Answer();
@@ -95,6 +95,7 @@ Rules:
         }
 
         var q = ToQuery(f);
+        q.Project = project ?? "";
         if (ans.Intent == "outstanding")
         {
             q.Folder = "received"; q.Unanswered = true;
@@ -119,6 +120,15 @@ Rules:
         {
             // ✦ AI search: ideas + short forms, several passes, scoring, meaning search, the AI keeps the best few.
             var groups = SmartSearch.FromPlan(f, question);
+            // 📁 The project is a filter, not a word to find.
+            if (q.Project.Length > 1)
+            {
+                var pr = Projects.All().FirstOrDefault(x => x.Code.Equals(q.Project, StringComparison.OrdinalIgnoreCase));
+                var names = new List<string> { q.Project };
+                if (pr != null) { names.AddRange(pr.Codes); if (pr.Name.Length > 0) names.Add(pr.Name); }
+                var left = groups.Where(g => !g.Any(t => names.Contains(t, StringComparer.OrdinalIgnoreCase))).ToList();
+                if (left.Count > 0) groups = left;
+            }
             if (ans.Explain.Length == 0) ans.Explain = Describe(q);
             var baseQ = q; baseQ.Words = new(); baseQ.Phrase = "";
             var sr = await SmartSearch.Mail(question, baseQ, groups, ct);
@@ -135,7 +145,8 @@ Rules:
         // 📐 Emails that carry the document number come first.
         if (ans.Intent is "search" or "" && Revisions.Numbers(question).Count > 0)
         {
-            var byNum = await Task.Run(() => ByNumber(question), ct);
+            var byNum = (await Task.Run(() => ByNumber(question), ct))
+                .Where(h => q.Project.Length < 2 || MailProjects.Of(h.Id) is var pj && (pj.Length == 0 || pj.Equals(q.Project, StringComparison.OrdinalIgnoreCase))).ToList();
             ans.ByNumber = byNum.Count;
             ans.Hits = byNum.Concat(ans.Hits.Where(h => !byNum.Any(b => b.Entry == h.Entry))).ToList();
         }
@@ -188,15 +199,77 @@ Rules:
     static readonly HashSet<string> Stop = new(StringComparer.OrdinalIgnoreCase)
     {
         "the","a","an","to","from","in","on","of","for","and","or","is","was","were","did","does","do","me","my","i","about","with","email","emails",
-        "mail","mails","any","all","find","show","what","which","who","when","where","send","sent","that","this","it","please","still","not","there"
+        "mail","mails","any","all","find","show","what","which","who","when","where","send","sent","that","this","it","please","still","not","there",
+        "limited","limit","only","project","projects","before","after","since","between","related","regarding","give","get","list","can","you","are","has","have","be","by","at","as","new","latest"
     };
 
     /// <summary>Without an AI key: keyword search only.</summary>
+    const string Mon = @"(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)";
+
+    static DateTime? MonthStart(string mon, string year)
+    {
+        var names = new[] { "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec" };
+        var i = Array.FindIndex(names, n => mon.ToLowerInvariant().StartsWith(n));
+        if (i < 0) return null;
+        var y = int.TryParse(year, out var yy) ? yy : DateTime.Now.Year;
+        if (year.Length == 0 && new DateTime(y, i + 1, 1) > DateTime.Now) y--;
+        return new DateTime(y, i + 1, 1);
+    }
+
+    /// <summary>Without the AI (no key, or the AI too slow): dates, then the important words — filler words and the project left out.</summary>
     static JsonObject LocalParse(string q)
     {
-        var words = Regex.Split(q, @"[^\p{L}\p{N}\-]+").Where(w => w.Length > 2 && !Stop.Contains(w)).Take(6).ToArray();
+        var o = new JsonObject { ["intent"] = "search" };
+        var t = " " + (q ?? "") + " ";
+        var notes = new List<string>();
+        DateTime? after = null, before = null;
+        var now = DateTime.Now;
+        Match m;
+        if ((m = Regex.Match(t, @"\b(before|until|till|prior to)\s+" + Mon + @"\s*(\d{4})?", RegexOptions.IgnoreCase)).Success && MonthStart(m.Groups[2].Value, m.Groups[3].Value) is { } b1) { before = b1; t = t.Replace(m.Value, " "); }
+        if ((m = Regex.Match(t, @"\b(after)\s+" + Mon + @"\s*(\d{4})?", RegexOptions.IgnoreCase)).Success && MonthStart(m.Groups[2].Value, m.Groups[3].Value) is { } a1) { after = a1.AddMonths(1); t = t.Replace(m.Value, " "); }
+        if ((m = Regex.Match(t, @"\b(since|from)\s+" + Mon + @"\s*(\d{4})?", RegexOptions.IgnoreCase)).Success && MonthStart(m.Groups[2].Value, m.Groups[3].Value) is { } a2) { after = a2; t = t.Replace(m.Value, " "); }
+        if ((m = Regex.Match(t, @"\b(in|during)\s+" + Mon + @"\s*(\d{4})?", RegexOptions.IgnoreCase)).Success && MonthStart(m.Groups[2].Value, m.Groups[3].Value) is { } i1) { after = i1; before = i1.AddMonths(1); t = t.Replace(m.Value, " "); }
+        if ((m = Regex.Match(t, @"\b(before|after|since|in)\s+(20\d\d)\b", RegexOptions.IgnoreCase)).Success)
+        {
+            var y = int.Parse(m.Groups[2].Value);
+            switch (m.Groups[1].Value.ToLowerInvariant()) { case "before": before = new DateTime(y, 1, 1); break; case "after": after = new DateTime(y + 1, 1, 1); break; case "since": after = new DateTime(y, 1, 1); break; default: after = new DateTime(y, 1, 1); before = new DateTime(y + 1, 1, 1); break; }
+            t = t.Replace(m.Value, " ");
+        }
+        if ((m = Regex.Match(t, @"\b(before|after|since)\s+(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})\b", RegexOptions.IgnoreCase)).Success)
+        {
+            try
+            {
+                var d = new DateTime(int.Parse(m.Groups[4].Value), int.Parse(m.Groups[3].Value), int.Parse(m.Groups[2].Value));
+                if (m.Groups[1].Value.Equals("before", StringComparison.OrdinalIgnoreCase)) before = d; else after = d;
+                t = t.Replace(m.Value, " ");
+            }
+            catch { }
+        }
+        if ((m = Regex.Match(t, @"\blast\s+(\d{1,3})\s+(day|week|month)s?\b", RegexOptions.IgnoreCase)).Success)
+        {
+            var n = int.Parse(m.Groups[1].Value);
+            after = m.Groups[2].Value.ToLowerInvariant() switch { "day" => now.Date.AddDays(-n), "week" => now.Date.AddDays(-7 * n), _ => now.Date.AddMonths(-n) };
+            t = t.Replace(m.Value, " ");
+        }
+        if ((m = Regex.Match(t, @"\blast month\b", RegexOptions.IgnoreCase)).Success) { var f = new DateTime(now.Year, now.Month, 1); after = f.AddMonths(-1); before = f; t = t.Replace(m.Value, " "); }
+        if ((m = Regex.Match(t, @"\bthis month\b", RegexOptions.IgnoreCase)).Success) { after = new DateTime(now.Year, now.Month, 1); t = t.Replace(m.Value, " "); }
+        if ((m = Regex.Match(t, @"\bthis week\b", RegexOptions.IgnoreCase)).Success) { after = now.Date.AddDays(-(((int)now.DayOfWeek + 6) % 7)); t = t.Replace(m.Value, " "); }
+        if ((m = Regex.Match(t, @"\blast week\b", RegexOptions.IgnoreCase)).Success) { var mon = now.Date.AddDays(-(((int)now.DayOfWeek + 6) % 7)); after = mon.AddDays(-7); before = mon; t = t.Replace(m.Value, " "); }
+        if ((m = Regex.Match(t, @"\btoday\b", RegexOptions.IgnoreCase)).Success) { after = now.Date; t = t.Replace(m.Value, " "); }
+        if ((m = Regex.Match(t, @"\byesterday\b", RegexOptions.IgnoreCase)).Success) { after = now.Date.AddDays(-1); before = now.Date; t = t.Replace(m.Value, " "); }
+        if (after != null) { o["after"] = after.Value.ToString("yyyy-MM-dd"); notes.Add("from " + after.Value.ToString("dd MMM yyyy")); }
+        if (before != null) { o["before"] = before.Value.ToString("yyyy-MM-dd"); notes.Add("before " + before.Value.ToString("dd MMM yyyy")); }
+        // The project named in the question is a filter (the window's 📁 button), not a word.
+        var proj = Projects.ForText(q ?? "");
+        var projWords = proj == null ? new List<string>() : proj.Codes.Append(proj.Code).Concat(proj.Name.Split(' ')).Where(x => x.Length > 1).ToList();
+        if (Regex.IsMatch(t, @"\b(sent by me|i sent|my emails)\b", RegexOptions.IgnoreCase)) o["folder"] = "sent";
+        if (Regex.IsMatch(t, @"\bwith attachments?\b", RegexOptions.IgnoreCase)) o["has_attachments"] = true;
+        var words = Regex.Split(t, @"[^\p{L}\p{N}\-]+").Where(w => w.Length > 1 && !Stop.Contains(w) && !projWords.Contains(w, StringComparer.OrdinalIgnoreCase) && !Regex.IsMatch(w, @"^\d{4}$")).Distinct(StringComparer.OrdinalIgnoreCase).Take(8).ToArray();
         var arr = new JsonArray(); foreach (var w in words) arr.Add(w);
-        return new JsonObject { ["intent"] = "search", ["words"] = arr, ["explain"] = "Words: " + string.Join(", ", words) + " (no AI key — simple search)" };
+        o["words"] = arr;
+        o["clean"] = string.Join(" ", words);
+        o["explain"] = (proj != null ? "📁 " + proj.Code + " only · " : "") + (notes.Count > 0 ? string.Join(" · ", notes) + " · " : "") + "Words: " + string.Join(", ", words) + (Ai.Active() == null ? " (no AI key — simple search)" : "");
+        return o;
     }
 
     static string Describe(MailQuery q)
