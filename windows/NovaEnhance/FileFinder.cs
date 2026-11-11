@@ -429,7 +429,7 @@ class FileFinderForm : NovaForm
     }
 
     /// <summary>✦ AI search for file names: every idea with its other forms, files scored by how many ideas they match.</summary>
-    static (List<Projects.FileRow>, string) Expand(string q, List<string> folders)
+    public static (List<Projects.FileRow>, string) Expand(string q, List<string> folders)
     {
         var groups = Abbrev.Groups(q);
         if (groups.Count == 0) return (new(), "");

@@ -17,6 +17,9 @@ static class Assistant
         public string Explain = "";
         /// <summary>✦ AI search: what was searched (ideas, passes, candidates → best).</summary>
         public string Searched = "";
+        /// <summary>📐 Emails found at once by a document / drawing number in the question.</summary>
+        public int ByNumber;
+        public bool Slow;
         public JsonObject Filter;
         public List<MailHit> Hits = new();
         public string Message = "";
@@ -46,7 +49,17 @@ Rules:
 - groups: one group per idea the emails must be about, each with the forms people really write (abbreviation, full words, singular, plural, codes, the English form). Understand construction short forms (SS stainless steel, SSM material submittal, SDS shop drawing, WIR inspection request, MS method statement). Never put names or dates in groups.
 - When a previous filter is given, the new request refines it: keep everything unless the request changes it.";
 
-    public static async Task<Answer> Ask(string question, JsonObject previous, List<MailHit> currentHits, CancellationToken ct)
+    /// <summary>📐 A document / drawing number in the question: its emails at once, no AI needed (subject, text and attachment names).</summary>
+    public static List<MailHit> ByNumber(string question, int max = 80)
+    {
+        var res = new List<MailHit>();
+        foreach (var n in Revisions.Numbers(question).Take(4))
+            try { foreach (var h in MailIndex.Search(new MailQuery { Phrase = n, Limit = max })) if (!res.Any(x => x.Entry == h.Entry)) res.Add(h); }
+            catch (Exception e) { Log.Warn("ask", "number: " + e.Message); }
+        return res.OrderByDescending(h => h.Date).ToList();
+    }
+
+    public static async Task<Answer> Ask(string question, JsonObject previous, List<MailHit> currentHits, CancellationToken ct, bool smart = false)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var ans = new Answer();
@@ -60,10 +73,14 @@ Rules:
             if (currentHits != null && currentHits.Count > 0) user.Append($"The current list has {currentHits.Count} emails, newest first.\n");
             user.Append("Question: ").Append(question);
             // Privacy A: only the question (and the dates above) leave the PC.
-            f = Ai.ParseJson(await Ai.Chat(ParseSystem, user.ToString(), true, true, null, ct));
+            // ⏱ The AI has 20 s to understand; after that Nova plans the search itself (ideas + short forms) and carries on.
+            try { f = Ai.ParseJson(await SearchGate.Limit(t => Ai.Chat(ParseSystem, user.ToString(), true, true, null, t), 20, ct)); }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception e) { Log.Warn("ask", "understand: " + e.Message); f = LocalParse(question); ans.Slow = true; }
         }
         else f = LocalParse(question);
         if (f.Count == 0) f = LocalParse(question);
+        await SearchGate.Wait(ct);
         ans.Filter = f;
         ans.Intent = Str(f, "intent", "search");
         ans.Explain = Str(f, "explain", "");
@@ -98,7 +115,7 @@ Rules:
             ans.Hits = await Task.Run(() => MailIndex.Search(q), ct);
             foreach (var h in ans.Hits) h.Status = "follow";
         }
-        else if (SmartSearch.On && (q.Words.Count > 0 || q.Phrase.Length > 0 || f["groups"] is JsonArray { Count: > 0 }))
+        else if ((SmartSearch.On || smart) && (q.Words.Count > 0 || q.Phrase.Length > 0 || f["groups"] is JsonArray { Count: > 0 }))
         {
             // ✦ AI search: ideas + short forms, several passes, scoring, meaning search, the AI keeps the best few.
             var groups = SmartSearch.FromPlan(f, question);
@@ -107,13 +124,22 @@ Rules:
             var sr = await SmartSearch.Mail(question, baseQ, groups, ct);
             ans.Hits = sr.Hits;
             ans.Searched = sr.Searched;
-            if (Store.AiSeesLines && ans.Hits.Count > 0) await Summaries(ans.Hits.Take(15).ToList(), ct);
+            if (Store.AiSeesLines && ans.Hits.Count > 0 && !ans.Slow)
+                try { await SearchGate.Limit(async t => { await Summaries(ans.Hits.Take(15).ToList(), t); return true; }, 25, ct); } catch (TimeoutException) { }
         }
         else
         {
             ans.Hits = await Task.Run(() => MailIndex.Search(q), ct);
             if (Store.AiSeesLines && ans.Hits.Count > 0) await Summaries(ans.Hits.Take(15).ToList(), ct);
         }
+        // 📐 Emails that carry the document number come first.
+        if (ans.Intent is "search" or "" && Revisions.Numbers(question).Count > 0)
+        {
+            var byNum = await Task.Run(() => ByNumber(question), ct);
+            ans.ByNumber = byNum.Count;
+            ans.Hits = byNum.Concat(ans.Hits.Where(h => !byNum.Any(b => b.Entry == h.Entry))).ToList();
+        }
+        if (ans.Slow) ans.Explain = "⏱ the AI took more than 20 s, so Nova planned the search itself · " + ans.Explain.Replace(" (no AI key — simple search)", "");
         if (ans.Explain.Length == 0) ans.Explain = Describe(q);
         ans.Seconds = sw.Elapsed.TotalSeconds;
         return ans;

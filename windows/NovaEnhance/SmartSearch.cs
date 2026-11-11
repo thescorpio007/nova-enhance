@@ -63,6 +63,25 @@ static class Abbrev
     }
 }
 
+/// <summary>⏸ Pause / ▶ Resume for a running search: the search waits between its steps.</summary>
+static class SearchGate
+{
+    static TaskCompletionSource<bool> tcs;
+    public static bool Paused => tcs != null;
+    public static void Pause() { tcs ??= new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously); }
+    public static void Resume() { var t = tcs; tcs = null; t?.TrySetResult(true); }
+    public static Task Wait(CancellationToken ct) { var t = tcs; return t == null ? Task.CompletedTask : t.Task.WaitAsync(ct); }
+
+    /// <summary>An AI step that must not hang the search: after the time limit Nova carries on without it.</summary>
+    public static async Task<T> Limit<T>(Func<CancellationToken, Task<T>> step, int seconds, CancellationToken ct)
+    {
+        using var to = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        to.CancelAfter(TimeSpan.FromSeconds(seconds));
+        try { return await step(to.Token); }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { throw new TimeoutException($"the AI took more than {seconds} s"); }
+    }
+}
+
 /// <summary>
 /// ✦ AI search: the question is planned (ideas + their short forms + codes), the index is searched in several passes — every idea,
 /// then most of them, then any — and scored (subject and attachment names count more, newer counts more); meaning search adds
@@ -107,6 +126,7 @@ static class SmartSearch
             foreach (var t in groups[gi].Take(6))
             {
                 ct.ThrowIfCancellationRequested();
+                await SearchGate.Wait(ct);
                 var q = Clone(baseQ);
                 if (t.Contains(' ')) q.Phrase = t; else q.Words = new() { t };
                 List<MailHit> hs;
@@ -160,6 +180,8 @@ static class SmartSearch
         // The AI keeps the best few, with a reason each (subjects and first lines only).
         var picked = pool.Select(x => x.H).ToList();
         var reranked = false;
+        await SearchGate.Wait(ct);
+        var slow = false;
         if (rerank && pool.Count > 6 && Ai.Active() != null && Store.AiSeesLines)
             try
             {
@@ -167,7 +189,7 @@ static class SmartSearch
                 for (int i = 0; i < pool.Count; i++) sb.Append($"[{i + 1}] {pool[i].H.Date:dd MMM yyyy} · {(pool[i].H.Sent ? "Me" : pool[i].H.FromName)} · {pool[i].H.Subject} · “{pool[i].H.FirstLines(160)}”\n");
                 var sys = "You pick the emails that really answer the user's question, most relevant first. Reply with JSON only: {\"keep\":[{\"i\":3,\"why\":\"4 to 10 words: what this email is\"}]}. " +
                           "Keep at most 12 (fewer is better when only a few fit). Understand construction short forms (FHC fire hose cabinet, SS stainless steel, BOH back of house, SSM material submittal, SDS shop drawing, WIR inspection request…).";
-                var j = Ai.ParseJson(await Ai.Chat(sys, sb.ToString(), true, true, null, ct));
+                var j = Ai.ParseJson(await SearchGate.Limit(t => Ai.Chat(sys, sb.ToString(), true, true, null, t), 25, ct));
                 var keep = new List<MailHit>();
                 foreach (var k in j["keep"]?.AsArray() ?? new JsonArray())
                     if (int.TryParse(k?["i"]?.ToString(), out var i) && i >= 1 && i <= pool.Count && !keep.Contains(pool[i - 1].H))
@@ -175,11 +197,12 @@ static class SmartSearch
                 if (keep.Count > 0) { picked = keep; reranked = true; }
             }
             catch (OperationCanceledException) { throw; }
+            catch (TimeoutException) { slow = true; }
             catch (Exception e) { Log.Warn("ai search", "rerank: " + e.Message); }
         r.Hits = reranked ? picked : picked.Take(30).ToList();
         r.Searched = "Searched: " + string.Join(" · ", groups.Select(g => string.Join(" / ", g.Take(3)))) +
                      $"  —  {queries} searches · matched {pass}" + (semantic.Count > 0 ? $" · meaning search {semantic.Count}" : "") +
-                     $" · {found.Count} candidates → {r.Hits.Count} best" + (reranked ? " (✦ AI picked)" : "");
+                     $" · {found.Count} candidates → {r.Hits.Count} best" + (reranked ? " (✦ AI picked)" : slow ? " (the AI was slow — best scored shown)" : "");
         return r;
     }
 

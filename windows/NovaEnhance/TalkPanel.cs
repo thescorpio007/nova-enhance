@@ -50,7 +50,7 @@ class TalkPanel : Panel
     /// <summary>The chips row ("✦ Nova filter: … ✗ · ⭐ Keep as rule") — the window puts it above its list.</summary>
     public readonly FlowLayoutPanel ChipBar;
     /// <summary>Search for email: the conversation can run a better search ([[SEARCH {"q":…}]]) — the window searches again.</summary>
-    public Action<string> Research;
+    public Func<string, Task> Research;
 
     public TalkPanel(string kind, Func<TalkContext> context, Action<NovaListFilter> apply)
     {
@@ -58,7 +58,7 @@ class TalkPanel : Panel
         BackColor = Th.Bg;
         webHost = new Panel { Dock = DockStyle.Fill, BackColor = Th.Bg };
         bottom = new Panel { Dock = DockStyle.Bottom, Height = 150, BackColor = Color.FromArgb(0x0E, 0x11, 0x17), Padding = new Padding(10, 6, 10, 6) };
-        status = new Label { Dock = DockStyle.Bottom, Height = 20, ForeColor = Th.AccentText, Font = Th.F(9), Padding = new Padding(10, 2, 10, 0), BackColor = Color.FromArgb(0x0E, 0x11, 0x17) };
+        status = new Label { Dock = DockStyle.Bottom, Height = 30, ForeColor = Th.AccentText, Font = Th.F(10), Padding = new Padding(10, 6, 10, 4), AutoEllipsis = true, BackColor = Color.FromArgb(0x0E, 0x11, 0x17) };
         row = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = Color.Transparent };
         row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -182,6 +182,22 @@ class TalkPanel : Panel
         "[[SEARCH {\"q\":\"emails about fire hose cabinets (FHC) in back of house (BOH) areas, stainless steel type\"}]] — a clear search question with the important ideas and their short forms; " +
         "Nova then searches the whole mailbox again with ✦ AI search and shows the new list. Never put both [[SEARCH]] and [[LIST]].";
 
+    /// <summary>Search for email: does this message ask Nova to search (rather than to filter or discuss the list)?</summary>
+    static bool WantsSearch(string q, int listCount)
+    {
+        var t = (q ?? "").Trim().ToLowerInvariant();
+        if (Regex.IsMatch(t, @"^(please\s+)?(only|hide|without|exclude|remove|keep|sort|group|which of (these|them)|of these|from this list|in this list)\b")) return false;
+        if (listCount == 0) return true;
+        return Regex.IsMatch(t, @"^(please\s+|can you\s+|nova,?\s+)?(find|search|look for|look up|get me|bring|show me (all|every|the emails?)|any emails?|all emails?|emails? (about|from|regarding|on|with))\b") ||
+               Regex.IsMatch(t, @"\b(search (again|for|the mailbox|all)|find (all|every|me))\b");
+    }
+
+    async Task Again(string again, string q)
+    {
+        try { await Research(again); } catch (Exception e) { Log.Warn("talk", "search again: " + e.Message); return; }
+        Ask("The list was searched again for: " + again + ". Answer my question from the new list: " + q, true);
+    }
+
     async void Ask(string q, bool silent, List<string> chipsOnly = null)
     {
         q = (q ?? "").Trim();
@@ -200,6 +216,17 @@ class TalkPanel : Panel
         var userMsg = new ConvMsg { Role = "user", Text = silent ? "✦ " + q : shown };
         conv ??= new Conversation { Kind = kind == "brief" ? "brief" : "ask", Title = (kind == "brief" ? "☀ Brief — " : "🔍 ") + (q.Length > 70 ? q[..70] : q) };
         conv.Msgs.Add(userMsg);
+        // 🔍 Option A: "find / search …" (or an empty list) → Nova searches first (✦ AI search: emails, then the list follows), then answers.
+        bool searchedNow = false;
+        string again = null;
+        if (!silent && Research != null && WantsSearch(q, ctx.All.Count))
+        {
+            Draw("🔍 Nova is searching your emails, project files and drawings…");
+            status.Text = "🔍 Searching…";
+            try { await Research(q); searchedNow = true; } catch (Exception ex) { Log.Warn("talk", "search: " + ex.Message); }
+            if (my.IsCancellationRequested) { busy = false; status.Text = "■ Stopped"; Draw(); return; }
+            ctx = context?.Invoke() ?? new TalkContext();
+        }
         Draw("Nova is reading " + (ctx.Focus.Count > 0 ? $"the {ctx.Focus.Count} email(s) you picked, " : "") + $"the list ({ctx.All.Count}), your files and project documents…");
         try
         {
@@ -304,7 +331,7 @@ class TalkPanel : Panel
             if (max > 0 && text.Length > max) text = text[..max];
             var sys = "You are Nova, the assistant of an architect / technical coordinator in the UAE, talking with him about his emails. Use ONLY the numbered sources for facts and cite them like [E3] [A1] [D2] [F1]; " +
                       "if something isn't in them, say so. Be clear and practical: short paragraphs or numbered points. When he asks for a reply text, put exactly the text between a line ✍ START and a line ✍ END." +
-                      ListRule + (Research != null ? SearchRule : "") + (files.Count > 0 ? FileTalk.Rules : "") + NovaSearch.SourceRule + FolderAsk.AdviceRule + Modes.ProfileNote();
+                      ListRule + (searchedNow ? " The list was just searched for this request: say briefly what it found (most relevant first, cite [E#] and [D#]) and what is missing." : Research != null && !silent ? SearchRule : "") + (files.Count > 0 ? FileTalk.Rules : "") + NovaSearch.SourceRule + FolderAsk.AdviceRule + Modes.ProfileNote();
             Draw("Nova is thinking…");
             var a = await Ai.Chat(sys, text, false);
             my.Token.ThrowIfCancellationRequested();
@@ -316,7 +343,6 @@ class TalkPanel : Panel
                 try { ApplyList(JsonNode.Parse(lm.Groups[1].Value)?.AsObject()); } catch (Exception ex) { Log.Warn("talk", "list: " + ex.Message); }
             }
             // [[SEARCH …]] → the window searches the mailbox again with a better question.
-            string again = null;
             var sm = Regex.Match(a, @"\[\[SEARCH\s*(\{.*?\})\s*\]\]", RegexOptions.Singleline);
             if (sm.Success)
             {
@@ -332,11 +358,11 @@ class TalkPanel : Panel
             if (!silent) attach.Clear();
             status.Text = "";
             Draw();
-            if (!string.IsNullOrWhiteSpace(again)) Research?.Invoke(again);
         }
         catch (OperationCanceledException) { conv.Msgs.Remove(userMsg); status.Text = "■ Stopped"; Draw(); }
         catch (Exception ex) { conv.Msgs.Add(new ConvMsg { Role = "nova", Text = "⚠ " + ex.Message }); status.Text = ""; Draw(); }
         finally { busy = false; }
+        if (!string.IsNullOrWhiteSpace(again) && Research != null && !my.IsCancellationRequested) _ = Again(again, q);
     }
 
     static Task<T> Sta<T>(Func<T> f)
@@ -421,6 +447,9 @@ class TalkPanel : Panel
     }
 
     /// <summary>⭐ Standing rules: applied when the list (re)loads.</summary>
+    /// <summary>Puts a text in the typing area (⭐ My prompts), ready to send.</summary>
+    public void Suggest(string text) { input.Text = text; input.SelectionStart = input.TextLength; }
+
     public void ListLoaded()
     {
         var rules = Rules;
