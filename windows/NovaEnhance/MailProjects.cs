@@ -288,6 +288,8 @@ static class MailProjects
             {
                 Ensure();
                 using var c = MailIndex.Open();
+                // The email indexer writes in big batches: wait for it (up to 30 s) instead of failing.
+                using (var bt = c.CreateCommand()) { bt.CommandText = "PRAGMA busy_timeout=30000;"; bt.ExecuteNonQuery(); }
                 if (redo)
                 {
                     redo = false;
@@ -344,6 +346,12 @@ static class MailProjects
                 Count(c);
                 Phase = Total > 0 && Done >= Total ? "✓ up to date" : "waiting for the email index…";
                 wake.WaitOne(TimeSpan.FromMinutes(2));
+            }
+            catch (Exception e) when (e.Message.Contains("locked", StringComparison.OrdinalIgnoreCase) || e.Message.Contains("busy", StringComparison.OrdinalIgnoreCase))
+            {
+                // The indexer is writing: try again shortly (not an error).
+                Phase = "waiting for the email indexer…";
+                Thread.Sleep(TimeSpan.FromSeconds(15));
             }
             catch (Exception e)
             {

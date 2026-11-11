@@ -354,10 +354,10 @@ static class Semantic
             foreach (var t in texts)
                 reqs.Add(new JsonObject
                 {
-                    ["model"] = "models/text-embedding-004", ["taskType"] = query ? "RETRIEVAL_QUERY" : "RETRIEVAL_DOCUMENT", ["outputDimensionality"] = Dims,
+                    ["model"] = "models/gemini-embedding-001", ["taskType"] = query ? "RETRIEVAL_QUERY" : "RETRIEVAL_DOCUMENT", ["outputDimensionality"] = Dims,
                     ["content"] = new JsonObject { ["parts"] = new JsonArray(new JsonObject { ["text"] = t }) }
                 });
-            using var req = new HttpRequestMessage(HttpMethod.Post, "https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents?key=" + key)
+            using var req = new HttpRequestMessage(HttpMethod.Post, "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents?key=" + key)
             { Content = new StringContent(new JsonObject { ["requests"] = reqs }.ToJsonString(), Encoding.UTF8, "application/json") };
             using var resp = await http.SendAsync(req, ct);
             var body = await resp.Content.ReadAsStringAsync(ct);

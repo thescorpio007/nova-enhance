@@ -149,19 +149,60 @@ static class IndexProgress
 }
 
 /// <summary>The progress line: bar · text · ⚡ Index now (or ■ Stop while at full speed). Hidden when the index is complete.</summary>
+/// <summary>The "● ● ●" that moves while Nova is working (like Claude's typing dots). Stops (and hides) when the work is done.</summary>
+class WorkDots : Control
+{
+    readonly System.Windows.Forms.Timer t;
+    int frame;
+    bool on;
+    public Color Dot = Color.FromArgb(0x9F, 0x94, 0xFF);
+
+    public WorkDots()
+    {
+        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
+        BackColor = Color.Transparent; Size = new Size(34, 14); Margin = new Padding(4, 4, 4, 0);
+        t = new System.Windows.Forms.Timer { Interval = 380 };
+        t.Tick += (_, _) => { frame = (frame + 1) % 3; Invalidate(); };
+        Disposed += (_, _) => t.Dispose();
+    }
+
+    public bool On
+    {
+        get => on;
+        set { if (on == value) return; on = value; if (on) t.Start(); else t.Stop(); Invalidate(); }
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        if (!on) return;
+        var g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
+        for (int i = 0; i < 3; i++)
+        {
+            var big = i == frame;
+            var d = big ? 8 : 6;
+            using var b = new SolidBrush(big ? Dot : Color.FromArgb(110, Dot));
+            g.FillEllipse(b, 2 + i * 11 + (8 - d) / 2, (Height - d) / 2, d, d);
+        }
+    }
+}
+
 class IndexLine : Panel
 {
     readonly Label text;
     readonly Button go;
     readonly System.Windows.Forms.Timer t;
     readonly bool alwaysShow;
+    readonly WorkDots dots;
     int percent;
 
     public IndexLine(bool alwaysShow = false)
     {
         this.alwaysShow = alwaysShow;
         Height = 30; BackColor = Color.FromArgb(0x0E, 0x11, 0x17); Padding = new Padding(10, 4, 8, 4);
-        text = new Label { AutoSize = false, Dock = DockStyle.Fill, ForeColor = Color.FromArgb(0xC9, 0xCE, 0xD8), Font = Th.F(9), TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(196, 0, 0, 0), UseMnemonic = false, AutoEllipsis = true };
+        text = new Label { AutoSize = false, Dock = DockStyle.Fill, ForeColor = Color.FromArgb(0xC9, 0xCE, 0xD8), Font = Th.F(9), TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(250, 0, 0, 0), UseMnemonic = false, AutoEllipsis = true };
+        // ● ● ● while Nova is indexing.
+        dots = new WorkDots { Location = new Point(206, 8) };
+        text.Controls.Add(dots);
         text.Paint += (_, e) => Bar(e.Graphics);
         go = Th.B("⚡ Index now", () => { if (IndexProgress.Rushing) IndexProgress.StopRush(); else IndexProgress.Ask(FindForm()); Refresh2(); });
         go.Dock = DockStyle.Right; go.Font = Th.F(9, true); go.ForeColor = Color.FromArgb(0xFF, 0xD2, 0x7A); go.AutoSize = true; go.Margin = new Padding(0);
@@ -178,12 +219,14 @@ class IndexLine : Panel
     void Bar(Graphics g)
     {
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        var r = new Rectangle(8, text.Height / 2 - 4, 100, 8);
+        var r = new Rectangle(8, text.Height / 2 - 4, 120, 8);
         using var back = new SolidBrush(Color.FromArgb(0x2A, 0x30, 0x40));
         using var fill = new SolidBrush(IndexProgress.Rushing ? Color.FromArgb(0xFF, 0xD2, 0x7A) : Color.FromArgb(0x7C, 0x6C, 0xFF));
         g.FillRectangle(back, r);
         if (percent > 0) g.FillRectangle(fill, new Rectangle(r.X, r.Y, Math.Max(2, r.Width * percent / 100), r.Height));
-        TextRenderer.DrawText(g, "⏳ Index", Th.F(9), new Point(r.Right + 8, text.Height / 2 - 8), Color.FromArgb(0x9A, 0xA3, 0xB5));
+        // The percentage, big and clear (✓ when complete).
+        var done = IndexProgress.Now.Complete;
+        TextRenderer.DrawText(g, done ? "✓ 100 %" : $"{percent} %", Th.F(10.5f, true), new Point(r.Right + 8, text.Height / 2 - 10), done ? Color.FromArgb(0x8F, 0xD6, 0xB4) : Color.FromArgb(0xEC, 0xEE, 0xF3));
     }
 
     void Refresh2()
@@ -193,6 +236,7 @@ class IndexLine : Panel
         percent = s.Percent;
         Visible = alwaysShow || !s.Complete;
         text.Text = IndexProgress.Line();
+        dots.On = !s.Complete && !s.Waiting;
         go.Text = IndexProgress.Rushing ? "■ Stop full speed" : "⚡ Index now";
         text.Invalidate();
     }

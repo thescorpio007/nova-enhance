@@ -688,7 +688,10 @@ static class MailIndex
                 while (r.Read())
                 {
                     var fid = r.GetString(0);
-                    res.Add((fid, r.IsDBNull(1) ? "" : r.GetString(1), r.IsDBNull(2) ? "" : r.GetString(2), r.IsDBNull(3) ? 0 : r.GetInt32(3), counts.TryGetValue(fid, out var n) ? n : 0));
+                    // Emails moved or deleted in Outlook stay counted under their old folder: never show more indexed than the folder holds.
+                    var total = r.IsDBNull(3) ? 0 : r.GetInt32(3);
+                    var n = counts.TryGetValue(fid, out var cn) ? cn : 0;
+                    res.Add((fid, r.IsDBNull(1) ? "" : r.GetString(1), r.IsDBNull(2) ? "" : r.GetString(2), total, total > 0 ? Math.Min(n, total) : n));
                 }
             }
         }
