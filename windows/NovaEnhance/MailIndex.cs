@@ -97,7 +97,14 @@ static class Outlook
     {
         dynamic app = Get();
         dynamic ns = app.GetNamespace("MAPI");
-        dynamic item = ns.GetItemFromID(entry, store);
+        dynamic item;
+        try { item = ns.GetItemFromID(entry, store); }
+        catch
+        {
+            // 📂 An archive Nova closed after indexing: open it again in Outlook, then show the email.
+            if (!Archives.Reopen(ns, store)) throw;
+            item = ns.GetItemFromID(entry, store);
+        }
         item.Display(false);
     }
 
@@ -508,6 +515,8 @@ static class MailIndex
             folderOrder = 0;
             // Every store except public folders: your mailbox first, then shared mailboxes / Online Archive / Groups, then .pst archives.
             // ExchangeStoreType: 0 primary · 1 delegate/shared · 2 public folders · 3 not Exchange (.pst) · 4 additional mailbox
+            // 📂 Archive files you added in Settings that are not open in Outlook: opened for this pass, closed again after (option B).
+            var addedPst = Archives.OpenForIndex(ns);
             dynamic stores = ns.Stores;
             int n = (int)stores.Count;
             var order = new List<(int Index, int Rank)>();
@@ -546,6 +555,7 @@ static class MailIndex
                 finally { Outlook.Release(st); }
             }
             Outlook.Release(stores);
+            Archives.CloseAfterIndex(ns, addedPst, !stop && !Deferred);
             if (!stop)
             {
                 if (!Deferred) Store.SetBool("win_mail_complete", true);
@@ -609,6 +619,55 @@ static class MailIndex
     }
 
     /// <summary>Every mail folder Nova has seen, with Outlook's count and how many are in the index.</summary>
+    /// <summary>Per mailbox / archive: emails indexed, emails in Outlook, oldest and newest date.</summary>
+    public static List<(string Store, int Indexed, int Total, DateTime? Oldest, DateTime? Newest)> StoreStats()
+    {
+        var res = new List<(string, int, int, DateTime?, DateTime?)>();
+        try
+        {
+            var folders = Folders();
+            var span = new Dictionary<string, (long Min, long Max)>(StringComparer.OrdinalIgnoreCase);
+            using (var c = Open())
+            using (var cmd = c.CreateCommand())
+            {
+                cmd.CommandText = "SELECT fid, MIN(date), MAX(date) FROM mail WHERE fid IS NOT NULL GROUP BY fid";
+                using var r = cmd.ExecuteReader();
+                while (r.Read()) span[r.GetString(0)] = (r.GetInt64(1), r.GetInt64(2));
+            }
+            foreach (var g in folders.GroupBy(f => f.StoreName))
+            {
+                long mn = long.MaxValue, mx = 0;
+                foreach (var f in g) if (span.TryGetValue(f.Fid, out var sp)) { mn = Math.Min(mn, sp.Min); mx = Math.Max(mx, sp.Max); }
+                res.Add((g.Key.Length > 0 ? g.Key : "Mailbox", g.Sum(f => f.Indexed), g.Sum(f => Math.Max(f.Total, f.Indexed)),
+                    mn == long.MaxValue ? null : DateTimeOffset.FromUnixTimeMilliseconds(mn).LocalDateTime, mx == 0 ? null : DateTimeOffset.FromUnixTimeMilliseconds(mx).LocalDateTime));
+            }
+        }
+        catch (Exception e) { Log.Warn("Mail index", "stats: " + e.Message); }
+        return res;
+    }
+
+    static (DateTime At, string Text) oldest;
+    /// <summary>"oldest 14 Feb 2016" — how far back the index goes (refreshed every minute).</summary>
+    public static string OldestText
+    {
+        get
+        {
+            if (DateTime.Now - oldest.At < TimeSpan.FromMinutes(1)) return oldest.Text;
+            var t = "";
+            try
+            {
+                using var c = Open();
+                using var cmd = c.CreateCommand();
+                cmd.CommandText = "SELECT MIN(date) FROM mail";
+                var v = cmd.ExecuteScalar();
+                if (v is long l && l > 0) t = "oldest " + DateTimeOffset.FromUnixTimeMilliseconds(l).LocalDateTime.ToString("dd MMM yyyy");
+            }
+            catch { }
+            oldest = (DateTime.Now, t);
+            return t;
+        }
+    }
+
     public static List<(string Fid, string StoreName, string Path, int Total, int Indexed)> Folders()
     {
         var res = new List<(string, string, string, int, int)>();
@@ -896,7 +955,7 @@ static class MailIndex
 
     static string Fold(string s) => s.Replace("\"", "").Trim();
 
-    public static List<MailHit> Search(MailQuery q)
+    static (List<string> Where, List<(string, object)> Ps) Build(MailQuery q)
     {
         var where = new List<string>();
         var ps = new List<(string, object)>();
@@ -978,6 +1037,26 @@ static class MailIndex
         if (q.FollowUp)
             where.Add("m.sent=1 AND NOT EXISTS (SELECT 1 FROM mail r WHERE r.sent=0 AND r.conv=m.conv AND m.conv<>'' AND r.date>m.date)");
 
+        return (where, ps);
+    }
+
+    /// <summary>✦ AI search: every matching email (id and date only — fast), so old emails are scored too, not just the newest.</summary>
+    public static List<(long Id, long Date)> SearchIds(MailQuery q, int max = 20000)
+    {
+        var (where, ps) = Build(q);
+        var res = new List<(long, long)>();
+        using var c = Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT m.id, m.date FROM mail m" + (where.Count > 0 ? " WHERE " + string.Join(" AND ", where) : "") + $" ORDER BY m.date DESC LIMIT {Math.Clamp(max, 1, 200000)}";
+        foreach (var (n, v) in ps) cmd.Parameters.AddWithValue(n, v ?? DBNull.Value);
+        using var r = cmd.ExecuteReader();
+        while (r.Read()) res.Add((r.GetInt64(0), r.GetInt64(1)));
+        return res;
+    }
+
+    public static List<MailHit> Search(MailQuery q)
+    {
+        var (where, ps) = Build(q);
         var sql = "SELECT m.id,m.entry,m.store,m.conv,m.folder,m.sent,m.date,m.from_name,m.from_addr,m.to_list,m.cc_list,m.to_addr,m.cc_addr,m.subject,m.body,m.att_names,m.unread,m.importance FROM mail m"
                   + (where.Count > 0 ? " WHERE " + string.Join(" AND ", where) : "")
                   + $" ORDER BY m.date DESC LIMIT {Math.Clamp(q.Limit, 1, 500)}";
@@ -1027,16 +1106,16 @@ static class MailIndex
     }
 
     /// <summary>Emails by their index id (meaning search results).</summary>
-    public static List<MailHit> ByIds(IEnumerable<long> ids)
+    public static List<MailHit> ByIds(IEnumerable<long> ids, int max = 500, int bodyChars = 0)
     {
-        var list = ids.Distinct().Take(500).ToList();
+        var list = ids.Distinct().Take(max).ToList();
         var res = new List<MailHit>();
         if (list.Count == 0) return res;
         try
         {
             using var c = Open();
             using var cmd = c.CreateCommand();
-            cmd.CommandText = $"SELECT id,entry,store,conv,folder,sent,date,from_name,from_addr,to_list,cc_list,to_addr,cc_addr,subject,body,att_names,unread,importance FROM mail WHERE id IN ({string.Join(",", list)})";
+            cmd.CommandText = $"SELECT id,entry,store,conv,folder,sent,date,from_name,from_addr,to_list,cc_list,to_addr,cc_addr,subject,{(bodyChars > 0 ? $"substr(body,1,{bodyChars})" : "body")},att_names,unread,importance FROM mail WHERE id IN ({string.Join(",", list)})";
             using var r = cmd.ExecuteReader();
             while (r.Read())
             {

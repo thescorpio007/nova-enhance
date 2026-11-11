@@ -342,6 +342,8 @@ class SettingsForm : NovaForm
 
         page.Add(Th.Section("✦ AI search"));
         page.Add(Th.Check("✦ AI search in every search (email, project files, conversations)", SmartSearch.On, v => SmartSearch.On = v));
+        page.Add(Th.Check("✦ AI search may see the subject + first lines of the candidate emails, to pick the best (your cloud AI, even when “What the AI may see” is C)", SmartSearch.RankSees, v => SmartSearch.RankSees = v));
+        Note("Search planning and ranking use your cloud AI (" + Ai.LabelOf(SmartSearch.Cloud()) + ") — a local model is too slow for it; your local AI stays for files and conversations. Words in \"quotes\", subject: and -words are hard rules (the ? button next to each search box shows all the Windows search tricks).", Th.Muted);
         Note("Nova understands the question, splits it into ideas, adds their short forms (FHC = fire hose cabinet, BOH = back of house, SS = stainless steel, SSM / SDS / WIR…) and your 🧠 Memory words, " +
              "searches in several passes (every idea → most ideas → any), scores the results (subject and attachment names count more, newer counts more) and lets the AI keep the best few with a reason each. " +
              "Off = plain word search (every word must be there).");
@@ -461,6 +463,45 @@ class SettingsForm : NovaForm
         Note("Everything is indexed: your mailbox, shared mailboxes, Online Archive, Groups and .pst archives (public folders and Search Folders are skipped). Untick a folder to leave it out of the index and of the answers.");
         var folders = MailIndex.Folders();
         if (folders.Count == 0) Note("The list fills in while Nova reads Outlook — open this page again in a few minutes.", Th.Muted);
+        // How far back each mailbox / archive is searchable.
+        var stats = MailIndex.StoreStats();
+        foreach (var sst in stats)
+        {
+            var spct = sst.Total > 0 ? Math.Min(100, 100L * sst.Indexed / sst.Total) : 100;
+            Note($"{(spct >= 100 ? "✓" : "⏳")} {sst.Store} · {sst.Indexed:N0} of {sst.Total:N0} emails · {(sst.Oldest is { } sOld ? sOld.ToString("dd MMM yyyy") : "—")} → {(sst.Newest is { } sNew ? sNew.ToString("dd MMM yyyy") : "—")} · {(spct >= 100 ? "complete" : spct + " %")}",
+                spct >= 100 ? Th.Good : Th.Muted);
+        }
+        // 📂 Archive files not open in Outlook (option B: opened for indexing, closed again after).
+        page.Add(Th.Section("📂 Archive files (.pst) not open in Outlook"));
+        Note("Nova opens each archive you add, indexes it, then closes it again so your Outlook folder list stays short. Its emails stay searchable in Nova; “Open in Outlook” re-opens the archive when needed.");
+        var arow = page.Add(Th.Row(false));
+        var alist = page.Add(new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, BackColor = Color.Transparent }, true);
+        void ShowArchives(List<(string Path, long Size, bool Added, bool Indexed)> found)
+        {
+            alist.Controls.Clear();
+            if (found.Count == 0) { alist.Controls.Add(Th.L("No other archive files found next to your Outlook files.", 9.5f, Th.Muted)); return; }
+            foreach (var a0 in found)
+            {
+                var a1 = a0;
+                var arow2 = new FlowLayoutPanel { AutoSize = true, WrapContents = false, BackColor = Color.FromArgb(0x18, 0x1C, 0x24), Padding = new Padding(6, 3, 6, 3), Margin = new Padding(0, 2, 0, 2) };
+                arow2.Controls.Add(Th.L($"{(a1.Indexed ? "✓" : a1.Added ? "⏳" : "＋")} {a1.Path}   ·   {a1.Size / 1048576.0:N0} MB   ·   {(a1.Indexed ? "indexed" : a1.Added ? "waiting to be indexed" : "not in Nova yet")}", 9.5f, a1.Indexed ? Th.Good : Th.Text));
+                if (!a1.Added) arow2.Controls.Add(Th.B("Add", () => { Archives.Add(new[] { a1.Path }); ShowArchives(Archives.Find()); }));
+                else arow2.Controls.Add(Th.B("Remove", () => { Archives.Remove(a1.Path); ShowArchives(Archives.Find()); }));
+                alist.Controls.Add(arow2);
+            }
+        }
+        aarow2.Controls.Add(Th.B("🔍 Find archive files", () => ShowArchives(Archives.Find()), true));
+        aarow2.Controls.Add(Th.B("📂 Add an archive file…", () =>
+        {
+            using var pstDlg = new OpenFileDialog { Filter = "Outlook archive (*.pst)|*.pst", Multiselect = true, Title = "Add Outlook archive files" };
+            if (pstDlg.ShowDialog(this) != DialogResult.OK) return;
+            Archives.Add(pstDlg.FileNames);
+            ShowArchives(Archives.Find());
+        }));
+        aarow2.Controls.Add(Th.B("➕ Add all found", () => { var allF = Archives.Find(); Archives.Add(allF.Where(x => !x.Added).Select(x => x.Path)); ShowArchives(Archives.Find()); }));
+        if (Archives.Extra.Count > 0) ShowArchives(Archives.Find());
+        Note("A big archive takes several hours the first time (Outlook reads it email by email). Gentle indexing: older mail is read after working hours or when the PC is idle — ⚡ Index now reads at full speed.", Th.Muted);
+        page.Add(Th.Section("Folders"));
         var left = MailIndex.LeftOut();
         foreach (var g in folders.GroupBy(f => f.StoreName))
         {

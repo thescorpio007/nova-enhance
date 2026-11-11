@@ -64,6 +64,11 @@ Rules:
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var ans = new Answer();
         JsonObject f;
+        // 🔎 Windows / Outlook search rules: "phrases", -words, subject:, from:, received: … are hard rules; the rest goes to the AI.
+        var sx = SearchSyntax.Parse(question);
+        var full = question;
+        if (sx.Any) question = sx.Free.Trim().Length > 0 ? sx.Free : "emails";
+        if (sx.Project.Length > 0) project = sx.Project;
         if (Ai.Active() != null)
         {
             var today = DateTime.Now;
@@ -72,9 +77,10 @@ Rules:
             if (previous != null) user.Append("Previous filter: ").Append(previous.ToJsonString()).Append('\n');
             if (currentHits != null && currentHits.Count > 0) user.Append($"The current list has {currentHits.Count} emails, newest first.\n");
             user.Append("Question: ").Append(question);
+            if (sx.Any) user.Append("\n(Nova applies these rules itself, do not repeat them: " + sx.Describe() + ")");
             // Privacy A: only the question (and the dates above) leave the PC.
             // ⏱ The AI has 20 s to understand; after that Nova plans the search itself (ideas + short forms) and carries on.
-            try { f = Ai.ParseJson(await SearchGate.Limit(t => Ai.Chat(ParseSystem, user.ToString(), true, true, null, t), 20, ct)); }
+            try { f = Ai.ParseJson(await SearchGate.Limit(t => Ai.Chat(ParseSystem, user.ToString(), true, true, SmartSearch.Cloud(), t), 20, ct)); }
             catch (OperationCanceledException) { throw; }
             catch (Exception e) { Log.Warn("ask", "understand: " + e.Message); f = LocalParse(question); ans.Slow = true; }
         }
@@ -96,6 +102,15 @@ Rules:
 
         var q = ToQuery(f);
         q.Project = project ?? "";
+        q.From.AddRange(sx.From.Where(x => !x.Equals("me", StringComparison.OrdinalIgnoreCase)));
+        q.To.AddRange(sx.To.Where(x => !x.Equals("me", StringComparison.OrdinalIgnoreCase)));
+        q.Cc.AddRange(sx.Cc);
+        if (sx.From.Any(x => x.Equals("me", StringComparison.OrdinalIgnoreCase))) q.Folder = "sent";
+        if (sx.To.Any(x => x.Equals("me", StringComparison.OrdinalIgnoreCase))) q.MeIn = "to";
+        if (sx.HasAttach != null) q.HasAttach = sx.HasAttach;
+        if (sx.After != null) q.After = sx.After;
+        if (sx.Before != null) q.Before = sx.Before;
+        if (sx.Phrases.Count > 0 && q.Phrase.Length == 0 && !(SmartSearch.On || smart)) q.Phrase = sx.Phrases[0];
         if (ans.Intent == "outstanding")
         {
             q.Folder = "received"; q.Unanswered = true;
@@ -116,10 +131,18 @@ Rules:
             ans.Hits = await Task.Run(() => MailIndex.Search(q), ct);
             foreach (var h in ans.Hits) h.Status = "follow";
         }
-        else if ((SmartSearch.On || smart) && (q.Words.Count > 0 || q.Phrase.Length > 0 || f["groups"] is JsonArray { Count: > 0 }))
+        else if ((SmartSearch.On || smart) && (q.Words.Count > 0 || q.Phrase.Length > 0 || f["groups"] is JsonArray { Count: > 0 } || sx.Phrases.Count + sx.Subject.Count + sx.Or.Count > 0))
         {
             // ✦ AI search: ideas + short forms, several passes, scoring, meaning search, the AI keeps the best few.
             var groups = SmartSearch.FromPlan(f, question);
+            // "Exact phrases" are ideas of their own, searched exactly (no other forms) and first.
+            foreach (var ph in sx.Phrases.Concat(sx.Subject).Reverse())
+            {
+                groups.RemoveAll(g => g.Any(t => t.Equals(ph, StringComparison.OrdinalIgnoreCase)));
+                groups.Insert(0, new List<string> { ph });
+            }
+            foreach (var g in sx.Or) { groups.RemoveAll(x => x.Any(t => g.Contains(t, StringComparer.OrdinalIgnoreCase))); groups.Add(g.ToList()); }
+            groups.RemoveAll(g => g.Any(t => sx.Not.Contains(t, StringComparer.OrdinalIgnoreCase)));
             // 📁 The project is a filter, not a word to find.
             if (q.Project.Length > 1)
             {
@@ -131,25 +154,29 @@ Rules:
             }
             if (ans.Explain.Length == 0) ans.Explain = Describe(q);
             var baseQ = q; baseQ.Words = new(); baseQ.Phrase = "";
-            var sr = await SmartSearch.Mail(question, baseQ, groups, ct);
+            var sr = await SmartSearch.Mail(full, baseQ, groups, ct, true, sx);
             ans.Hits = sr.Hits;
             ans.Searched = sr.Searched;
             if (Store.AiSeesLines && ans.Hits.Count > 0 && !ans.Slow)
-                try { await SearchGate.Limit(async t => { await Summaries(ans.Hits.Take(15).ToList(), t); return true; }, 25, ct); } catch (TimeoutException) { }
+                try { await SearchGate.Limit(async t => { await Summaries(ans.Hits.Take(15).ToList(), t, SmartSearch.Cloud()); return true; }, 25, ct); } catch (TimeoutException) { }
         }
         else
         {
             ans.Hits = await Task.Run(() => MailIndex.Search(q), ct);
             if (Store.AiSeesLines && ans.Hits.Count > 0) await Summaries(ans.Hits.Take(15).ToList(), ct);
         }
+        // 🔒 The hard rules and the strict project check, on every result (also outstanding / follow-up lists).
+        if (sx.Any) ans.Hits = ans.Hits.Where(sx.Pass).ToList();
+        if (q.Project.Length > 1) ans.Hits = ans.Hits.Where(h => MailProjects.Fits(h, q.Project)).ToList();
         // 📐 Emails that carry the document number come first.
         if (ans.Intent is "search" or "" && Revisions.Numbers(question).Count > 0)
         {
             var byNum = (await Task.Run(() => ByNumber(question), ct))
-                .Where(h => q.Project.Length < 2 || MailProjects.Of(h.Id) is var pj && (pj.Length == 0 || pj.Equals(q.Project, StringComparison.OrdinalIgnoreCase))).ToList();
+                .Where(h => (q.Project.Length < 2 || MailProjects.Fits(h, q.Project)) && (!sx.Any || sx.Pass(h))).ToList();
             ans.ByNumber = byNum.Count;
             ans.Hits = byNum.Concat(ans.Hits.Where(h => !byNum.Any(b => b.Entry == h.Entry))).ToList();
         }
+        if (sx.Any) ans.Explain = sx.Describe() + (ans.Explain.Length > 0 ? " · " + ans.Explain : "");
         if (ans.Slow) ans.Explain = "⏱ the AI took more than 20 s, so Nova planned the search itself · " + ans.Explain.Replace(" (no AI key — simple search)", "");
         if (ans.Explain.Length == 0) ans.Explain = Describe(q);
         ans.Seconds = sw.Elapsed.TotalSeconds;
@@ -287,7 +314,7 @@ Rules:
     }
 
     /// <summary>Privacy B/D: one-line summaries from the subject and first lines (300 characters) only.</summary>
-    public static async Task Summaries(List<MailHit> hits, CancellationToken ct)
+    public static async Task Summaries(List<MailHit> hits, CancellationToken ct, Provider p = null)
     {
         try
         {
@@ -296,7 +323,7 @@ Rules:
                 sb.Append($"{i}. From: {hits[i].FromName} | Subject: {hits[i].Subject} | Text: {hits[i].FirstLines(300)}\n");
             var r = Ai.ParseJson(await Ai.Chat(
                 "For each email, write a one-line summary (max 14 words) and decide if the reader must reply or act. Reply with JSON only: {\"items\":[{\"i\":0,\"summary\":\"…\",\"needs_reply\":true}]}",
-                sb.ToString(), true, true, null, ct));
+                sb.ToString(), true, true, p, ct));
             if (r["items"] is JsonArray items)
                 foreach (var it in items)
                 {

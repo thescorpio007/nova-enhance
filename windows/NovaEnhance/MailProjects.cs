@@ -100,6 +100,8 @@ static class MailProjects
     public static void Start()
     {
         if (thread != null) return;
+        // Build 52: stricter rules (documents of another project are never claimed) → sort once again.
+        if (Store.Int("win_mproj_ver", 0) < 2) { redo = true; Store.SetInt("win_mproj_ver", 2); }
         thread = new Thread(Loop) { IsBackground = true, Name = "Nova email projects", Priority = ThreadPriority.BelowNormal };
         thread.Start();
     }
@@ -235,6 +237,11 @@ static class MailProjects
             if (at > 0 && R.Senders.TryGetValue(from[at..], out var dp)) return (dp, 8);
         }
         var subj = Re.Replace(m.Subject ?? "", "");
+        // Document numbers of a project that is not in your list (RS5-C7-…): no weak rule may claim it.
+        var pre = Prefixes(subj);
+        bool foreign = pre.Count > 0 && !pre.Any(x => R.P.Any(p => p.Codes.Any(c => c.StartsWith(x, StringComparison.OrdinalIgnoreCase) || x.Equals(c, StringComparison.OrdinalIgnoreCase)))) &&
+                       !R.P.Any(p => p.Codes.Any(c => Code(subj, c)));
+        if (foreign) return ("", -3);
         foreach (var rule in R.Order.Where(x => x <= 4 && R.On.Contains(x)))
         {
             var hits = new HashSet<string>();
@@ -487,6 +494,30 @@ static class MailProjects
             if (map.Count == 0 && Sorted > 0) Reload(c);
         }
         catch { }
+    }
+
+    static readonly Regex DocLike = new(@"(?<![A-Za-z0-9])([A-Z][A-Z0-9]{1,6})-[A-Z0-9]{1,6}-[A-Z0-9\-_]{2,}", RegexOptions.Compiled);
+
+    /// <summary>The codes a subject's document numbers start with (SLV-ZUC-… → SLV · RS5-C7-ACC-… → RS5).</summary>
+    static List<string> Prefixes(string text) => DocLike.Matches(text ?? "").Select(m => m.Groups[1].Value).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+    /// <summary>📁 Strict project check for a search: sorted into this project, and the subject does not name ANOTHER project
+    /// (another code, or document numbers like RS5-C7-… that are not this project's).</summary>
+    public static bool Fits(MailHit h, string code)
+    {
+        if (code == "?") return Of(h.Id).Length == 0;
+        var p = Of(h.Id);
+        if (p.Length > 0 && !p.Equals(code, StringComparison.OrdinalIgnoreCase)) return false;
+        var subj = Re.Replace(h.Subject ?? "", "");
+        var proj = Projects.All().FirstOrDefault(x => x.Code.Equals(code, StringComparison.OrdinalIgnoreCase));
+        var mine = proj == null ? new List<string> { code } : proj.Codes.Append(proj.Code).Where(c => c.Length >= 2).ToList();
+        if (mine.Any(c => Code(subj, c))) return true;
+        var pre = Prefixes(subj + " " + (h.AttNames ?? ""));
+        if (pre.Any(x => mine.Any(c => c.StartsWith(x, StringComparison.OrdinalIgnoreCase) || x.Equals(c, StringComparison.OrdinalIgnoreCase)))) return true;
+        if (pre.Count > 0) return false;   // only another project's document numbers
+        foreach (var o in Projects.All().Where(o => !o.Code.Equals(code, StringComparison.OrdinalIgnoreCase)))
+            if (o.Codes.Append(o.Code).Where(c => c.Length >= 2).Any(c => Code(subj, c))) return false;
+        return true;
     }
 
     public static int CountOf(string code) => code == "" ? Total : Counts.TryGetValue(code == "?" ? "" : code, out var n) ? n : 0;

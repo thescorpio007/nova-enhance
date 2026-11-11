@@ -51,6 +51,7 @@ class FolderSearchForm : NovaForm
     CancellationTokenSource cts;
     Thread worker;
     Matcher matcher;
+    SearchSyntax fsx;
     string driveRoot, lastRoot = "";
     bool askMode, asking, cards, dirty;
     int sortCol = -1; bool sortDesc;
@@ -90,15 +91,16 @@ class FolderSearchForm : NovaForm
         frow.Controls.Add(recent, 2, 0);
         var gd = Th.B("☁ Google Drive…", PickDrive); gd.Margin = new Padding(8, 0, 0, 0); frow.Controls.Add(gd, 3, 0);
 
-        qrow = top.Add(new TableLayoutPanel { ColumnCount = 5, RowCount = 1, AutoSize = false, Height = 42, BackColor = Color.Transparent, Margin = new Padding(0, 4, 0, 2) }, true);
+        qrow = top.Add(new TableLayoutPanel { ColumnCount = 6, RowCount = 1, AutoSize = false, Height = 42, BackColor = Color.Transparent, Margin = new Padding(0, 4, 0, 2) }, true);
         qrow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        for (int i = 0; i < 4; i++) qrow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        for (int i = 0; i < 5; i++) qrow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         query = Th.Prose(Th.Box(false)); query.Font = Th.F(12.5f); query.Dock = DockStyle.Fill;
         qrow.Controls.Add(query, 0, 0);
         searchBtn = Th.B("🔍 Search", Start, true); searchBtn.Margin = new Padding(8, 0, 0, 0); qrow.Controls.Add(searchBtn, 1, 0);
         micBtn = Th.B("🎤", ToggleMic); micBtn.Margin = new Padding(8, 0, 0, 0); micBtn.Visible = false; qrow.Controls.Add(micBtn, 2, 0);
         pauseBtn = Th.B("⏸ Pause", Pause); pauseBtn.Margin = new Padding(8, 0, 0, 0); pauseBtn.Enabled = false; qrow.Controls.Add(pauseBtn, 3, 0);
         stopBtn = Th.B("■ Stop", Stop); stopBtn.Margin = new Padding(8, 0, 0, 0); stopBtn.Enabled = false; qrow.Controls.Add(stopBtn, 4, 0);
+        qrow.Controls.Add(SearchSyntax.HelpButton(query, false, () => Start()), 5, 0);
 
         // ✎ More instructions for my AI (Ask AI mode) · ⭐ My prompts
         instrRow = top.Add(Th.Row(false));
@@ -655,7 +657,10 @@ class FolderSearchForm : NovaForm
         var root = CurrentRoot();
         Speller.FixBeforeSearch(query, Start);
         var q = query.Text.Trim();
-        if (q.Length == 0) { status.Text = "Type what you're looking for"; query.Focus(); return; }
+        // 🔎 Windows search rules: "exact", -word, kind:, ext:, folder:, date: … checked on every file found.
+        fsx = SearchSyntax.Parse(q);
+        if (fsx.Any) q = fsx.Free.Trim();
+        if (q.Length == 0) { status.Text = fsx.Any ? "Add a word to look for (the rules " + fsx.Describe() + " are applied to what is found)" : "Type what you're looking for"; query.Focus(); return; }
         if (!CheckRoot(root)) return;
         try { matcher = new Matcher(q, MatchMode(), cCase.Checked, cWhole.Checked); }
         catch (ArgumentException e) { status.Text = "⚠ " + e.Message; return; }
@@ -733,6 +738,8 @@ class FolderSearchForm : NovaForm
                 continue;
             }
             var h = item.Hit;
+            if (fsx != null && fsx.Any && !fsx.PassFile(h.Path, h.Mtime > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(h.Mtime).LocalDateTime : DateTime.Now, "",
+                    string.Join("\n", h.Pieces.Select(x => x.Text ?? "")) + (byPath.TryGetValue(h.Path, out var pv) ? "\n" + string.Join("\n", pv.Pieces.Select(x => x.Text ?? "")) : ""))) continue;
             if (byPath.Remove(h.Path, out var prev))
             {
                 all.Remove(prev);
@@ -980,6 +987,7 @@ class FolderSearchForm : NovaForm
         asking = true;
         var my = cts = new CancellationTokenSource();
         stopBtn.Enabled = true;
+        fsx = null;
         ClearResults();
         answerBox.Text = ""; answerPanel.Visible = false;
         remembered = null;

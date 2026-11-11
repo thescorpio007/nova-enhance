@@ -650,7 +650,7 @@ class AskForm : NovaForm
         fbtn.Margin = new Padding(16, 2, 0, 0);
         head.Controls.Add(fbtn);
 
-        var qrow = stack.Add(new TableLayoutPanel { ColumnCount = 6, RowCount = 1, AutoSize = false, Height = 40, BackColor = Color.Transparent, Margin = new Padding(0, 4, 0, 6) }, true);
+        var qrow = stack.Add(new TableLayoutPanel { ColumnCount = 7, RowCount = 1, AutoSize = false, Height = 40, BackColor = Color.Transparent, Margin = new Padding(0, 4, 0, 6) }, true);
         qrow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         qrow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         qrow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -681,6 +681,8 @@ class AskForm : NovaForm
         var askBtn = Th.B("Ask", () => Run(question.Text, false), true);
         askBtn.Margin = new Padding(8, 0, 0, 0);
         qrow.Controls.Add(askBtn, 5, 0);
+        qrow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        qrow.Controls.Add(SearchSyntax.HelpButton(question, true, () => Run(question.Text, false)), 6, 0);
 
         // ✎ More instructions for my AI · filter level · ⭐ My prompts
         var prow = stack.Add(Th.Row(false));
@@ -821,7 +823,7 @@ class AskForm : NovaForm
         VisibleChanged += (_, _) => { if (Visible) DrawChips(); };
         Shown += (_, _) => Relayout(true);
         idxTimer = new System.Windows.Forms.Timer { Interval = 3000 };
-        idxTimer.Tick += (_, _) => { if (Visible) idx.Text = "Index: " + MailIndex.Status; };
+        idxTimer.Tick += (_, _) => { if (Visible) idx.Text = "Index: " + MailIndex.Status + (MailIndex.OldestText is { Length: > 0 } ot ? " · " + ot : ""); };
         idxTimer.Start();
         liveTimer = new System.Windows.Forms.Timer { Interval = 180_000 };
         liveTimer.Tick += (_, _) => { if (Visible) Recheck(); };
@@ -983,7 +985,7 @@ class AskForm : NovaForm
         understood.Text = "🔍 " + q;
         info.Text = Ai.Active() != null ? "Understanding your question…" : "Searching (no AI key — simple word search)…";
         // ✦ Prompts: the question goes to the search; "exclude … / only … / group … / export …" become your instructions.
-        var (mainQ, extraQ) = Prompts.Split(q);
+        var (mainQ, extraQ) = SearchSyntax.Parse(q).Any ? (q, "") : Prompts.Split(q);
         var instructions = ((followUp ? lastInstr : instr.Text) + "\n" + extraQ).Trim();
         try
         {
@@ -991,7 +993,8 @@ class AskForm : NovaForm
             if (In("mail") && !followUp && Revisions.Numbers(mainQ).Count > 0)
             {
                 var proj0 = Project;
-                var early = (await Task.Run(() => Assistant.ByNumber(mainQ), my.Token)).Where(h => proj0.Length == 0 || proj0 == "?" || MailProjects.Of(h.Id) is var pj && (pj.Length == 0 || pj == proj0)).ToList();
+                var sx0 = SearchSyntax.Parse(mainQ);
+                var early = (await Task.Run(() => Assistant.ByNumber(mainQ), my.Token)).Where(h => !sx0.Any || sx0.Pass(h)).Where(h => proj0.Length == 0 || proj0 == "?" || MailProjects.Fits(h, proj0)).ToList();
                 if (my.IsCancellationRequested) return;
                 if (early.Count > 0)
                 {

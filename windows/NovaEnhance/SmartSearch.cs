@@ -31,11 +31,48 @@ static class Abbrev
         ("LV", new[] { "low voltage" }), ("HV", new[] { "high voltage" }), ("DB", new[] { "distribution board" }), ("UPVC", new[] { "upvc" }), ("WC", new[] { "toilet", "washroom" })
     };
 
-    /// <summary>The term and its other forms (short ↔ long), e.g. "FHC" → fire hose cabinet; "back of house" → BOH.</summary>
+    /// <summary>Construction phrases that stay together (with the other ways people write them).</summary>
+    static readonly string[][] Compounds =
+    {
+        new[] { "block wall", "blockwork", "block work", "masonry wall", "block masonry" },
+        new[] { "curtain wall", "curtainwall", "CW" },
+        new[] { "false ceiling", "suspended ceiling", "gypsum ceiling" },
+        new[] { "raised floor", "access floor" },
+        new[] { "shop drawing", "SDS", "SHD", "shop dwg" },
+        new[] { "method statement", "MS" },
+        new[] { "fire hose cabinet", "FHC", "hose cabinet" },
+        new[] { "fire hose reel", "FHR", "hose reel" },
+        new[] { "material submittal", "SSM", "MAT", "material sample", "sample submittal" },
+        new[] { "inspection request", "WIR", "work inspection" },
+        new[] { "expansion joint", "movement joint" },
+        new[] { "waterproofing", "water proofing", "waterproof membrane" },
+        new[] { "precast", "pre-cast" },
+        new[] { "handrail", "hand rail", "balustrade" },
+        new[] { "stone cladding", "stone facade" },
+        new[] { "gypsum board", "gypsum partition", "drywall", "dry wall" },
+        new[] { "door hardware", "ironmongery" },
+        new[] { "glass railing", "glass balustrade" },
+        new[] { "back of house", "BOH" },
+        new[] { "front of house", "FOH" },
+        new[] { "stainless steel", "SS" },
+        new[] { "bill of quantities", "BOQ" },
+        new[] { "variation order", "VO" },
+        new[] { "request for information", "RFI" },
+        new[] { "non conformance", "NCR", "non-conformance report" },
+        new[] { "minutes of meeting", "MOM", "meeting minutes" },
+        new[] { "technical query", "TQ" },
+        new[] { "site instruction", "SI" }
+    };
+
+    static bool In(string text, string phrase) { try { return SearchSyntax.PhraseRx(phrase).IsMatch(text); } catch { return text.Contains(phrase, StringComparison.OrdinalIgnoreCase); } }
+
+    /// <summary>The term and its other forms (short ↔ long), e.g. "FHC" → fire hose cabinet; "back of house" → BOH; "block wall" → blockwork.</summary>
     public static List<string> Forms(string term)
     {
         var t = (term ?? "").Trim();
         var res = new List<string> { t };
+        foreach (var c in Compounds)
+            if (c.Any(x => x.Equals(t, StringComparison.OrdinalIgnoreCase) || (x.Contains(' ') && In(t, x)))) res.AddRange(c);
         foreach (var (sh, lo) in List)
         {
             if (t.Equals(sh, StringComparison.OrdinalIgnoreCase)) res.AddRange(lo);
@@ -44,18 +81,28 @@ static class Abbrev
         return res.Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
-    /// <summary>A question → groups of terms (each group = one idea with its other forms), without AI.</summary>
+    static readonly Regex Filler = new("^(the|and|for|with|this|that|from|please|check|find|show|email|emails|mail|about|what|which|are|was|were|have|has|you|your|our|any|all|can|in|on|of|to|a|an|is|it|be|by|at|or|as|do|me|my|types?|areas?|related|regarding|limited|only|project|projects|before|after|since|latest|new|send|sent|list|get|give|need|some|there)$");
+
+    /// <summary>A question → groups of terms (each group = one idea with its other forms), without AI. Phrases stay together.</summary>
     public static List<List<string>> Groups(string question)
     {
         var low = " " + (question ?? "").ToLowerInvariant() + " ";
         var groups = new List<List<string>>();
-        // Long forms first ("back of house" before "house").
+        // Construction phrases first ("block wall" stays one idea, with blockwork / block work…).
+        foreach (var c in Compounds)
+        {
+            var hit = c.FirstOrDefault(x => (x.Contains(' ') || x.Length > 4) && In(low, x));
+            if (hit == null) continue;
+            groups.Add(c.ToList());
+            low = SearchSyntax.PhraseRx(hit).Replace(low, " ");
+        }
+        // Long forms next ("back of house" before "house").
         foreach (var (sh, lo) in List)
             foreach (var l in lo)
                 if (low.Contains(" " + l + " ") || low.Contains(" " + l + "s ")) { groups.Add(Forms(l)); low = low.Replace(l, " "); break; }
         foreach (var w in Regex.Split(low, @"[^\p{L}\p{N}\-]+").Where(w => w.Length >= 2))
         {
-            if (Regex.IsMatch(w, "^(the|and|for|with|this|that|from|please|check|find|show|email|emails|about|what|which|are|was|were|have|has|you|your|our|any|all|can|in|on|of|to|a|an|is|it|be|by|at|or|as|do|me|my|types?|areas?|related|regarding)$")) continue;
+            if (Filler.IsMatch(w) || Regex.IsMatch(w, @"^\d{4}$")) continue;
             if (groups.Any(g => g.Contains(w, StringComparer.OrdinalIgnoreCase))) continue;
             groups.Add(Forms(w));
         }
@@ -116,93 +163,142 @@ static class SmartSearch
         HasAttach = q.HasAttach, Unread = q.Unread, Unanswered = q.Unanswered, FollowUp = q.FollowUp, Limit = 400, Project = q.Project
     };
 
-    public static async Task<Result> Mail(string question, MailQuery baseQ, List<List<string>> groups, CancellationToken ct, bool rerank = true)
+    /// <summary>✦ AI search may see the subject + first lines of the candidates (to pick the best) — even when "What the AI may see" is C.</summary>
+    public static bool RankSees { get => Store.Bool("win_ai_rank_lines", true); set => Store.SetBool("win_ai_rank_lines", value); }
+
+    /// <summary>The AI for planning and ranking searches: your cloud AI (Gemini first) — a local model is too slow for this.</summary>
+    public static Provider Cloud()
+    {
+        var c = Ai.Current();
+        if (c != null && c.Id != "local") return c;
+        if (Ai.HasKey("gemini")) return Ai.ById("gemini");
+        return Ai.All.FirstOrDefault(p => p.Id != "local" && Ai.HasKey(p.Id)) ?? c;
+    }
+
+    static readonly Dictionary<string, Regex> rxCache = new(StringComparer.OrdinalIgnoreCase);
+    static Regex Rx(string term) { lock (rxCache) { if (!rxCache.TryGetValue(term, out var r)) rxCache[term] = r = SearchSyntax.PhraseRx(term); return r; } }
+
+    /// <summary>Where an idea is in the email: subject 3 · attachment name 2.5 · the new text 1 · only in quoted history / signature 0.2.</summary>
+    static (double Score, string Term, string Where) Place(MailHit h, List<string> terms, bool inIndex)
+    {
+        string subj = h.Subject ?? "", att = h.AttNames ?? "", np = h.NewPart;
+        foreach (var t in terms) if (Rx(t).IsMatch(subj)) return (3, t, "subject");
+        foreach (var t in terms) if (Rx(t).IsMatch(att)) return (2.5, t, "attachment");
+        foreach (var t in terms) if (Rx(t).IsMatch(np)) return (1, t, "text");
+        return (inIndex ? 0.2 : 0, "", "");
+    }
+
+    public static async Task<Result> Mail(string question, MailQuery baseQ, List<List<string>> groups, CancellationToken ct, bool rerank = true, SearchSyntax must = null)
     {
         var r = new Result();
-        var found = new Dictionary<string, (MailHit H, HashSet<int> G)>();
-        int queries = 0;
-        // Pass 1 — each idea, in any of its forms (the index does the matching; people / dates / folders kept).
-        for (int gi = 0; gi < groups.Count; gi++)
+        int queries = 0, n = groups.Count;
+        // 1 · Every matching email for each idea, in any of its forms — all years (ids only, fast).
+        var gIds = new List<HashSet<long>>();
+        var dates = new Dictionary<long, long>();
+        for (int gi = 0; gi < n; gi++)
+        {
+            var set = new HashSet<long>();
             foreach (var t in groups[gi].Take(6))
             {
                 ct.ThrowIfCancellationRequested();
                 await SearchGate.Wait(ct);
                 var q = Clone(baseQ);
-                if (t.Contains(' ')) q.Phrase = t; else q.Words = new() { t };
-                List<MailHit> hs;
-                try { hs = await Task.Run(() => MailIndex.Search(q), ct); } catch (OperationCanceledException) { throw; } catch { continue; }
+                if (t.Contains(' ') || t.Contains('-')) q.Phrase = t; else q.Words = new() { t };
+                try { foreach (var (id, d) in await Task.Run(() => MailIndex.SearchIds(q, 40000), ct)) { set.Add(id); dates[id] = d; } }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception e) { Log.Warn("ai search", "ids: " + e.Message); continue; }
                 queries++;
-                foreach (var h in hs)
-                {
-                    var k = h.Entry ?? h.Id.ToString();
-                    if (!found.TryGetValue(k, out var x)) found[k] = x = (h, new HashSet<int>());
-                    x.G.Add(gi);
-                }
             }
+            gIds.Add(set);
+        }
+        var count = new Dictionary<long, int>();
+        foreach (var set in gIds) foreach (var id in set) count[id] = count.TryGetValue(id, out var c) ? c + 1 : 1;
         // Meaning search: what is said in other words.
         var semantic = new HashSet<long>();
         if (Semantic.Ready)
-            try
-            {
-                foreach (var h in await Semantic.Mail(question, 40, ct))
-                {
-                    var k = h.Entry ?? h.Id.ToString();
-                    semantic.Add(h.Id);
-                    if (!found.ContainsKey(k) && Pass(h, baseQ)) found[k] = (h, new HashSet<int>());
-                }
-            }
+            try { foreach (var h in await Semantic.Mail(question, 40, ct)) if (Pass(h, baseQ)) { semantic.Add(h.Id); count.TryAdd(h.Id, 0); dates[h.Id] = new DateTimeOffset(h.Date).ToUnixTimeMilliseconds(); } }
             catch (OperationCanceledException) { throw; }
             catch (Exception e) { Log.Warn("ai search", "meaning: " + e.Message); }
-        // Score: how many ideas, where (subject > attachment names > text), how recent, meaning.
-        double Score(MailHit h, HashSet<int> g)
+        // 2 · Read the best-matching candidates (most ideas first) — up to 3,000, old and new alike.
+        var cand = count.OrderByDescending(x => x.Value + (semantic.Contains(x.Key) ? 1 : 0)).ThenByDescending(x => dates.TryGetValue(x.Key, out var d) ? d : 0).Select(x => x.Key).Take(3000).ToList();
+        var light = await Task.Run(() => MailIndex.ByIds(cand, 3000, 8000), ct);
+        await SearchGate.Wait(ct);
+        // 3 · Score by WHERE each idea is; hard rules ("quotes", subject:, -words) and the project checked here.
+        var scored = new List<(MailHit H, double S, int Strong, (double Score, string Term, string Where)[] P)>();
+        foreach (var h in light)
         {
-            double s = 0;
-            var subj = (h.Subject ?? "").ToLowerInvariant(); var att = (h.AttNames ?? "").ToLowerInvariant();
-            foreach (var gi in g)
+            if (must != null && !must.Pass(h)) continue;
+            if (baseQ.Project.Length > 1 && !MailProjects.Fits(h, baseQ.Project)) continue;
+            var places = new (double, string, string)[n];
+            double s = 0; int strong = 0;
+            for (int gi = 0; gi < n; gi++)
             {
-                var terms = groups[gi].Select(x => x.ToLowerInvariant()).ToList();
-                s += terms.Any(subj.Contains) ? 3 : terms.Any(att.Contains) ? 2 : 1;
+                places[gi] = Place(h, groups[gi], gIds[gi].Contains(h.Id));
+                s += places[gi].Item1;
+                if (places[gi].Item1 >= 1) strong++;
             }
             var days = (DateTime.Now - h.Date).TotalDays;
-            s += days < 30 ? 1 : days < 180 ? 0.5 : 0;
+            s += days < 30 ? 0.5 : days < 180 ? 0.25 : 0;
             if (semantic.Contains(h.Id)) s += 2;
-            return s;
+            scored.Add((h, s, strong, places));
         }
-        var all = found.Values.Select(x => (x.H, x.G, S: Score(x.H, x.G))).ToList();
-        int n = groups.Count;
-        var strict = all.Where(x => x.G.Count == n).ToList();
-        var most = all.Where(x => x.G.Count >= Math.Max(1, (int)Math.Ceiling(n * 0.6))).ToList();
-        var pass = strict.Count >= 5 || n <= 1 ? "every idea" : most.Count >= 5 ? $"most ideas ({Math.Max(1, (int)Math.Ceiling(n * 0.6))} of {n})" : "any idea";
-        var pool = (strict.Count >= 5 || n <= 1 ? strict : most.Count >= 5 ? most : all)
-            .Concat(all.Where(x => semantic.Contains(x.H.Id) && x.G.Count == 0))
-            .GroupBy(x => x.H.Entry).Select(g => g.First())
+        // Precision: many candidates → the most specific idea must be in the subject, an attachment name or the new text.
+        string precision = "";
+        if (scored.Count > 200 && n >= 2)
+        {
+            var rare = Enumerable.Range(0, n).OrderBy(i => gIds[i].Count).First();
+            var kept = scored.Where(x => x.P[rare].Score >= 1 || semantic.Contains(x.H.Id)).ToList();
+            if (kept.Count >= 3) { scored = kept; precision = $" · precision: “{groups[rare][0]}” required in subject / attachment / new text"; }
+        }
+        var need = Math.Max(1, (int)Math.Ceiling(n * 0.6));
+        var strict = scored.Where(x => x.Strong == n).ToList();
+        var most = scored.Where(x => x.Strong >= need).ToList();
+        var pass = strict.Count >= 5 || n <= 1 ? "every idea" : most.Count >= 5 ? $"most ideas ({need} of {n})" : "any idea";
+        var pool = (strict.Count >= 5 || n <= 1 ? strict : most.Count >= 5 ? most : scored.Where(x => x.Strong >= 1 || semantic.Contains(x.H.Id)).ToList())
             .OrderByDescending(x => x.S).ThenByDescending(x => x.H.Date).Take(60).ToList();
-        // The AI keeps the best few, with a reason each (subjects and first lines only).
+        // Why each email is there (shown under it, even without the AI).
+        foreach (var x in pool)
+        {
+            var why = x.P.Where(p => p.Score >= 1).Select(p => $"{p.Term} in {p.Where}").Take(3).ToList();
+            x.H.Why = why.Count > 0 ? "✓ " + string.Join(" · ", why) : semantic.Contains(x.H.Id) ? "🧠 same meaning" : "";
+        }
+        // 4 · The cloud AI keeps the best few, with a reason each (subjects and first lines only).
         var picked = pool.Select(x => x.H).ToList();
-        var reranked = false;
+        var reranked = false; var slow = false;
         await SearchGate.Wait(ct);
-        var slow = false;
-        if (rerank && pool.Count > 6 && Ai.Active() != null && Store.AiSeesLines)
+        var ai = Cloud();
+        if (rerank && pool.Count > 6 && ai != null && (Store.AiSeesLines || RankSees))
             try
             {
                 var sb = new StringBuilder($"Question: {question}\nCandidate emails:\n");
-                for (int i = 0; i < pool.Count; i++) sb.Append($"[{i + 1}] {pool[i].H.Date:dd MMM yyyy} · {(pool[i].H.Sent ? "Me" : pool[i].H.FromName)} · {pool[i].H.Subject} · “{pool[i].H.FirstLines(160)}”\n");
+                for (int i = 0; i < pool.Count; i++) sb.Append($"[{i + 1}] {pool[i].H.Date:dd MMM yyyy} · {(pool[i].H.Sent ? "Me" : pool[i].H.FromName)} · {pool[i].H.Subject}{(pool[i].H.AttNames.Length > 0 ? " · 📎 " + pool[i].H.AttNames : "")} · “{pool[i].H.FirstLines(160)}”\n");
                 var sys = "You pick the emails that really answer the user's question, most relevant first. Reply with JSON only: {\"keep\":[{\"i\":3,\"why\":\"4 to 10 words: what this email is\"}]}. " +
-                          "Keep at most 12 (fewer is better when only a few fit). Understand construction short forms (FHC fire hose cabinet, SS stainless steel, BOH back of house, SSM material submittal, SDS shop drawing, WIR inspection request…).";
-                var j = Ai.ParseJson(await SearchGate.Limit(t => Ai.Chat(sys, sb.ToString(), true, true, null, t), 25, ct));
+                          "Keep at most 15 (fewer is better when only a few fit). Drop emails about another subject that only mention the words in passing. " +
+                          "Understand construction short forms (FHC fire hose cabinet, SS stainless steel, BOH back of house, SSM material submittal, SDS shop drawing, WIR inspection request, blockwork = block wall…).";
+                var j = Ai.ParseJson(await SearchGate.Limit(t => Ai.Chat(sys, sb.ToString(), true, true, ai, t), 25, ct));
                 var keep = new List<MailHit>();
                 foreach (var k in j["keep"]?.AsArray() ?? new JsonArray())
                     if (int.TryParse(k?["i"]?.ToString(), out var i) && i >= 1 && i <= pool.Count && !keep.Contains(pool[i - 1].H))
-                    { var h = pool[i - 1].H; h.Why = k?["why"]?.ToString() ?? ""; keep.Add(h); }
+                    {
+                        var h = pool[i - 1].H;
+                        var w = k?["why"]?.ToString() ?? "";
+                        h.Why = w.Length > 0 ? w + (h.Why.Length > 0 ? "   " + h.Why : "") : h.Why;
+                        keep.Add(h);
+                    }
                 if (keep.Count > 0) { picked = keep; reranked = true; }
             }
             catch (OperationCanceledException) { throw; }
             catch (TimeoutException) { slow = true; }
             catch (Exception e) { Log.Warn("ai search", "rerank: " + e.Message); }
-        r.Hits = reranked ? picked : picked.Take(30).ToList();
+        picked = reranked ? picked : picked.Take(30).ToList();
+        // The full emails for the ones kept (the list above read only their beginning).
+        var full = await Task.Run(() => MailIndex.ByIds(picked.Select(h => h.Id)), ct);
+        foreach (var h in full) h.Why = picked.First(x => x.Id == h.Id).Why;
+        r.Hits = full;
+        var years = r.Hits.Count > 0 ? (r.Hits.Min(h => h.Date).Year == r.Hits.Max(h => h.Date).Year ? $" · {r.Hits.Min(h => h.Date).Year}" : $" · {r.Hits.Min(h => h.Date).Year}–{r.Hits.Max(h => h.Date).Year}") : "";
         r.Searched = "Searched: " + string.Join(" · ", groups.Select(g => string.Join(" / ", g.Take(3)))) +
-                     $"  —  {queries} searches · matched {pass}" + (semantic.Count > 0 ? $" · meaning search {semantic.Count}" : "") +
-                     $" · {found.Count} candidates → {r.Hits.Count} best" + (reranked ? " (✦ AI picked)" : slow ? " (the AI was slow — best scored shown)" : "");
+                     $"  —  {queries} searches · all years · matched {pass}" + precision + (semantic.Count > 0 ? $" · meaning search {semantic.Count}" : "") +
+                     $" · {count.Count:N0} candidates → {r.Hits.Count} best{years}" + (reranked ? $" (✦ {Ai.LabelOf(ai)} picked)" : slow ? " (the AI was slow — best scored shown)" : "");
         return r;
     }
 

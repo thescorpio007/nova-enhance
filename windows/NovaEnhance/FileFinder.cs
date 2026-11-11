@@ -214,6 +214,7 @@ class FileFinderForm : NovaForm
         aiSearch.CheckedChanged += (_, _) => { SmartSearch.On = aiSearch.Checked; Find(); };
         new ToolTip().SetToolTip(aiSearch, "When nothing matches every word, Nova adds the short forms (FHC = fire hose cabinet, SS = stainless steel…) and keeps the files that match most of your ideas.");
         top.Controls.Add(aiSearch);
+        top.Controls.Add(SearchSyntax.HelpButton(box, false, () => Find()));
 
         // Row 2 — ✦ Requirements in your own words.
         var rrow = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(10, 2, 10, 2), BackColor = Th.Bg, WrapContents = false };
@@ -399,10 +400,14 @@ class FileFinderForm : NovaForm
 
     async void Find(bool openIfOne = false)
     {
-        var q = box.Text.Trim();
+        var raw = box.Text.Trim();
+        // 🔎 Windows search rules: "exact", -word, kind:, ext:, folder:, date:, rev:, project: (hard rules on every file).
+        var sx = SearchSyntax.Parse(raw);
+        var q = sx.Any ? sx.Free.Replace("\"", "").Trim() : raw;
         var my = ++run;
-        if (q.Length < 2 && !flt.Any) { lv.Items.Clear(); rows.Clear(); Hint(); Facets(new()); return; }
+        if (q.Length < 2 && !flt.Any && !sx.Any) { lv.Items.Clear(); rows.Clear(); Hint(); Facets(new()); return; }
         var folders = Folders();
+        if (sx.Project.Length > 0 && Projects.All().FirstOrDefault(x => x.Code.Equals(sx.Project, StringComparison.OrdinalIgnoreCase)) is { } sp) folders = Projects.FoldersOf(sp);
         var f = flt; var showJunk = backups.Checked;
         var clock = System.Diagnostics.Stopwatch.StartNew();
         info.Text = "Searching…";
@@ -410,8 +415,11 @@ class FileFinderForm : NovaForm
         var (all, shown) = await Task.Run(() =>
         {
             var found = Projects.FindFiles(q, folders, true, false, 100000, q.Length < 2);
+            if (sx.Any) found = found.Where(x => sx.PassFile(x.Path, x.Modified, x.Rev)).ToList();
+            if (sx.Rev.Equals("latest", StringComparison.OrdinalIgnoreCase)) found = found.Where(x => x.Status != "superseded").ToList();
             // ✦ AI search: nothing has every word → each idea in all its forms (FHC ↔ fire hose cabinet), keep files with most ideas.
-            if (found.Count == 0 && q.Length >= 2 && SmartSearch.On) (found, searched) = Expand(q, folders);
+            if (found.Count == 0 && q.Length >= 2 && SmartSearch.On) { (found, searched) = Expand(q, folders); if (sx.Any) found = found.Where(x => sx.PassFile(x.Path, x.Modified, x.Rev)).ToList(); }
+            if (sx.Any) searched = "🔒 " + sx.Describe() + (searched.Length > 0 ? " · " + searched : "");
             var list = found.Where(x => showJunk || !Junk.IsMatch(Path.GetFileName(x.Path))).Select(x => new Row { F = x, M = FileMeta.Of(x.Path) }).ToList();
             return (list, Apply(list, f));
         });
