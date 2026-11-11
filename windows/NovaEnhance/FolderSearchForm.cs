@@ -1030,7 +1030,7 @@ class FolderSearchForm : NovaForm
             var att = new List<FolderIndex.Passage>();
             foreach (var f in attach.Files.ToList())
             {
-                var txt = await FileTalk.Text(f, this, my.Token, stMsg => status.Text = stMsg);
+                var txt = await FileTalk.Text(f, this, my.Token, stMsg => status.Text = stMsg, q);
                 att.Add(new FolderIndex.Passage { Kind = "file", Path = f, Root = Path.GetDirectoryName(f) ?? "", Loc = "📎 attached", Goto = "", Text = txt.Length > 7000 ? txt[..7000] : txt });
             }
             passages.InsertRange(0, att);

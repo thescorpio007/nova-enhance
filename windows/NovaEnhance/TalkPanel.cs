@@ -203,7 +203,7 @@ class TalkPanel : Panel
                             Directory.CreateDirectory(dir);
                             var path = await MailPreview.SaveAttachment(h, name, dir);
                             if (string.IsNullOrEmpty(path) || !File.Exists(path)) continue;
-                            var txt = await FileTalk.Text(path, FindForm(), my.Token, t => status.Text = t);
+                            var txt = await FileTalk.Text(path, FindForm(), my.Token, t => status.Text = t, q);
                             var aid = "A" + f++;
                             sb.Append($"[{aid}] attachment of [{id}]: {name}\n{(txt.Length > 5000 ? txt[..5000] : txt)}\n\n");
                             src.Add(new ConvSrc { Id = aid, Title = "📎 " + name, Path = path });
@@ -217,7 +217,7 @@ class TalkPanel : Panel
             int fi = 1;
             foreach (var file in files)
             {
-                var txt = await FileTalk.Text(file, FindForm(), my.Token, t => status.Text = t);
+                var txt = await FileTalk.Text(file, FindForm(), my.Token, t => status.Text = t, q);
                 sb.Append($"[F{fi}] attached file {Path.GetFileName(file)}\n{(txt.Length > (files.Count > 1 ? 7000 : 12000) ? txt[..(files.Count > 1 ? 7000 : 12000)] : txt)}\n\n");
                 src.Add(new ConvSrc { Id = "F" + fi++, Title = "📎 " + Path.GetFileName(file), Path = file });
             }

@@ -246,6 +246,14 @@ class NovaChat
         {
             if (!File.Exists(f)) { notes.Add("missing file " + Path.GetFileName(f)); continue; }
             Post(new JsonObject { ["t"] = "progress", ["text"] = "Reading " + Path.GetFileName(f) + "…" });
+            // 👁 Pictures, drawings, CAD, voice notes and videos: Nova looks / listens with your question in mind.
+            var fx = Path.GetExtension(f).ToLowerInvariant();
+            if (FileTalk.IsPicture(f) || Media.Is(f) || fx is ".dwg" or ".dxf" || (fx == ".pdf" && System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(f), @"(DRW|DWG|DET|PLN|ELE|SEC|SK)", System.Text.RegularExpressions.RegexOptions.IgnoreCase)))
+            {
+                var seen = await FileTalk.Text(f, owner, CancellationToken.None, t => Post(new JsonObject { ["t"] = "progress", ["text"] = t }), text);
+                sources.Add(new Src { Kind = "file", Path = f, Label = Path.GetFileName(f), Text = seen.Length > 12000 ? seen[..12000] : seen });
+                continue;
+            }
             List<Seg> segs = null;
             try { segs = (await Task.Run(() => Projects.Read(f, CancellationToken.None))).Segs; } catch { segs = null; }   // one store: read once, known by all Nova
             segs = (segs ?? new()).Where(s => (s.Text ?? "").Trim().Length > 0).ToList();

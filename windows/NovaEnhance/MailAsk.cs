@@ -384,7 +384,7 @@ class MailAskForm : NovaForm
             int fi = 1;
             foreach (var f in files)
             {
-                var txt = await FileTalk.Text(f, this, my.Token, stMsg => status.Text = stMsg);
+                var txt = await FileTalk.Text(f, this, my.Token, stMsg => status.Text = stMsg, p);
                 sources.Add(new AskSource { Id = "F" + fi++, Title = "📎 " + Path.GetFileName(f), Text = Cut(txt, files.Count > 1 ? 7000 : 12000), Path = f });
             }
             sources.AddRange(thread);

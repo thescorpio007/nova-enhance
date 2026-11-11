@@ -244,10 +244,64 @@ static class Ai
         return (await GeminiText(key, Store.Model("gemini"), body, true, false, ct)).Trim();
     }
 
-    /// <summary>Gemini vision: all the text on a scanned page or picture (only after the user agreed to send it).</summary>
-    public static async Task<string> Vision(byte[] image, string mime, CancellationToken ct = default)
+    /// <summary>
+    /// 👁 Nova LOOKS at a picture or a drawing page with your question in mind (like a web AI): the vision of your local AI, Gemini,
+    /// or your current AI when it can see (Claude, OpenAI and compatible servers). Only after you agreed to send it.
+    /// </summary>
+    public static async Task<string> Look(byte[] image, string mime, string question, CancellationToken ct = default)
     {
-        const string Ask = "Transcribe ALL the text visible in this scanned page or drawing: title block, notes, labels, dimensions, tables, stamps and handwriting, in any language (English, Arabic, French…). Keep a natural reading order, one item per line. Reply with the text only.";
+        var ask = "You are a senior architect / technical coordinator looking at this picture or drawing for the user. " +
+                  (string.IsNullOrWhiteSpace(question) ? "" : $"The user's question: “{question}”. ") +
+                  "Describe precisely what it shows that matters for the question: the kind of drawing or photo, elements and materials, dimensions, levels, notes, symbols, title block (number, revision, title), " +
+                  "and anything wrong, missing, damaged or not as drawn (for site photos). Read every visible text and dimension that is relevant. Be factual; say when something is unclear.";
+        if (VisionBy == "local" && HasKey("local")) return await Vision(image, mime, ct, ask);
+        if (Store.Key("gemini").Length > 0) return await Vision(image, mime, ct, ask);
+        var p = Current();
+        if (p == null || p.Id == "local") throw new AiException("Seeing pictures needs a vision AI: a Gemini key, or a vision model on your local AI (Settings → AI & API keys)");
+        var key = Store.Key(p.Id);
+        var model = Store.Model(p.Id);
+        var b64 = Convert.ToBase64String(image);
+        if (p.Api == "anthropic")
+        {
+            var body = new JsonObject
+            {
+                ["model"] = model, ["max_tokens"] = 3000,
+                ["messages"] = new JsonArray(new JsonObject
+                {
+                    ["role"] = "user",
+                    ["content"] = new JsonArray(
+                        new JsonObject { ["type"] = "image", ["source"] = new JsonObject { ["type"] = "base64", ["media_type"] = mime, ["data"] = b64 } },
+                        new JsonObject { ["type"] = "text", ["text"] = ask })
+                })
+            };
+            var r = await Post(p.BaseUrl + "/messages", body, new() { ["x-api-key"] = key, ["anthropic-version"] = "2023-06-01" }, ct, true);
+            var sb = new StringBuilder();
+            foreach (var c in r["content"]?.AsArray() ?? new JsonArray()) if (c?["type"]?.ToString() == "text") sb.Append(c["text"]?.ToString());
+            return sb.ToString().Trim();
+        }
+        var ob = new JsonObject
+        {
+            ["model"] = model,
+            ["messages"] = new JsonArray(new JsonObject
+            {
+                ["role"] = "user",
+                ["content"] = new JsonArray(
+                    new JsonObject { ["type"] = "text", ["text"] = ask },
+                    new JsonObject { ["type"] = "image_url", ["image_url"] = new JsonObject { ["url"] = $"data:{mime};base64,{b64}" } })
+            })
+        };
+        var or = await Post(Url(p) + "/chat/completions", ob, new() { ["Authorization"] = "Bearer " + key }, ct, true);
+        return Regex.Replace(or["choices"]?[0]?["message"]?["content"]?.ToString() ?? "", @"<think>[\s\S]*?</think>", "").Trim();
+    }
+
+    /// <summary>Who will look at pictures (for the question asked before sending).</summary>
+    public static string LookerLabel => VisionBy == "local" && HasKey("local") ? "your local AI (on this PC)" : Store.Key("gemini").Length > 0 ? "Gemini" : LabelOf(Current());
+    public static bool LooksLocally => VisionBy == "local" && HasKey("local");
+
+    /// <summary>Gemini vision: all the text on a scanned page or picture (only after the user agreed to send it).</summary>
+    public static async Task<string> Vision(byte[] image, string mime, CancellationToken ct = default, string ask = null)
+    {
+        var Ask = ask ?? "Transcribe ALL the text visible in this scanned page or drawing: title block, notes, labels, dimensions, tables, stamps and handwriting, in any language (English, Arabic, French…). Keep a natural reading order, one item per line. Reply with the text only.";
         if (VisionBy == "local" && HasKey("local"))
         {
             // The local AI reads the page on this PC (a vision model such as Gemma, Qwen-VL or LLaVA).
@@ -279,7 +333,7 @@ static class Ai
                 ["role"] = "user",
                 ["parts"] = new JsonArray(
                     new JsonObject { ["inlineData"] = new JsonObject { ["mimeType"] = mime, ["data"] = Convert.ToBase64String(image) } },
-                    new JsonObject { ["text"] = "Transcribe ALL the text visible in this scanned page or drawing: title block, notes, labels, dimensions, tables, stamps and handwriting, in any language (English, Arabic, French…). Keep a natural reading order, one item per line. Reply with the text only." })
+                    new JsonObject { ["text"] = Ask })
             })
         };
         Exception last = null;

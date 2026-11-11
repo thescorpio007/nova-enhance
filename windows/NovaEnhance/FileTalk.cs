@@ -59,7 +59,103 @@ static class FileTalk
     /// PowerPoint, emails, zip, CAD text, and OCR for scans and pictures. When the PC finds no text in a picture or a scanned PDF,
     /// your vision AI reads it (asked first unless the local AI does it).
     /// </summary>
-    public static async Task<string> Text(string path, IWin32Window owner, CancellationToken ct, Action<string> status = null)
+    static DateTime lookOk = DateTime.MinValue;
+
+    /// <summary>Asks once before pictures or recordings leave the PC (Yes = allowed for 30 minutes). The local AI never needs it.</summary>
+    static bool Consent(IWin32Window owner, string what, string who, bool local)
+    {
+        if (local || DateTime.Now < lookOk) return true;
+        if (owner == null) return false;
+        DialogResult ans = DialogResult.No;
+        void AskIt() => ans = MessageBox.Show(owner, $"Send {what} to {who} so Nova can look at it / listen to it?\n\nYes = allowed for the next 30 minutes · No = Nova uses only the text it read on this PC.",
+            "Nova Enhance · 👁 look at your files", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+        if (owner is Control oc && oc.InvokeRequired) oc.Invoke((Action)AskIt); else AskIt();
+        if (ans != DialogResult.Yes) return false;
+        lookOk = DateTime.Now.AddMinutes(30);
+        return true;
+    }
+
+    static readonly System.Text.RegularExpressions.Regex DrawingName = new(@"(^|[\-_ ])(DRW|DWG|DET|PLN|ELE|ELV|SEC|SK|SKT|LAY|GA|SHD|SDS|SHOP)([\-_ \d]|$)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// What Nova knows about an attached file for a question — like a web AI: the text (read on this PC, OCR for scans), and with a
+    /// question it also LOOKS at pictures, drawing pages and CAD drawings (vision), and LISTENS to voice notes and videos (transcript).
+    /// </summary>
+    public static async Task<string> Text(string path, IWin32Window owner, CancellationToken ct, Action<string> status = null, string question = null)
+    {
+        var ext = Path.GetExtension(path).ToLowerInvariant();
+        // 🎙 Voice notes and videos.
+        if (Media.Is(path))
+        {
+            var known = FolderIndex.Known(path);
+            if (known is { Count: > 0 } && known[0].Loc == "transcript") return "🎙 Transcript:\n" + known[0].Text;
+            if (Store.Key("gemini").Length == 0) return "(🎙 a recording — transcribing needs a Gemini key: Settings → AI & API keys)";
+            var len = Media.Length(path);
+            if (!Consent(owner, $"the recording {Path.GetFileName(path)} ({(int)len.TotalMinutes}:{len.Seconds:00})", "Gemini", false)) return "(🎙 recording not transcribed — you chose to keep it on this PC)";
+            try
+            {
+                var t = await Media.Transcribe(path, status, ct);
+                if (t.Length > 0) FolderIndex.Remember(path, new List<Seg> { new("transcript", t) });
+                return t.Length > 0 ? $"🎙 Transcript ({(int)len.TotalMinutes}:{len.Seconds:00}):\n{t}" : "(🎙 no speech found)";
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception e) { return "(🎙 could not transcribe: " + e.Message + ")"; }
+        }
+        var baseText = await TextOnly(path, owner, ct, status);
+        if (string.IsNullOrWhiteSpace(question)) return baseText;
+        var who = Ai.LookerLabel; var local = Ai.LooksLocally;
+        // 📐 CAD: texts, layers and blocks, and the drawing as a picture to look at.
+        if (ext is ".dwg" or ".dxf")
+        {
+            status?.Invoke("📐 Opening " + Path.GetFileName(path) + "…");
+            string dxf = null;
+            try { dxf = await Task.Run(() => Cad.ToDxf(path, ct), ct); } catch (OperationCanceledException) { throw; } catch { }
+            if (dxf == null) return baseText + "\n(📐 Only the texts inside the DWG could be read — install the free ODA File Converter (or AutoCAD) so Nova can open and look at DWG drawings.)";
+            Cad.Drawing d;
+            try { d = await Task.Run(() => Cad.Read(dxf), ct); } catch (Exception e) { return baseText + "\n(📐 could not read the drawing: " + e.Message + ")"; }
+            var sb = new StringBuilder();
+            sb.Append($"📐 CAD drawing: {d.Entities:N0} objects · layers: {string.Join(", ", d.Layers.Take(60))}\n");
+            if (d.Blocks.Count > 0) sb.Append("Blocks: ").Append(string.Join(", ", d.Blocks.Take(40))).Append('\n');
+            sb.Append("Texts and dimensions in the drawing:\n").Append(string.Join(" · ", d.Texts.Take(800))).Append('\n');
+            if (d.Png != null && Consent(owner, $"a picture of the drawing {Path.GetFileName(path)}", who, local))
+                try { status?.Invoke("👁 Looking at the drawing…"); sb.Append("\n👁 What Nova sees in the drawing:\n").Append(await Ai.Look(d.Png, "image/png", question, ct)); }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception e) { sb.Append("\n(👁 could not look at it: " + e.Message + ")"); }
+            return sb.ToString();
+        }
+        // 🖼 Pictures and 📄 drawing PDFs: Nova looks at them with the question in mind.
+        var drawingPdf = ext == ".pdf" && (DrawingName.IsMatch(Path.GetFileNameWithoutExtension(path)) || baseText.Length < 1500);
+        if (!(IsPicture(path) || drawingPdf)) return baseText;
+        var pages = new List<int>();
+        if (IsPicture(path)) pages.Add(0);
+        else
+        {
+            // The pages that match the question best (from their text), else the first ones.
+            var words = System.Text.RegularExpressions.Regex.Split((question ?? "").ToLowerInvariant(), @"[^\p{L}\p{N}\-]+").Where(w => w.Length >= 3).ToList();
+            var byPage = System.Text.RegularExpressions.Regex.Matches(baseText, @"\[page (\d+)\][^\[]*").Select(m => (P: int.Parse(m.Groups[1].Value), S: words.Count(w => m.Value.ToLowerInvariant().Contains(w)))).ToList();
+            pages = byPage.Where(x => x.S > 0).OrderByDescending(x => x.S).Select(x => x.P).Distinct().Take(3).ToList();
+            if (pages.Count == 0) pages = new() { 1, 2 };
+        }
+        if (!Consent(owner, IsPicture(path) ? $"the picture {Path.GetFileName(path)}" : $"{pages.Count} page(s) of {Path.GetFileName(path)}", who, local)) return baseText;
+        var look = new StringBuilder();
+        foreach (var pg in pages)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                status?.Invoke($"👁 Looking at {Path.GetFileName(path)}{(pg > 0 ? " · page " + pg : "")}…");
+                var pic = await Task.Run(() => Ocr.Picture(LongPath.Usable(path), pg), ct);
+                if (pic.Data == null || pic.Data.Length == 0) continue;
+                look.Append(pg > 0 ? $"[page {pg}] " : "").Append(await Ai.Look(pic.Data, pic.Mime, question, ct)).Append("\n\n");
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception e) { look.Append("(👁 could not look at it: " + e.Message + ")\n"); break; }
+        }
+        return look.Length > 0 ? baseText + "\n\n👁 What Nova sees:\n" + look.ToString().Trim() : baseText;
+    }
+
+    /// <summary>The text only (read once, kept in the one Nova store).</summary>
+    public static async Task<string> TextOnly(string path, IWin32Window owner, CancellationToken ct, Action<string> status = null)
     {
         status?.Invoke("📎 Reading " + Path.GetFileName(path) + "…");
         List<Seg> segs;
@@ -117,7 +213,9 @@ static class FileTalk
         "one row per item compared (price, quantities, specification values, scope, exclusions, programme, dates, revisions, dimensions … whatever fits the files), " +
         "the exact value from each file in its column ('—' when the file doesn't say), and in Note: '✓ best', '⚠ different', '⚠ missing in F2' etc. " +
         "After the table: a short 'What changed / key differences' list, then a recommendation. For two revisions of the same document, list what was added, removed and changed. " +
-        "If the user asks for ADVICE or a check: answer as a senior architect / technical coordinator, citing [F1]… for every fact taken from the files. ";
+        "If the user asks for ADVICE or a check: answer as a senior architect / technical coordinator, citing [F1]… for every fact taken from the files. " +
+        "Parts marked “👁 What Nova sees” are what a vision AI saw in the picture / drawing (use them like your own eyes, say when unsure); “🎙 Transcript” is what was said in a recording (with minutes); " +
+        "“📐 CAD drawing” lists the layers, blocks, texts and dimensions found in a DWG/DXF. ";
 
     // ------------------------------------------------------------------ the comparison sheet
 
@@ -248,7 +346,7 @@ class AttachBar : FlowLayoutPanel
         Controls.Add(add);
         if (Files.Count == 0)
         {
-            var hint = Th.L("or Ctrl+V a screenshot / copied files, or drop files here — then ask: read it · check it · compare them in a table", 9, Th.Muted);
+            var hint = Th.L("or Ctrl+V / drop any file — PDF, Word, Excel, photos, drawings, DWG/DXF, voice notes, videos — then ask: read it · check it · compare them", 9, Th.Muted);
             hint.Margin = new Padding(6, 8, 0, 0);
             Controls.Add(hint);
         }

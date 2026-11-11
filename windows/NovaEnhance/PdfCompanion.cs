@@ -379,7 +379,7 @@ class PdfPanel : NovaForm
             int fi = 1;
             foreach (var f in files)
             {
-                var txt = await FileTalk.Text(f, this, my.Token, stMsg => status.Text = stMsg);
+                var txt = await FileTalk.Text(f, this, my.Token, stMsg => status.Text = stMsg, q);
                 attached.Append($"[F{fi++}] {Path.GetFileName(f)}\n{(txt.Length > 9000 ? txt[..9000] : txt)}\n\n");
             }
             if (files.Count > 0) sys += " The main document's pages are cited [p.N]; the user also attached other files, cited [F1], [F2]… (the main document is the first column when comparing)." + FileTalk.Rules;
