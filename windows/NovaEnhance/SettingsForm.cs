@@ -490,15 +490,15 @@ class SettingsForm : NovaForm
                 alist.Controls.Add(arow2);
             }
         }
-        aarow2.Controls.Add(Th.B("🔍 Find archive files", () => ShowArchives(Archives.Find()), true));
-        aarow2.Controls.Add(Th.B("📂 Add an archive file…", () =>
+        arow.Controls.Add(Th.B("🔍 Find archive files", () => ShowArchives(Archives.Find()), true));
+        arow.Controls.Add(Th.B("📂 Add an archive file…", () =>
         {
             using var pstDlg = new OpenFileDialog { Filter = "Outlook archive (*.pst)|*.pst", Multiselect = true, Title = "Add Outlook archive files" };
             if (pstDlg.ShowDialog(this) != DialogResult.OK) return;
             Archives.Add(pstDlg.FileNames);
             ShowArchives(Archives.Find());
         }));
-        aarow2.Controls.Add(Th.B("➕ Add all found", () => { var allF = Archives.Find(); Archives.Add(allF.Where(x => !x.Added).Select(x => x.Path)); ShowArchives(Archives.Find()); }));
+        arow.Controls.Add(Th.B("➕ Add all found", () => { var allF = Archives.Find(); Archives.Add(allF.Where(x => !x.Added).Select(x => x.Path)); ShowArchives(Archives.Find()); }));
         if (Archives.Extra.Count > 0) ShowArchives(Archives.Find());
         Note("A big archive takes several hours the first time (Outlook reads it email by email). Gentle indexing: older mail is read after working hours or when the PC is idle — ⚡ Index now reads at full speed.", Th.Muted);
         page.Add(Th.Section("Folders"));
