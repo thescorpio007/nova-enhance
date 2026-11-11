@@ -287,6 +287,9 @@ class AttachBar : FlowLayoutPanel
 {
     public readonly List<string> Files = new();
     public event Action Changed;
+    bool shortHint;
+    /// <summary>A narrow pane: the hint shrinks to one short line (the full text on hover).</summary>
+    public bool ShortHint { get => shortHint; set { if (shortHint == value) return; shortHint = value; Draw(); } }
 
     public AttachBar()
     {
@@ -346,7 +349,10 @@ class AttachBar : FlowLayoutPanel
         Controls.Add(add);
         if (Files.Count == 0)
         {
-            var hint = Th.L("or Ctrl+V / drop any file — PDF, Word, Excel, photos, drawings, DWG/DXF, voice notes, videos — then ask: read it · check it · compare them", 9, Th.Muted);
+            const string Long = "or Ctrl+V / drop any file — PDF, Word, Excel, photos, drawings, DWG/DXF, voice notes, videos — then ask: read it · check it · compare them";
+            var hint = Th.L(ShortHint ? "· Ctrl+V · drop any file" : Long, 9, Th.Muted);
+            new ToolTip().SetToolTip(hint, Long);
+            hint.MaximumSize = new Size(Math.Max(240, Width - 130), 0);
             hint.Margin = new Padding(6, 8, 0, 0);
             Controls.Add(hint);
         }

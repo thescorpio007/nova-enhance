@@ -598,7 +598,9 @@ class AskForm : NovaForm
             f => { list.Nova = f; ShowList(); })
         { Dock = DockStyle.Bottom, Height = Math.Clamp(Store.Int("win_ask_talk", 300), 160, 900) };
         var talkSplit = new Splitter { Dock = DockStyle.Bottom, Height = 6, BackColor = Color.FromArgb(0x23, 0x28, 0x38), MinExtra = 160, MinSize = 140 };
-        talkSplit.SplitterMoved += (_, _) => Store.SetInt("win_ask_talk", talk.Height);
+        talkSplit.SplitterMoved += (_, _) => { if (ClientSize.Height > 300) Store.SetInt("win_ask_talk_pct", Math.Clamp(100 * talk.Height / ClientSize.Height, 18, 70)); };
+        // The conversation keeps its share of the window when you resize or maximise.
+        Resize += (_, _) => { if (WindowState != FormWindowState.Minimized && ClientSize.Height > 300) talk.Height = Math.Clamp(ClientSize.Height * Store.Int("win_ask_talk_pct", 32) / 100, 170, ClientSize.Height - 260); };
         Controls.Add(split);
         Controls.Add(talkSplit);
         Controls.Add(talk);
@@ -1209,7 +1211,17 @@ class BriefForm : NovaForm
     readonly TalkPanel talk;
     readonly PickBar pickBar;
     readonly Button tabEmail, tabNova;
-    bool talkOpen;
+    bool talkOpen, settingSplit;
+
+    void SizePane()
+    {
+        if (split.Panel2Collapsed || split.Width < 600) return;
+        var pct = Store.Int("win_brief_pane_pct", 33) / 100.0;
+        var pw = Math.Clamp((int)(split.Width * pct), 420, Math.Max(440, split.Width - 520));
+        settingSplit = true;
+        try { split.SplitterDistance = Math.Max(300, split.Width - pw - split.SplitterWidth); } catch { }
+        finally { settingSplit = false; }
+    }
     List<MailHit> Picks() => new[] { needs, fyi, follow }.SelectMany(l => l.Picked).Distinct().ToList();
 
     public BriefForm()
@@ -1221,7 +1233,13 @@ class BriefForm : NovaForm
 
         // Top: greeting, counts and buttons. Below: one column, or the list + reading pane, or columns + reading pane.
         top = new Stack { Dock = DockStyle.Top, AutoScroll = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(16, 12, 16, 4) };
-        split = new SplitContainer { Dock = DockStyle.Fill, BackColor = Th.Bg, Panel2Collapsed = true, SplitterWidth = 6, FixedPanel = FixedPanel.Panel2 };
+        split = new SplitContainer { Dock = DockStyle.Fill, BackColor = Th.Bg, Panel2Collapsed = true, SplitterWidth = 6, FixedPanel = FixedPanel.None };
+        // The right pane keeps its share of the window (a third by default) when you resize or maximise; dragging the divider sets the share.
+        split.SplitterMoved += (_, _) =>
+        {
+            if (settingSplit || split.Panel2Collapsed || split.Width < 600) return;
+            Store.SetInt("win_brief_pane_pct", Math.Clamp((int)Math.Round(100.0 * split.Panel2.Width / split.Width), 22, 60));
+        };
         split.Panel1.BackColor = split.Panel2.BackColor = Th.Bg;
         one = new Stack { Padding = new Padding(16, 4, 8, 8) };
         cols = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, BackColor = Th.Bg, Visible = false, Padding = new Padding(8, 0, 0, 0) };
@@ -1349,11 +1367,7 @@ class BriefForm : NovaForm
             mode = m;
             force = true;
             split.Panel2Collapsed = mode == 0;
-            if (mode > 0)
-            {
-                var pw = Math.Clamp(Store.Int("win_brief_pane", mode == 2 ? 620 : 640), 420, Math.Max(440, w / 2));
-                try { split.SplitterDistance = Math.Max(300, split.Width - pw - split.SplitterWidth); } catch { }
-            }
+            if (mode > 0) SizePane();
             // Put each section where it belongs for this layout.
             foreach (var c in new Control[] { calTitle, calBox, needsTitle, needs, fyiTitle, fyi, followTitle, follow, sign }) c.Parent?.Controls.Remove(c);
             if (mode == 2)
@@ -1369,6 +1383,7 @@ class BriefForm : NovaForm
             one.Visible = mode != 2;
             cols.Visible = mode == 2;
         }
+        if (mode > 0) SizePane();
         top.FitAll();
         var lw = ListWidth(colB);
         if (!force && Math.Abs(lw - lastW) < 24) return;

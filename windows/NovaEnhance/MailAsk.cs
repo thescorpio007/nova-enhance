@@ -110,6 +110,16 @@ class MailAskForm : NovaForm
         attach = new AttachBar { Dock = DockStyle.Top };
         bottom.Controls.Add(attach);
         attach.Hook(prompt, this);
+        // The typing area sizes itself at any window size: the 📎 row + the whole box.
+        void FitBottom()
+        {
+            var w = bottom.ClientSize.Width - bottom.Padding.Horizontal;
+            if (w <= 0) return;
+            attach.ShortHint = w < 760;
+            bottom.Height = bottom.Padding.Vertical + attach.GetPreferredSize(new Size(w, 0)).Height + attach.Margin.Vertical + Math.Max(prompt.Font.Height * 4 + 14, 104);
+        }
+        attach.Changed += FitBottom;
+        bottom.Resize += (_, _) => FitBottom();
 
         ResizeEnd += (_, _) => { if (WindowState == FormWindowState.Normal) { Store.SetInt("win_mailask_w", Width); Store.SetInt("win_mailask_h", Height); } };
         FormClosing += (_, e) => { if (e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; cts?.Cancel(); Hide(); } };

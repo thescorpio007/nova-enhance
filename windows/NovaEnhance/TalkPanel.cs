@@ -34,7 +34,9 @@ class TalkPanel : Panel
     readonly string kind;
     readonly Func<TalkContext> context;
     readonly Action<NovaListFilter> apply;
-    readonly Panel webHost;
+    readonly Panel webHost, bottom;
+    readonly TableLayoutPanel row;
+    readonly FlowLayoutPanel btns;
     readonly TextBox input;
     readonly Label status;
     readonly AttachBar attach;
@@ -53,9 +55,9 @@ class TalkPanel : Panel
         this.kind = kind; this.context = context; this.apply = apply;
         BackColor = Th.Bg;
         webHost = new Panel { Dock = DockStyle.Fill, BackColor = Th.Bg };
-        var bottom = new Panel { Dock = DockStyle.Bottom, Height = 132, BackColor = Color.FromArgb(0x0E, 0x11, 0x17), Padding = new Padding(10, 6, 10, 6) };
+        bottom = new Panel { Dock = DockStyle.Bottom, Height = 150, BackColor = Color.FromArgb(0x0E, 0x11, 0x17), Padding = new Padding(10, 6, 10, 6) };
         status = new Label { Dock = DockStyle.Bottom, Height = 20, ForeColor = Th.AccentText, Font = Th.F(9), Padding = new Padding(10, 2, 10, 0), BackColor = Color.FromArgb(0x0E, 0x11, 0x17) };
-        var row = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = Color.Transparent };
+        row = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = Color.Transparent };
         row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         // Three lines to type in · Enter = send · Shift+Enter = new line.
@@ -63,7 +65,7 @@ class TalkPanel : Panel
         input.Dock = DockStyle.Fill; input.Margin = new Padding(0, 0, 8, 0);
         input.PlaceholderText = "Ask Nova about this list or the emails you picked — e.g. which need my answer today? only SLV, hide meeting recaps · is their proposal compliant? (Enter = send · Shift+Enter = new line · 📎 drop files)";
         input.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter && !e.Shift) { e.SuppressKeyPress = true; Ask(input.Text, false); } };
-        var btns = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, BackColor = Color.Transparent, Margin = new Padding(0) };
+        btns = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, BackColor = Color.Transparent, Margin = new Padding(0), WrapContents = false };
         var send = Th.B("✦ Send", () => Ask(input.Text, false), true); send.Width = 96;
         var stop = Th.B("■ Stop", () => cts?.Cancel()); stop.Width = 96;
         var nw = Th.B("＋ New", NewChat); nw.Width = 96;
@@ -73,11 +75,32 @@ class TalkPanel : Panel
         attach = new AttachBar { Dock = DockStyle.Top };
         bottom.Controls.Add(attach);
         Controls.Add(webHost); Controls.Add(bottom); Controls.Add(status);
+        // The typing area sizes itself: the 📎 row + a full 3-line box + the buttons, at any window size.
+        attach.Changed += Fit;
+        Resize += (_, _) => Fit();
+        attach.SizeChanged += (_, _) => Fit();
         ChipBar = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, BackColor = Color.FromArgb(0x1B, 0x18, 0x30), Padding = new Padding(8, 2, 8, 2), Margin = new Padding(0, 2, 0, 6), Visible = false };
         HandleCreated += async (_, _) => { var f = FindForm(); if (f != null) attach.Hook(input, f); await EnsureWeb(); };
     }
 
     public void FocusInput() => input.Focus();
+
+    bool fitting;
+    void Fit()
+    {
+        if (fitting || bottom.ClientSize.Width <= 0) return;
+        fitting = true;
+        try
+        {
+            var w = bottom.ClientSize.Width - bottom.Padding.Horizontal;
+            attach.ShortHint = w < 760;
+            var ah = attach.GetPreferredSize(new Size(w, 0)).Height + attach.Margin.Vertical;
+            var lines = input.Font.Height * 3 + 14;
+            var bh = btns.GetPreferredSize(Size.Empty).Height;
+            bottom.Height = bottom.Padding.Vertical + ah + Math.Max(lines, bh) + 4;
+        }
+        finally { fitting = false; }
+    }
 
     /// <summary>💬 Ask Nova about these emails (from the selection bar or the right-click menu).</summary>
     public void AskAbout(List<MailHit> emails)
