@@ -301,6 +301,8 @@ class ChatHistoryForm : NovaForm
             {
                 await web.EnsureCoreWebView2Async(await HubForm.Env());
                 web.CoreWebView2.Settings.IsScriptEnabled = false;
+                // Ctrl+click / middle-click on [D2] [E0]: route it like a click (no "can't reach nova.src" popup).
+                web.CoreWebView2.NewWindowRequested += (_, e) => { e.Handled = true; try { web.CoreWebView2.Navigate(e.Uri); } catch { } };
                 web.CoreWebView2.NavigationStarting += (_, e) =>
                 {
                     if (e.Uri.StartsWith("about:") || e.Uri.StartsWith("data:")) return;

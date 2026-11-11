@@ -210,6 +210,10 @@ class FileFinderForm : NovaForm
         proj.SelectedIndex = 0;
         backups = new CheckBox { Text = "Show backups (.bak, ~$, temp)", AutoSize = true, ForeColor = Th.Muted, Font = Th.F(9.5f), Margin = new Padding(10, 8, 4, 0) };
         top.Controls.Add(box); top.Controls.Add(proj); top.Controls.Add(backups);
+        var aiSearch = new CheckBox { Text = "✦ AI search", Checked = SmartSearch.On, AutoSize = true, ForeColor = Th.Muted, Font = Th.F(9.5f), Margin = new Padding(10, 8, 4, 0) };
+        aiSearch.CheckedChanged += (_, _) => { SmartSearch.On = aiSearch.Checked; Find(); };
+        new ToolTip().SetToolTip(aiSearch, "When nothing matches every word, Nova adds the short forms (FHC = fire hose cabinet, SS = stainless steel…) and keeps the files that match most of your ideas.");
+        top.Controls.Add(aiSearch);
 
         // Row 2 — ✦ Requirements in your own words.
         var rrow = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(10, 2, 10, 2), BackColor = Th.Bg, WrapContents = false };
@@ -402,9 +406,12 @@ class FileFinderForm : NovaForm
         var f = flt; var showJunk = backups.Checked;
         var clock = System.Diagnostics.Stopwatch.StartNew();
         info.Text = "Searching…";
+        string searched = "";
         var (all, shown) = await Task.Run(() =>
         {
             var found = Projects.FindFiles(q, folders, true, false, 100000, q.Length < 2);
+            // ✦ AI search: nothing has every word → each idea in all its forms (FHC ↔ fire hose cabinet), keep files with most ideas.
+            if (found.Count == 0 && q.Length >= 2 && SmartSearch.On) (found, searched) = Expand(q, folders);
             var list = found.Where(x => showJunk || !Junk.IsMatch(Path.GetFileName(x.Path))).Select(x => new Row { F = x, M = FileMeta.Of(x.Path) }).ToList();
             return (list, Apply(list, f));
         });
@@ -416,8 +423,31 @@ class FileFinderForm : NovaForm
         info.Text = shown.Count == 0
             ? $"Nothing matches — try fewer words or remove a filter (✗)."
             : $"{shown.Count:N0} of {all.Count:N0} files match{more} · {clock.ElapsedMilliseconds} ms · Enter opens · right-click: show in folder, copy, attach";
+        if (searched.Length > 0) info.Text = "✦ " + searched + "\n" + info.Text;
         if (openIfOne && shown.Count == 1) Shell.Open(shown[0].F.Path);
         else if (openIfOne && lv.Items.Count > 0) { lv.Focus(); lv.Items[0].Selected = true; lv.Items[0].Focused = true; }
+    }
+
+    /// <summary>✦ AI search for file names: every idea with its other forms, files scored by how many ideas they match.</summary>
+    static (List<Projects.FileRow>, string) Expand(string q, List<string> folders)
+    {
+        var groups = Abbrev.Groups(q);
+        if (groups.Count == 0) return (new(), "");
+        var hits = new Dictionary<string, (Projects.FileRow F, HashSet<int> G)>(StringComparer.OrdinalIgnoreCase);
+        for (int gi = 0; gi < groups.Count; gi++)
+            foreach (var t in groups[gi].Take(5))
+                foreach (var f in Projects.FindFiles(t, folders, true, false, 20000))
+                {
+                    if (!hits.TryGetValue(f.Path, out var x)) hits[f.Path] = x = (f, new HashSet<int>());
+                    x.G.Add(gi);
+                }
+        int n = groups.Count, need = n <= 1 ? 1 : Math.Max(1, (int)Math.Ceiling(n * 0.6));
+        var keep = hits.Values.Where(x => x.G.Count >= need).ToList();
+        if (keep.Count == 0) { need = 1; keep = hits.Values.ToList(); }
+        foreach (var x in keep) x.F.Score += x.G.Count * 4;
+        var res = keep.OrderByDescending(x => x.G.Count).ThenByDescending(x => x.F.Score).Select(x => x.F).ToList();
+        var line = "Searched: " + string.Join(" · ", groups.Select(g => string.Join(" / ", g.Take(3)))) + $" — no file has every word, so showing files with {(need == n ? "every idea" : $"at least {need} of {n} ideas")}";
+        return (res, line);
     }
 
     static List<Row> Apply(List<Row> list, FinderFilter f)

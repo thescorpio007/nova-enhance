@@ -576,6 +576,8 @@ class MailAskForm : NovaForm
         catch (Exception e) { status.Text = "⚠ Needs Microsoft Edge WebView2: " + e.Message; return; }
         w.CoreWebView2.Settings.IsStatusBarEnabled = false;
         w.CoreWebView2.Settings.AreDevToolsEnabled = false;
+        // Ctrl+click / middle-click on [D2] [E0]: route it like a click (no "can't reach nova.src" popup).
+        w.CoreWebView2.NewWindowRequested += (_, e) => { e.Handled = true; try { w.CoreWebView2.Navigate(e.Uri); } catch { } };
         w.CoreWebView2.NavigationStarting += (_, e) =>
         {
             if (e.Uri.StartsWith("about:", StringComparison.OrdinalIgnoreCase) || e.Uri.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) return;

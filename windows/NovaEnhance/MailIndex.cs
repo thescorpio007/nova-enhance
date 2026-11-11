@@ -1017,6 +1017,35 @@ static class MailIndex
         catch { return null; }
     }
 
+    /// <summary>Emails by their index id (meaning search results).</summary>
+    public static List<MailHit> ByIds(IEnumerable<long> ids)
+    {
+        var list = ids.Distinct().Take(500).ToList();
+        var res = new List<MailHit>();
+        if (list.Count == 0) return res;
+        try
+        {
+            using var c = Open();
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = $"SELECT id,entry,store,conv,folder,sent,date,from_name,from_addr,to_list,cc_list,to_addr,cc_addr,subject,body,att_names,unread,importance FROM mail WHERE id IN ({string.Join(",", list)})";
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                string Str(int i) => r.IsDBNull(i) ? "" : r.GetString(i);
+                res.Add(new MailHit
+                {
+                    Id = r.GetInt64(0), Entry = Str(1), StoreId = Str(2), Conv = Str(3), Folder = Str(4), Sent = r.GetInt64(5) == 1,
+                    Date = DateTimeOffset.FromUnixTimeMilliseconds(r.GetInt64(6)).LocalDateTime,
+                    FromName = Str(7), FromAddr = Str(8), To = Str(9), Cc = Str(10), ToAddr = Str(11), CcAddr = Str(12),
+                    Subject = Str(13), Body = Str(14), AttNames = Str(15), Unread = r.GetInt64(16) == 1, Importance = (int)r.GetInt64(17)
+                });
+            }
+        }
+        catch (Exception e) { Log.Warn("Mail index", "by ids: " + e.Message); }
+        var order = list.Select((id, i) => (id, i)).ToDictionary(x => x.id, x => x.i);
+        return res.OrderBy(h => order.TryGetValue(h.Id, out var i) ? i : 0).ToList();
+    }
+
     /// <summary>How many indexed emails have this text in the subject (for matching project folders with your emails).</summary>
     public static long CountSubject(string text)
     {

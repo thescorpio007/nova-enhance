@@ -340,6 +340,41 @@ class SettingsForm : NovaForm
             rr.Controls.Add(Th.Radio(l, Store.Range == v, () => { Store.Range = vv; MailIndex.Now(); }));
         }
 
+        page.Add(Th.Section("✦ AI search"));
+        page.Add(Th.Check("✦ AI search in every search (email, project files, conversations)", SmartSearch.On, v => SmartSearch.On = v));
+        Note("Nova understands the question, splits it into ideas, adds their short forms (FHC = fire hose cabinet, BOH = back of house, SS = stainless steel, SSM / SDS / WIR…) and your 🧠 Memory words, " +
+             "searches in several passes (every idea → most ideas → any), scores the results (subject and attachment names count more, newer counts more) and lets the AI keep the best few with a reason each. " +
+             "Off = plain word search (every word must be there).");
+        page.Add(Th.Section("🧠 Meaning search (optional)"));
+        Note("Finds emails and document parts that say the same thing in other words (e.g. \"hose reel cupboard near the kitchen\" finds \"FHC in BOH\"). Each email (subject + first lines) and the first parts of each read file get a \"meaning fingerprint\", built gently in the background and kept encrypted on this PC.");
+        foreach (var (v, l, d) in new[]
+                 {
+                     ("off", "Off  (default)", "Word search + ✦ AI search only."),
+                     ("local", "💻 My local AI  (nothing leaves this PC)", $"Needs an embedding model in LM Studio / Ollama at {Ai.LocalUrl} (e.g. nomic-embed-text)."),
+                     ("gemini", "☁ Gemini", "Sends the subject and first lines of each email to Google once (free tier is enough for most mailboxes)."),
+                     ("openai", "☁ OpenAI", "Sends the subject and first lines of each email to OpenAI once (about $0.02 per 10,000 emails).")
+                 })
+        {
+            var vv = v;
+            Opt(l, d, Semantic.By == v, () => { Semantic.By = vv; Semantic.Start(); BeginInvoke(() => Draw("Email & AI")); });
+        }
+        if (Semantic.By == "local")
+        {
+            var mr = page.Add(Th.Row(false));
+            mr.Controls.Add(Th.L("Local embedding model:", 10, Th.Text));
+            var mb = Th.Box(false); mb.Width = 220; mb.Text = Semantic.LocalModel;
+            mb.Leave += (_, _) => Semantic.LocalModel = mb.Text.Trim();
+            mr.Controls.Add(mb);
+        }
+        if (Semantic.On)
+        {
+            var sl = Note(Semantic.Line(), Th.Muted);
+            var st = new System.Windows.Forms.Timer { Interval = 3000 };
+            st.Tick += (_, _) => { if (sl.IsDisposed) { st.Stop(); st.Dispose(); return; } sl.Text = Semantic.Line(); };
+            st.Start();
+        }
+        Note("Check your company's IT / data policy before sending work email to a cloud AI. Folders marked 🔒 never read are never sent.", Th.Warn);
+
         page.Add(Th.Section("\"Needs a response\" list (morning brief)"));
         page.Add(Th.Check("I'm in To", Store.NeedTo, v => Store.NeedTo = v));
         page.Add(Th.Check("I'm in Cc and my name is mentioned", Store.NeedCcNamed, v => Store.NeedCcNamed = v));

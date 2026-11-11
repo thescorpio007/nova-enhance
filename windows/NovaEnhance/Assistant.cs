@@ -15,6 +15,8 @@ static class Assistant
     {
         public string Intent = "search";
         public string Explain = "";
+        /// <summary>✦ AI search: what was searched (ideas, passes, candidates → best).</summary>
+        public string Searched = "";
         public JsonObject Filter;
         public List<MailHit> Hits = new();
         public string Message = "";
@@ -31,6 +33,7 @@ Schema:
  ""after"":""YYYY-MM-DD or empty"", ""before"":""YYYY-MM-DD or empty"",
  ""folder"":""received|sent|any"", ""has_attachments"":true|false|null, ""unread"":true|null,
  ""unanswered"":true|false, ""target"":number (0 = first email in the current list, -1 = none),
+ ""groups"":[[""idea"",""its short form / synonyms / codes""], ...] (max 6 groups, most important idea first; e.g. ""FHC in BOH"" -> [[""FHC"",""fire hose cabinet""],[""BOH"",""back of house""]]),
  ""explain"":""very short English description of the filter, e.g. From Hamza · To Ibrahim · Cc me · all dates""}
 Rules:
 - ""I"", ""me"", ""my"" mean the user: use me_in (""I was in Cc"" -> me_in cc; ""sent to me"" -> me_in to). Emails the user sent -> folder sent.
@@ -40,6 +43,7 @@ Rules:
 - ""no answer to my email"", ""follow up"", ""chase"" -> intent followup, folder sent.
 - ""summarise/summarize the last one / this email / number 2"" -> intent summarize with target. ""draft/write a reply to …"" -> intent draft with target.
 - Dates: relative to today. ""last month"" = the previous calendar month; ""this week"" = since Monday; leave empty when no date is mentioned.
+- groups: one group per idea the emails must be about, each with the forms people really write (abbreviation, full words, singular, plural, codes, the English form). Understand construction short forms (SS stainless steel, SSM material submittal, SDS shop drawing, WIR inspection request, MS method statement). Never put names or dates in groups.
 - When a previous filter is given, the new request refines it: keep everything unless the request changes it.";
 
     public static async Task<Answer> Ask(string question, JsonObject previous, List<MailHit> currentHits, CancellationToken ct)
@@ -93,6 +97,17 @@ Rules:
             q.After ??= DateTime.Now.AddDays(-45);
             ans.Hits = await Task.Run(() => MailIndex.Search(q), ct);
             foreach (var h in ans.Hits) h.Status = "follow";
+        }
+        else if (SmartSearch.On && (q.Words.Count > 0 || q.Phrase.Length > 0 || f["groups"] is JsonArray { Count: > 0 }))
+        {
+            // ✦ AI search: ideas + short forms, several passes, scoring, meaning search, the AI keeps the best few.
+            var groups = SmartSearch.FromPlan(f, question);
+            if (ans.Explain.Length == 0) ans.Explain = Describe(q);
+            var baseQ = q; baseQ.Words = new(); baseQ.Phrase = "";
+            var sr = await SmartSearch.Mail(question, baseQ, groups, ct);
+            ans.Hits = sr.Hits;
+            ans.Searched = sr.Searched;
+            if (Store.AiSeesLines && ans.Hits.Count > 0) await Summaries(ans.Hits.Take(15).ToList(), ct);
         }
         else
         {

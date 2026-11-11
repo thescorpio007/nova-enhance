@@ -49,6 +49,8 @@ class TalkPanel : Panel
     NovaListFilter current;
     /// <summary>The chips row ("✦ Nova filter: … ✗ · ⭐ Keep as rule") — the window puts it above its list.</summary>
     public readonly FlowLayoutPanel ChipBar;
+    /// <summary>Search for email: the conversation can run a better search ([[SEARCH {"q":…}]]) — the window searches again.</summary>
+    public Action<string> Research;
 
     public TalkPanel(string kind, Func<TalkContext> context, Action<NovaListFilter> apply)
     {
@@ -136,6 +138,16 @@ class TalkPanel : Panel
             if (act.Success) { Act(act.Groups[1].Value, int.Parse(act.Groups[2].Value)); return; }
             if (e.Uri.StartsWith("http", StringComparison.OrdinalIgnoreCase)) Shell.Open(e.Uri);
         };
+        // Ctrl+click / middle-click on [D2] [E0] asks for a new window: handle it here instead (no "can't reach nova.src" popup).
+        w.CoreWebView2.NewWindowRequested += (_, e) =>
+        {
+            e.Handled = true;
+            var m = Regex.Match(e.Uri ?? "", @"nova\.src/(\d+)/([EADFMH]\d+)");
+            if (m.Success) { OpenSource(int.Parse(m.Groups[1].Value), m.Groups[2].Value); return; }
+            var act = Regex.Match(e.Uri ?? "", @"nova\.act/(\w+)/(\d+)");
+            if (act.Success) { Act(act.Groups[1].Value, int.Parse(act.Groups[2].Value)); return; }
+            if ((e.Uri ?? "").StartsWith("http", StringComparison.OrdinalIgnoreCase)) Shell.Open(e.Uri);
+        };
         web = w;
         if (pendingHtml != null) w.CoreWebView2.NavigateToString(pendingHtml); else Draw();
     }
@@ -164,6 +176,11 @@ class TalkPanel : Panel
         "To show everything again: [[LIST {\"clear\":true}]]. Never put the [[LIST]] line when the question is not about the list. " +
         "In your text, number the emails in the same order as show (1., 2.…) and cite them [E3]. " +
         "An email that just says \"proceed\", \"noted\", \"approved\" or thanks is an approval or information, not a question waiting for an answer. Meeting recaps and automatic notifications are FYI unless they give the user an action.";
+
+    const string SearchRule =
+        " SEARCHING AGAIN: when the list does not hold what the user asks for (or the user asks to search for something else), end your answer with ONE line exactly like " +
+        "[[SEARCH {\"q\":\"emails about fire hose cabinets (FHC) in back of house (BOH) areas, stainless steel type\"}]] — a clear search question with the important ideas and their short forms; " +
+        "Nova then searches the whole mailbox again with ✦ AI search and shows the new list. Never put both [[SEARCH]] and [[LIST]].";
 
     async void Ask(string q, bool silent, List<string> chipsOnly = null)
     {
@@ -287,7 +304,7 @@ class TalkPanel : Panel
             if (max > 0 && text.Length > max) text = text[..max];
             var sys = "You are Nova, the assistant of an architect / technical coordinator in the UAE, talking with him about his emails. Use ONLY the numbered sources for facts and cite them like [E3] [A1] [D2] [F1]; " +
                       "if something isn't in them, say so. Be clear and practical: short paragraphs or numbered points. When he asks for a reply text, put exactly the text between a line ✍ START and a line ✍ END." +
-                      ListRule + (files.Count > 0 ? FileTalk.Rules : "") + NovaSearch.SourceRule + FolderAsk.AdviceRule + Modes.ProfileNote();
+                      ListRule + (Research != null ? SearchRule : "") + (files.Count > 0 ? FileTalk.Rules : "") + NovaSearch.SourceRule + FolderAsk.AdviceRule + Modes.ProfileNote();
             Draw("Nova is thinking…");
             var a = await Ai.Chat(sys, text, false);
             my.Token.ThrowIfCancellationRequested();
@@ -298,6 +315,15 @@ class TalkPanel : Panel
                 a = a.Remove(lm.Index, lm.Length).Trim();
                 try { ApplyList(JsonNode.Parse(lm.Groups[1].Value)?.AsObject()); } catch (Exception ex) { Log.Warn("talk", "list: " + ex.Message); }
             }
+            // [[SEARCH …]] → the window searches the mailbox again with a better question.
+            string again = null;
+            var sm = Regex.Match(a, @"\[\[SEARCH\s*(\{.*?\})\s*\]\]", RegexOptions.Singleline);
+            if (sm.Success)
+            {
+                a = a.Remove(sm.Index, sm.Length).Trim();
+                try { again = JsonNode.Parse(sm.Groups[1].Value)?["q"]?.ToString(); } catch (Exception ex) { Log.Warn("talk", "search: " + ex.Message); }
+                if (!string.IsNullOrWhiteSpace(again) && Research != null) a += $"\n\n🔍 Searching again: “{again}”";
+            }
             var cited = new HashSet<string>(Regex.Matches(a, @"\b([EADFMH]\d{1,3})\b").Select(x => x.Groups[1].Value));
             var nova = new ConvMsg { Role = "nova", Text = a, Ai = Ai.LabelOf(Ai.Current()), Src = src.Where(s => cited.Contains(s.Id)).ToList() };
             conv.Msgs.Add(nova);
@@ -306,6 +332,7 @@ class TalkPanel : Panel
             if (!silent) attach.Clear();
             status.Text = "";
             Draw();
+            if (!string.IsNullOrWhiteSpace(again)) Research?.Invoke(again);
         }
         catch (OperationCanceledException) { conv.Msgs.Remove(userMsg); status.Text = "■ Stopped"; Draw(); }
         catch (Exception ex) { conv.Msgs.Add(new ConvMsg { Role = "nova", Text = "⚠ " + ex.Message }); status.Text = ""; Draw(); }

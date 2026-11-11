@@ -66,6 +66,13 @@ static class NovaSearch
         r.Folders = o.Folders?.Where(f => f.Length > 0).ToList()
                     ?? (r.Project != null ? Projects.FoldersOf(r.Project) : Projects.All().SelectMany(p => p.Folders).Concat(Projects.General).ToList());
         var covered = r.Folders.Where(Projects.Covers).ToList();
+        // ✦ AI search: the short forms too (FHC ↔ fire hose cabinet, BOH ↔ back of house…).
+        var wide = (terms ?? words).ToList();
+        if (SmartSearch.On)
+            foreach (var w in (terms ?? words).ToList())
+                foreach (var f in Abbrev.Forms(w).Skip(1))
+                    foreach (var x in f.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+                        if (x.Length >= 2 && !wide.Contains(x, StringComparer.OrdinalIgnoreCase)) wide.Add(x);
 
         // 🧠 Nova Memory: an answer you approved before (any feature).
         if (o.Mem)
@@ -108,11 +115,20 @@ static class NovaSearch
                 ct.ThrowIfCancellationRequested();
                 try
                 {
-                    foreach (var p in FolderIndex.Retrieve(f, terms ?? words, 8, 3, Memory.Boosts(words)))
+                    foreach (var p in FolderIndex.Retrieve(f, wide, 8, 3, Memory.Boosts(words)))
                         if (seen.Add(p.Path + "|" + p.Loc)) r.Docs.Add(p);
                 }
                 catch { }
             }
+            // 🧠 Meaning search: parts that say it in other words.
+            if (Semantic.Ready)
+                try
+                {
+                    foreach (var p in Semantic.Docs(question ?? "", r.Folders, 4, ct).GetAwaiter().GetResult())
+                        if (seen.Add(p.Path + "|" + p.Loc)) { p.Root = Root(p.Path, r.Folders); r.Docs.Add(p); }
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception e) { Log.Warn("nova search", "meaning: " + e.Message); }
             if (o.ReadFiles && covered.Count > 0)
                 foreach (var p in Projects.Ask(covered, words, o.MaxFiles, 14, status, ct))
                     if (seen.Add(p.Path + "|" + p.Loc))
@@ -133,13 +149,26 @@ static class NovaSearch
             if (r.Project != null) tries.Add(spec.Take(2).Prepend(r.Project.Code.ToLowerInvariant()).ToList());
             tries.Add(spec.Take(3).ToList()); tries.Add(spec.Take(2).ToList());
             var hits = new List<MailHit>();
+            // ✦ AI search: each idea in all its forms, several passes, best scored first (no extra AI call here).
+            if (SmartSearch.On)
+                try
+                {
+                    var groups = Abbrev.Groups(question ?? "");
+                    if (r.Project != null && !groups.Any(g => g.Contains(r.Project.Code, StringComparer.OrdinalIgnoreCase))) groups.Insert(0, new List<string> { r.Project.Code });
+                    if (groups.Count > 0)
+                        hits = SmartSearch.Mail(question ?? "", new MailQuery(), groups, ct, false).GetAwaiter().GetResult().Hits
+                            .Where(h => (o.ExcludeConv.Length == 0 || h.Conv != o.ExcludeConv) && (o.ExcludeEntries == null || !o.ExcludeEntries.Contains(h.Entry ?? ""))).ToList();
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception e) { Log.Warn("nova search", "ai search: " + e.Message); hits = new(); }
+            if (hits.Count < 2)
             foreach (var t in tries)
             {
                 try { hits = MailIndex.Search(new MailQuery { Words = t, Limit = 20 }); } catch { hits = new(); }
                 hits = hits.Where(h => (o.ExcludeConv.Length == 0 || h.Conv != o.ExcludeConv) && (o.ExcludeEntries == null || !o.ExcludeEntries.Contains(h.Entry ?? ""))).ToList();
                 if (hits.Count >= 2) break;
             }
-            foreach (var h in hits.OrderByDescending(h => h.Date).Take(o.MaxEmails))
+            foreach (var h in (SmartSearch.On ? hits : hits.OrderByDescending(h => h.Date).ToList()).Take(o.MaxEmails))
             {
                 var body = Store.AiSeesFull ? (h.NewPart.Length > 1500 ? h.NewPart[..1500] : h.NewPart) : h.FirstLines(400);
                 r.Emails.Add(new FolderIndex.Passage

@@ -597,6 +597,7 @@ class AskForm : NovaForm
         talk = new TalkPanel("ask", () => new TalkContext { All = hits.ToList(), Focus = list.Picked.Count > 0 ? list.Picked.ToList() : list.Selected != null ? new List<MailHit> { list.Selected } : new(), Where = "search results: " + lastQuestion },
             f => { list.Nova = f; ShowList(); })
         { Dock = DockStyle.Bottom, Height = Math.Clamp(Store.Int("win_ask_talk", 300), 160, 900) };
+        talk.Research = q => { question.Text = q; Run(q, false); };
         var talkSplit = new Splitter { Dock = DockStyle.Bottom, Height = 6, BackColor = Color.FromArgb(0x23, 0x28, 0x38), MinExtra = 160, MinSize = 140 };
         talkSplit.SplitterMoved += (_, _) => { if (ClientSize.Height > 300) Store.SetInt("win_ask_talk_pct", Math.Clamp(100 * talk.Height / ClientSize.Height, 18, 70)); };
         // The conversation keeps its share of the window when you resize or maximise.
@@ -643,6 +644,11 @@ class AskForm : NovaForm
         myPrompts.Click += (_, _) => Prompts.Menu(myPrompts, "ask", UsePrompt);
         myPrompts.Margin = new Padding(14, 0, 0, 0);
         prow.Controls.Add(myPrompts);
+        // ✦ AI search: ideas + short forms, several passes, the AI keeps the best few (off = plain word search).
+        var aiSearch = Th.Check("✦ AI search", SmartSearch.On, v => SmartSearch.On = v);
+        aiSearch.Margin = new Padding(14, 5, 0, 0);
+        new ToolTip().SetToolTip(aiSearch, "Nova understands the question, adds the short forms (FHC = fire hose cabinet, BOH = back of house…), searches in several passes and keeps the best answers. Off = plain word search.");
+        prow.Controls.Add(aiSearch);
         instr = stack.Add(Th.Prose(Th.Box(true, 3)), true);
         instr.PlaceholderText = "Optional — e.g. Exclude emails that start with \"proceed\" · ignore reminders from Eric · only SLV and Nouran projects · keep only where the contractor asks for my approval · group by project · export to Excel   (Ctrl+Enter = Ask)";
         instr.Visible = Prompts.ShowMore;
@@ -878,7 +884,7 @@ class AskForm : NovaForm
             rawHits = ans.Hits;
             hits = ans.Hits;
             hidden = new(); showHidden = false; lastExport = null;
-            understood.Text = "Understood as: " + ans.Explain;
+            understood.Text = "Understood as: " + ans.Explain + (ans.Searched.Length > 0 ? "\n✦ " + ans.Searched : "");
             lastCheck = DateTime.Now;
             if (instructions.Length > 0)
             {
