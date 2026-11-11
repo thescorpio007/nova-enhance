@@ -717,11 +717,11 @@ static class Server
                     var qx = q + " " + subject + " " + string.Join(" ", nums);
                     var docsOk = FolderAsk.Sees != "never" || ConfirmSend.LocalHandlesPrivate;
                     var ns = await Task.Run(() => NovaSearch.Run(qx, FolderAsk.LocalTerms(q + " " + subject), new NovaSearch.Opts { Project = proj, ExcludeConv = convId, MaxEmails = 4, MaxDocs = 10, MaxFiles = 5, Docs = docsOk, Drawings = docsOk }, null, CancellationToken.None));
-                    foreach (var p in ns.Drawings.Concat(ns.Docs)) src.Add(("D" + d++, FolderAsk.Label(p), p.Text.Length > 1400 ? p.Text[..1400] : p.Text, p.Path));
-                    foreach (var p in ns.Emails) src.Add(("E" + e++, p.Loc, p.Text, ""));
+                    foreach (var px in ns.Drawings.Concat(ns.Docs)) src.Add(("D" + d++, FolderAsk.Label(px), px.Text.Length > 1400 ? px.Text[..1400] : px.Text, px.Path));
+                    foreach (var px in ns.Emails) src.Add(("E" + e++, px.Loc, px.Text, ""));
                     int mi = 1, hi = 1;
-                    foreach (var p in ns.Memory) src.Add(("M" + mi++, p.Loc, p.Text, ""));
-                    foreach (var p in ns.History) src.Add(("H" + hi++, p.Loc, p.Text, ""));
+                    foreach (var px in ns.Memory) src.Add(("M" + mi++, px.Loc, px.Text, ""));
+                    foreach (var px in ns.History) src.Add(("H" + hi++, px.Loc, px.Text, ""));
                     var sb = new System.Text.StringBuilder();
                     sb.Append($"MY DRAFT (the email I am writing now)\nSubject: {subject}\nTo: {S(r, "to")}\nCc: {S(r, "cc")}\n\n{own}\n\n");
                     if (quoted.Trim().Length > 0) sb.Append("THE EMAILS BELOW MY DRAFT (the thread I reply to):\n").Append(quoted.Length > 6000 ? quoted[..6000] : quoted).Append("\n\n");
