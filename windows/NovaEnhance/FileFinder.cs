@@ -406,6 +406,7 @@ class FileFinderForm : NovaForm
         var q = sx.Any ? sx.Free.Replace("\"", "").Trim() : raw;
         var my = ++run;
         if (q.Length < 2 && !flt.Any && !sx.Any) { lv.Items.Clear(); rows.Clear(); Hint(); Facets(new()); return; }
+        using var act = Activity.Begin("find a project file", raw);
         var folders = Folders();
         if (sx.Project.Length > 0 && Projects.All().FirstOrDefault(x => x.Code.Equals(sx.Project, StringComparison.OrdinalIgnoreCase)) is { } sp) folders = Projects.FoldersOf(sp);
         var f = flt; var showJunk = backups.Checked;
@@ -424,6 +425,10 @@ class FileFinderForm : NovaForm
             return (list, Apply(list, f));
         });
         if (my != run || IsDisposed) return;
+        act.Mark("file names" + (searched.Length > 0 ? " + ✦ AI search" : ""), $"{shown.Count:N0} of {all.Count:N0}");
+        act.Note("searched", searched);
+        act.Note("first", string.Join("\n", shown.Take(15).Select(x => x.F.Path)));
+        act.Result = $"{shown.Count:N0} files";
         rows = shown;
         Facets(all);
         Draw();

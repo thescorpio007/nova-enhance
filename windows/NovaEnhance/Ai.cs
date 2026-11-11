@@ -134,7 +134,24 @@ static class Ai
         }
     }
 
+    /// <summary>🧪 Every AI call is timed and recorded in the Activity history (with the text sent, option C).</summary>
     static async Task<string> ChatOne(string system, string user, bool fast, bool json, Provider p, CancellationToken ct)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            var r = await ChatOneCore(system, user, fast, json, p, ct);
+            Activity.AiCall(LabelOf(p), system, user, r, sw.ElapsedMilliseconds);
+            return r;
+        }
+        catch (Exception e)
+        {
+            Activity.AiCall(LabelOf(p), system, user, null, sw.ElapsedMilliseconds, e is OperationCanceledException ? "stopped / time limit" : e.Message);
+            throw;
+        }
+    }
+
+    static async Task<string> ChatOneCore(string system, string user, bool fast, bool json, Provider p, CancellationToken ct)
     {
         p ??= Active() ?? throw new AiException("No AI key yet — add one in Settings → AI & API keys");
         var key = Store.Key(p.Id);

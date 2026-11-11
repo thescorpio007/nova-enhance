@@ -86,6 +86,9 @@ Rules:
         }
         else f = LocalParse(question);
         if (f.Count == 0) f = LocalParse(question);
+        Activity.Current?.Mark(ans.Slow ? "understand (AI too slow → Nova planned it)" : "understand the question", "");
+        Activity.Current?.Note("plan", f.ToJsonString());
+        if (sx.Any) Activity.Current?.Note("rules", sx.Describe());
         await SearchGate.Wait(ct);
         ans.Filter = f;
         ans.Intent = Str(f, "intent", "search");
@@ -154,6 +157,7 @@ Rules:
             }
             if (ans.Explain.Length == 0) ans.Explain = Describe(q);
             var baseQ = q; baseQ.Words = new(); baseQ.Phrase = "";
+            Activity.Current?.Note("ideas", string.Join(" · ", groups.Select(g => string.Join(" / ", g))));
             var sr = await SmartSearch.Mail(full, baseQ, groups, ct, true, sx);
             ans.Hits = sr.Hits;
             ans.Searched = sr.Searched;

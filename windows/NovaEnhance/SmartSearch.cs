@@ -211,6 +211,7 @@ static class SmartSearch
             }
             gIds.Add(set);
         }
+        Activity.Current?.Mark("find every match (all years)", $"{queries} searches · " + string.Join(" · ", gIds.Select((g, i) => $"{groups[i][0]} {g.Count:N0}")));
         var count = new Dictionary<long, int>();
         foreach (var set in gIds) foreach (var id in set) count[id] = count.TryGetValue(id, out var c) ? c + 1 : 1;
         // Meaning search: what is said in other words.
@@ -222,6 +223,7 @@ static class SmartSearch
         // 2 · Read the best-matching candidates (most ideas first) — up to 3,000, old and new alike.
         var cand = count.OrderByDescending(x => x.Value + (semantic.Contains(x.Key) ? 1 : 0)).ThenByDescending(x => dates.TryGetValue(x.Key, out var d) ? d : 0).Select(x => x.Key).Take(3000).ToList();
         var light = await Task.Run(() => MailIndex.ByIds(cand, 3000, 8000), ct);
+        Activity.Current?.Mark("read candidates", $"{light.Count:N0} of {count.Count:N0}");
         await SearchGate.Wait(ct);
         // 3 · Score by WHERE each idea is; hard rules ("quotes", subject:, -words) and the project checked here.
         var scored = new List<(MailHit H, double S, int Strong, (double Score, string Term, string Where)[] P)>();
@@ -263,6 +265,7 @@ static class SmartSearch
             x.H.Why = why.Count > 0 ? "✓ " + string.Join(" · ", why) : semantic.Contains(x.H.Id) ? "🧠 same meaning" : "";
         }
         // 4 · The cloud AI keeps the best few, with a reason each (subjects and first lines only).
+        Activity.Current?.Mark("score by place" + (precision.Length > 0 ? " + precision" : ""), $"{scored.Count:N0} kept by the rules · matched {pass} · pool {pool.Count}");
         var picked = pool.Select(x => x.H).ToList();
         var reranked = false; var slow = false;
         await SearchGate.Wait(ct);
@@ -290,6 +293,7 @@ static class SmartSearch
             catch (OperationCanceledException) { throw; }
             catch (TimeoutException) { slow = true; }
             catch (Exception e) { Log.Warn("ai search", "rerank: " + e.Message); }
+        Activity.Current?.Mark(reranked ? "AI ranking" : slow ? "AI ranking (too slow, skipped)" : "no AI ranking", $"{picked.Count} kept");
         picked = reranked ? picked : picked.Take(30).ToList();
         // The full emails for the ones kept (the list above read only their beginning).
         var full = await Task.Run(() => MailIndex.ByIds(picked.Select(h => h.Id)), ct);

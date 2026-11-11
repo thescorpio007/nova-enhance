@@ -3,7 +3,7 @@ namespace NovaEnhance;
 /// <summary>Settings, split into sections like the phone app.</summary>
 class SettingsForm : NovaForm
 {
-    static readonly string[] Sections = { "AI & API keys", "About me", "Enhancement", "Email & AI", "Folder search", "📁 Projects", "✦ Prompts", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "About" };
+    static readonly string[] Sections = { "AI & API keys", "About me", "Enhancement", "Email & AI", "Folder search", "📁 Projects", "✦ Prompts", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "🧪 Activity history", "About" };
     readonly ListBox nav;
     readonly Panel host;
     Stack page;
@@ -79,6 +79,7 @@ class SettingsForm : NovaForm
                 case "Backup & restore": BackupPage(); break;
                 case "Updates": Updates(); break;
                 case "Error log": ErrorLog(); break;
+                case "🧪 Activity history": ActivityPage(); break;
                 case "Office tab": OfficeTab(); break;
                 default: About(); break;
             }
@@ -1415,6 +1416,78 @@ class SettingsForm : NovaForm
     // ------------------------------------------------------------------ Error log
     string logFilter = "today";
     bool logErrorsOnly;
+
+    int actDays = 1;
+
+    /// <summary>🧪 Activity history: every task with its steps, timings and thinking — exported as one ZIP for Claude.</summary>
+    void ActivityPage()
+    {
+        Note("For development: Nova records each task (searches, conversations, AI calls, sorting) with the time of every step, what it understood and decided, and the text it sent to the AI. Kept on this PC, encrypted. 📦 Export makes one ZIP to share with Claude — names and email addresses hidden (Person 12, person12@…).");
+        page.Add(Th.Check("🧪 Record the activity history", Activity.On, v => Activity.On = v));
+        var kr = page.Add(Th.Row(false));
+        kr.Controls.Add(Th.L("Keep for", 10, Th.Text));
+        foreach (var d0 in new[] { 7, 14, 30 }) { var dd = d0; kr.Controls.Add(Th.Radio($"{dd} days", Activity.KeepDays == dd, () => Activity.KeepDays = dd)); }
+
+        page.Add(Th.Section("Tasks"));
+        var fr = page.Add(Th.Row(false));
+        foreach (var (d1, l1) in new[] { (1, "Today"), (7, "7 days"), (14, "14 days"), (30, "30 days") })
+        { var dd = d1; fr.Controls.Add(Th.Chip(l1, actDays == dd, () => { actDays = dd; Draw("🧪 Activity history"); })); }
+        var items = Activity.Read(actDays);
+        var sum = Note("", Th.Muted);
+        if (items.Count > 0)
+        {
+            var feats = items.GroupBy(o => o["feature"]?.ToString() ?? "").OrderByDescending(g => g.Count()).Take(6)
+                .Select(g => $"{g.Key}: {g.Count()} · avg {g.Average(o => o["ms"]?.GetValue<long>() ?? 0) / 1000:0.0} s");
+            sum.Text = $"{items.Count:N0} tasks · " + string.Join("  ·  ", feats);
+        }
+        else sum.Text = "Nothing recorded yet for this period — use Nova normally, then come back.";
+        var lv = page.Add(new ListView { View = View.Details, FullRowSelect = true, HideSelection = false, MultiSelect = false, Height = 260, BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.None, Font = Th.F(9.5f) }, true);
+        lv.Columns.Add("Time", 140); lv.Columns.Add("Feature", 190); lv.Columns.Add("Task", 430); lv.Columns.Add("Time taken", 90); lv.Columns.Add("Result", 260);
+        var list = items.OrderByDescending(o => o["start"]?.ToString()).Take(800).ToList();
+        foreach (var o in list)
+        {
+            var ms = o["ms"]?.GetValue<long>() ?? 0;
+            var it = new ListViewItem(new[] { o["start"]?.ToString()?[5..19] ?? "", o["feature"]?.ToString() ?? "", o["title"]?.ToString() ?? "", $"{ms / 1000.0:0.0} s", o["result"]?.ToString() ?? "" }) { Tag = o };
+            if (o["failed"]?.GetValue<bool>() == true) it.ForeColor = Th.Warn; else if (ms > 15000) it.ForeColor = Color.FromArgb(0xFF, 0xD2, 0x7A);
+            lv.Items.Add(it);
+        }
+        var det = page.Add(new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Height = 260, BackColor = Th.Bg, ForeColor = Th.Text, Font = new Font("Consolas", 9.5f), BorderStyle = BorderStyle.FixedSingle, Text = "Select a task to see its steps, timings and thinking." }, true);
+        lv.SelectedIndexChanged += (_, _) =>
+        {
+            if (lv.SelectedItems.Count == 0 || lv.SelectedItems[0].Tag is not System.Text.Json.Nodes.JsonObject o) return;
+            var sb = new System.Text.StringBuilder($"{o["start"]}  ·  {o["feature"]}  ·  {(o["ms"]?.GetValue<long>() ?? 0) / 1000.0:0.0} s\r\n{o["title"]}\r\n\r\nSTEPS\r\n");
+            foreach (var st in o["steps"]?.AsArray() ?? new System.Text.Json.Nodes.JsonArray()) sb.Append($"  {st?["ms"],7} ms   {st?["step"]}   {st?["info"]}\r\n");
+            sb.Append("\r\nTHINKING\r\n");
+            foreach (var (k, v) in o["thinking"]?.AsObject() ?? new System.Text.Json.Nodes.JsonObject()) sb.Append($"  {k}: {v?.ToString().Replace("\n", "\r\n      ")}\r\n");
+            var ai = o["ai_calls"]?.AsArray() ?? new System.Text.Json.Nodes.JsonArray();
+            if (ai.Count > 0) sb.Append($"\r\nAI CALLS ({ai.Count})\r\n");
+            foreach (var a in ai) sb.Append($"  {a?["ai"]} · {a?["ms"]} ms · sent {a?["sent_chars"]} chars{(a?["error"] != null ? " · ⚠ " + a?["error"] : "")}\r\n    answer: {a?["answer"]?.ToString().Replace("\n", " ")}\r\n");
+            sb.Append($"\r\nRESULT: {o["result"]}");
+            det.Text = sb.ToString();
+        };
+
+        page.Add(Th.Section("📦 Export for Claude"));
+        Note("One ZIP: activity.jsonl (every task with steps, timings, thinking and AI text), summary.md (averages, slowest tasks, AI calls, failures), errors and system info. Names and email addresses are hidden; project codes, subjects and file names stay.");
+        var er = page.Add(Th.Row(false));
+        var expStatus = Note("", Th.Muted);
+        foreach (var d2 in new[] { 7, 14, 30 })
+        {
+            var dd = d2;
+            er.Controls.Add(Th.B($"📦 Export {dd} days", async () =>
+            {
+                expStatus.Text = "Preparing the ZIP…";
+                try
+                {
+                    var zip = await Task.Run(() => Activity.Export(dd, t => BeginInvoke(() => { if (!expStatus.IsDisposed) expStatus.Text = t; })));
+                    expStatus.Text = "✓ " + zip;
+                    Shell.Select(zip);
+                }
+                catch (Exception ex) { expStatus.Text = "⚠ " + ex.Message; }
+            }, dd == 7));
+        }
+        er.Controls.Add(Th.B("📁 Activity folder", () => Shell.Open(Activity.Dir)));
+        Note("The ZIP holds work text (first lines of emails sent to the AI) — share it only with Claude.", Th.Warn);
+    }
 
     void ErrorLog()
     {

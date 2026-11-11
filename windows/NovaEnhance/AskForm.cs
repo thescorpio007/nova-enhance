@@ -980,6 +980,9 @@ class AskForm : NovaForm
         SearchGate.Resume();
         var my = cts = new CancellationTokenSource();
         Searching(true);
+        // 🧪 Activity history: this search, its steps and timings.
+        using var act = Activity.Begin(fromTalk ? "email search (from conversation)" : "email search", q);
+        act.Note("project", Project);
         examples.Visible = false;
         message.Visible = false;
         understood.Text = "🔍 " + q;
@@ -1005,10 +1008,15 @@ class AskForm : NovaForm
             // 📁 A project named in the question picks it (the button follows).
             var named = Projects.ForText(mainQ);
             if (named != null && named.Code.Length > 0 && !named.Code.Equals(Project, StringComparison.OrdinalIgnoreCase)) SetProject(named.Code);
+            act.Mark("📐 document numbers", $"{hits.Count} at once");
             var ans = In("mail")
                 ? await Assistant.Ask(mainQ, followUp ? lastFilter : null, hits, my.Token, fromTalk, Project)
                 : new Assistant.Answer { Explain = "emails not searched (✉ is off in Search in)" };
-            if (my.IsCancellationRequested) return;
+            if (my.IsCancellationRequested) { act.Fail("stopped"); return; }
+            act.Mark("✉ email search", $"{ans.Hits.Count} emails");
+            act.Note("understood", ans.Explain);
+            act.Note("searched", ans.Searched);
+            act.Note("kept", string.Join("\n", ans.Hits.Take(30).Select(h => $"{h.Date:dd MMM yyyy} · {h.Subject} · {h.Why}")));
             if (ans.Intent is "summarize" or "draft")
             {
                 if (ans.Message.Length > 0) { ShowMessage(ans.Message); info.Text = ""; return; }
@@ -1054,7 +1062,10 @@ class AskForm : NovaForm
             ShowList();
             // 📁 Project files, drawings, 🧠 Memory and past answers for the same question.
             await FindFiles(mainQ, my.Token);
-            if (my.IsCancellationRequested) return;
+            if (my.IsCancellationRequested) { act.Fail("stopped"); return; }
+            act.Mark("📁 files, drawings, memory", $"{fileRows.Count} found");
+            act.Note("files", string.Join("\n", fileRows.Take(20).Select(r => r.Icon + " " + r.Title)));
+            act.Result = $"{hits.Count} emails · {fileRows.Count} files · {ans.Seconds:0.0} s";
             if (fileRows.Count > 0) info.Text += $" · 📁 {fileRows.Count} file(s) / note(s) above the emails";
             if (!fromTalk) talk.ListLoaded();
             bottom.Visible = true;
@@ -1062,10 +1073,11 @@ class AskForm : NovaForm
             History.Add("ask", Ai.Active()?.Id ?? "", "", "ask-mail", q, $"{hits.Count} results · {ans.Explain}");
             SaveConv(followUp, q, ans.Explain);
         }
-        catch (OperationCanceledException) when (my.IsCancellationRequested) { }
+        catch (OperationCanceledException) when (my.IsCancellationRequested) { act.Fail("stopped"); }
         catch (Exception e)
         {
             if (my.IsCancellationRequested) return;
+            act.Fail(e.Message);
             info.Text = "⚠ " + e.Message;
             Log.Error("ask", e);
         }

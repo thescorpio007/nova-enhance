@@ -216,6 +216,7 @@ class TalkPanel : Panel
         var userMsg = new ConvMsg { Role = "user", Text = silent ? "✦ " + q : shown };
         conv ??= new Conversation { Kind = kind == "brief" ? "brief" : "ask", Title = (kind == "brief" ? "☀ Brief — " : "🔍 ") + (q.Length > 70 ? q[..70] : q) };
         conv.Msgs.Add(userMsg);
+        using var act = Activity.Begin("conversation · " + kind, q);
         // 🔍 Option A: "find / search …" (or an empty list) → Nova searches first (✦ AI search: emails, then the list follows), then answers.
         bool searchedNow = false;
         string again = null;
@@ -226,6 +227,7 @@ class TalkPanel : Panel
             try { await Research(q); searchedNow = true; } catch (Exception ex) { Log.Warn("talk", "search: " + ex.Message); }
             if (my.IsCancellationRequested) { busy = false; status.Text = "■ Stopped"; Draw(); return; }
             ctx = context?.Invoke() ?? new TalkContext();
+            act.Mark("🔍 searched first", $"{ctx.All.Count} emails in the list");
         }
         Draw("Nova is reading " + (ctx.Focus.Count > 0 ? $"the {ctx.Focus.Count} email(s) you picked, " : "") + $"the list ({ctx.All.Count}), your files and project documents…");
         try
@@ -333,7 +335,10 @@ class TalkPanel : Panel
                       "if something isn't in them, say so. Be clear and practical: short paragraphs or numbered points. When he asks for a reply text, put exactly the text between a line ✍ START and a line ✍ END." +
                       ListRule + (searchedNow ? " The list was just searched for this request: say briefly what it found (most relevant first, cite [E#] and [D#]) and what is missing." : Research != null && !silent ? SearchRule : "") + (files.Count > 0 ? FileTalk.Rules : "") + NovaSearch.SourceRule + FolderAsk.AdviceRule + Modes.ProfileNote();
             Draw("Nova is thinking…");
+            act.Mark("read the list, picked emails, attachments, files", $"{src.Count} sources · {text.Length:N0} chars");
             var a = await Ai.Chat(sys, text, false);
+            act.Note("answer", a);
+            act.Result = $"{src.Count} sources";
             my.Token.ThrowIfCancellationRequested();
             // [[LIST …]] → the list follows the conversation.
             var lm = Regex.Match(a, @"\[\[LIST\s*(\{.*?\})\s*\]\]", RegexOptions.Singleline);
@@ -359,8 +364,8 @@ class TalkPanel : Panel
             status.Text = "";
             Draw();
         }
-        catch (OperationCanceledException) { conv.Msgs.Remove(userMsg); status.Text = "■ Stopped"; Draw(); }
-        catch (Exception ex) { conv.Msgs.Add(new ConvMsg { Role = "nova", Text = "⚠ " + ex.Message }); status.Text = ""; Draw(); }
+        catch (OperationCanceledException) { act.Fail("stopped"); conv.Msgs.Remove(userMsg); status.Text = "■ Stopped"; Draw(); }
+        catch (Exception ex) { act.Fail(ex.Message); conv.Msgs.Add(new ConvMsg { Role = "nova", Text = "⚠ " + ex.Message }); status.Text = ""; Draw(); }
         finally { busy = false; }
         if (!string.IsNullOrWhiteSpace(again) && Research != null && !my.IsCancellationRequested) _ = Again(again, q);
     }
