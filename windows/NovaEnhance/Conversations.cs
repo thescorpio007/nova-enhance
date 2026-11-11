@@ -78,7 +78,7 @@ static class Conversations
         try { return JsonSerializer.Deserialize<Conversation>(File.ReadAllText(jsonPath), J); } catch { return null; }
     }
 
-    public static string Icon(string kind) => kind switch { "email" => "✉", "ask" => "🔍", "folder" => "📁", "pdf" => "📄", "chat" => "💬", _ => "✦" };
+    public static string Icon(string kind) => kind switch { "email" => "✉", "ask" => "🔍", "folder" => "📁", "pdf" => "📄", "chat" => "💬", "brief" => "☀", _ => "✦" };
 
     public class Item { public string Path = "", Kind = "", Title = "", Preview = "", Text = ""; public DateTime Updated; public int Count; public bool NovaChat; }
 
@@ -244,6 +244,11 @@ class ChatHistoryForm : NovaForm
     Conversation shown;
     readonly Dictionary<string, Button> filters = new();
     string pendingHtml;
+    // ☑ Several conversations picked (Ctrl+click · Shift+click · Ctrl+A).
+    readonly List<Conversations.Item> picked = new();
+    readonly List<Conversations.Item> shownItems = new();
+    Conversations.Item pickAnchor;
+    FlowLayoutPanel pickBar;
 
     public ChatHistoryForm()
     {
@@ -266,8 +271,16 @@ class ChatHistoryForm : NovaForm
             fr.Controls.Add(b);
         }
         list = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, BackColor = Color.Transparent };
+        pickBar = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, BackColor = Color.FromArgb(0x2A, 0x25, 0x52), Padding = new Padding(4), Visible = false };
         left.Controls.Add(list);
+        left.Controls.Add(pickBar);
         left.Controls.Add(top);
+        KeyPreview = true;
+        KeyDown += (_, e) =>
+        {
+            if (e.Control && e.KeyCode == Keys.A && !search.Focused) { picked.Clear(); picked.AddRange(shownItems); Fill(); e.Handled = true; e.SuppressKeyPress = true; }
+            else if (e.KeyCode == Keys.Escape && picked.Count > 0) { picked.Clear(); Fill(); e.Handled = true; }
+        };
         var t = new System.Windows.Forms.Timer { Interval = 300 };
         t.Tick += (_, _) => { t.Stop(); Fill(); };
         search.TextChanged += (_, _) => { t.Stop(); t.Start(); };
@@ -325,22 +338,83 @@ class ChatHistoryForm : NovaForm
         var items = all.Where(i => (kind == "" || i.Kind == kind) && words.All(w => i.Text.Contains(w, StringComparison.OrdinalIgnoreCase) || i.Title.Contains(w, StringComparison.OrdinalIgnoreCase))).ToList();
         string lastGroup = null;
         var w = list.ClientSize.Width - 26;
+        shownItems.Clear();
         if (items.Count == 0) list.Controls.Add(Th.Wrap(all.Count == 0 ? "No conversations yet — they are saved automatically after each answer." : "Nothing found.", 9.5f, Th.Muted));
         foreach (var it in items.Take(400))
         {
             var g = Group(it.Updated);
             if (g != lastGroup) { var gl = Th.L(g, 8.5f, Th.Muted, true); gl.Margin = new Padding(4, 10, 0, 4); list.Controls.Add(gl); lastGroup = g; }
-            var card = new Stack { AutoScroll = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Width = w, BackColor = it == current ? Th.Card2 : Th.Card, Padding = new Padding(10, 7, 10, 7), Margin = new Padding(0, 0, 0, 5), Cursor = Cursors.Hand };
+            shownItems.Add(it);
+            var card = new Stack { AutoScroll = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Width = w, BackColor = picked.Contains(it) ? Color.FromArgb(0x33, 0x2C, 0x66) : it == current ? Th.Card2 : Th.Card, Padding = new Padding(10, 7, 10, 7), Margin = new Padding(0, 0, 0, 5), Cursor = Cursors.Hand };
             card.Add(Th.L($"{Conversations.Icon(it.Kind)} {(it.Kind == "email" ? "Email" : it.Kind == "ask" ? "Ask Nova" : it.Kind == "folder" ? "Folder" : it.Kind == "pdf" ? "PDF" : "Nova Chat")} · {it.Updated:ddd dd MMM HH:mm} · {it.Count} messages", 8.5f, Th.Muted));
             var tl = card.Add(Th.L(it.Title, 10, Th.Text, true)); tl.MaximumSize = new Size(w - 24, 40); tl.AutoEllipsis = true;
             var snip = Snippet(it, words);
             if (snip.Length > 0) { var sl = card.Add(Th.L(snip, 9, Color.FromArgb(0xC9, 0xCE, 0xD8))); sl.MaximumSize = new Size(w - 24, 38); }
             var item = it;
-            void Hook(Control c) { c.Click += (_, _) => Open(item); foreach (Control k in c.Controls) Hook(k); }
+            void Hook(Control c) { c.Click += (_, _) => Clicked(item); foreach (Control k in c.Controls) Hook(k); }
             Hook(card);
             list.Controls.Add(card);
         }
         list.ResumeLayout();
+        DrawPickBar();
+    }
+
+    void Clicked(Conversations.Item it)
+    {
+        var mk = Control.ModifierKeys;
+        if ((mk & Keys.Control) != 0)
+        {
+            if (picked.Count == 0 && current != null && current != it) picked.Add(current);
+            if (!picked.Remove(it)) picked.Add(it);
+            pickAnchor = it;
+        }
+        else if ((mk & Keys.Shift) != 0)
+        {
+            var a = pickAnchor ?? current ?? it;
+            int i = shownItems.IndexOf(a), j = shownItems.IndexOf(it);
+            if (i < 0) i = j;
+            picked.Clear();
+            for (int k = Math.Min(i, j); k <= Math.Max(i, j); k++) picked.Add(shownItems[k]);
+        }
+        else { picked.Clear(); pickAnchor = it; Open(it); return; }
+        Fill();
+    }
+
+    void DrawPickBar()
+    {
+        foreach (Control c in pickBar.Controls) c.Dispose();
+        pickBar.Controls.Clear();
+        pickBar.Visible = picked.Count > 1;
+        if (!pickBar.Visible) return;
+        var sel = picked.ToList();
+        var l = Th.L($"☑ {sel.Count} selected", 9.5f, Color.White, true); l.Margin = new Padding(2, 6, 6, 0);
+        pickBar.Controls.Add(l);
+        void B(string text, Action a) { var b = Th.B(text, a); b.Font = Th.F(9); pickBar.Controls.Add(b); }
+        B("⇩ Word (all in one)", () =>
+        {
+            try
+            {
+                var body = new StringBuilder();
+                foreach (var it in sel.OrderBy(x => x.Updated))
+                {
+                    var c = Conversations.Load(it.Path);
+                    if (c == null) continue;
+                    body.Append($"\n\n■ {c.Title} — {c.Updated:dd MMM yyyy HH:mm}\n");
+                    foreach (var m in c.Msgs) body.Append(m.Role == "user" ? "\nYou: " : "\nNova: ").Append(m.Text).Append('\n');
+                }
+                var x = System.IO.Path.Combine(Prompts.Folder, $"{sel.Count} conversations {DateTime.Now:dd MMM yyyy HHmm}.docx");
+                Docx.Write(x, $"{sel.Count} conversations", "", body.ToString().Trim(), "Designed by A.HAMROUNI");
+                Shell.Open(x);
+            }
+            catch (Exception e) { meta.Text = "⚠ " + e.Message; }
+        });
+        B("🗑 Delete", () =>
+        {
+            if (MessageBox.Show(this, $"Delete {sel.Count} conversations?", "Nova Enhance", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+            foreach (var it in sel) try { File.Delete(it.Path); var h = System.IO.Path.ChangeExtension(it.Path, ".html"); if (File.Exists(h)) File.Delete(h); } catch { }
+            picked.Clear(); current = null; Reload();
+        });
+        B("✗", () => { picked.Clear(); Fill(); });
     }
 
     static string Group(DateTime d)

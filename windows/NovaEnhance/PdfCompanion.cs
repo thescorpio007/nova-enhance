@@ -209,9 +209,9 @@ class PdfPanel : NovaForm
         status = s.Add(Th.Wrap("", 9, Th.AccentText));
 
         s.Add(Th.Section("Ask about this PDF"));
-        ask = s.Add(Th.Prose(Th.Box(false)), true);
+        ask = s.Add(Th.Prose(Th.Box(true, 3)), true);   // three lines · Enter = ask · Shift+Enter = new line
         ask.PlaceholderText = "e.g. What is the fixing detail of the glass balustrade?";
-        ask.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; Ask(ask.Text, false); } };
+        ask.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter && !e.Shift) { e.SuppressKeyPress = true; Ask(ask.Text, false); } };
         pInstr = s.Add(Th.Prose(Th.Box(true, 3)), true);
         pInstr.PlaceholderText = "✎ More instructions (optional) — e.g. answer as a table: item · value · page · only the IFC notes · in Arabic";
         pInstr.Visible = false;

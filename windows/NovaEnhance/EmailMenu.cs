@@ -24,7 +24,7 @@ static class EmailMenu
         Add("✦ Summary", () => { if (summary != null) summary(h); else MailWindow.Open(h, "summary"); });
         Add(h.Sent ? "✦ Draft follow-up" : "✦ Draft reply", () => { if (draft != null) draft(h); else DraftTo(h, false, form); });
         if (!h.Sent) Add("✦ Draft reply all", () => DraftTo(h, true, form));
-        Add("✦ Ask about this email", () => Screens.MailAsk(h));
+        Add("💬 Talk about this email", () => Screens.MailAsk(h));
         Sep();
         if (!h.Sent)
         {
@@ -73,6 +73,21 @@ static class EmailMenu
             a.DropDownItems.Add("💾 Save…", null, (_, _) => MailPreview.SaveAttachmentAs(h, nn, form));
             m.Items.Add(a);
         }
+        foreach (ToolStripItem i in m.Items) Dark(i);
+        m.Show(screen);
+    }
+
+    /// <summary>Right-click on several picked emails: every action applies to all of them.</summary>
+    public static void ShowMany(List<MailHit> hs, Control owner, Point screen, Action<List<MailHit>> handledMany = null, Action<List<MailHit>> askMany = null)
+    {
+        if (hs == null || hs.Count == 0) return;
+        var form = owner.FindForm();
+        var m = new ContextMenuStrip { Font = Th.F(10), ShowImageMargin = false, BackColor = Color.FromArgb(0x1D, 0x21, 0x30), ForeColor = Th.Text, Renderer = new ToolStripProfessionalRenderer(new DarkColors()) };
+        var head = new ToolStripLabel($"{hs.Count} emails selected") { Font = Th.F(10, true), ForeColor = Th.AccentText };
+        m.Items.Add(head);
+        m.Items.Add(new ToolStripSeparator());
+        void Add(string text, Action a) => m.Items.Add(text, null, (_, _) => { try { a(); } catch (Exception e) { MessageBox.Show(e.Message, "Nova Enhance"); } });
+        foreach (var (text, act) in Bulk.Actions(hs, form, handledMany, askMany)) if (text == "-") m.Items.Add(new ToolStripSeparator()); else Add(text, act);
         foreach (ToolStripItem i in m.Items) Dark(i);
         m.Show(screen);
     }
@@ -148,5 +163,162 @@ class MailWindow : NovaForm
         var w = new MailWindow(h);
         w.Show();
         if (then == "summary") w.Shown += (_, _) => w.pane.OnSummary?.Invoke(h);
+    }
+}
+
+/// <summary>Actions on several emails at once (picked with Ctrl+click · Shift+click · Ctrl+A). More than 5 asks first.</summary>
+static class Bulk
+{
+    static bool Sure(Form owner, string what, int n) =>
+        n <= 5 || MessageBox.Show(owner, $"{what} {n} emails?", "Nova Enhance", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
+
+    public static List<(string Text, Action Act)> Actions(List<MailHit> hs, Form owner, Action<List<MailHit>> handledMany, Action<List<MailHit>> askMany)
+    {
+        var l = new List<(string, Action)>();
+        var mine = hs.Where(h => !h.Sent).ToList();
+        if (mine.Count > 0)
+        {
+            l.Add(($"✓ Mark as handled ({mine.Count})", () =>
+            {
+                if (!Sure(owner, "Mark as handled", mine.Count)) return;
+                foreach (var h in mine) { Outstanding.MarkHandled(h, true); Work.LogMail(h, "✓ Handled"); }
+                handledMany?.Invoke(mine);
+                Program.Balloon("Nova Enhance", $"✓ {mine.Count} emails marked as handled");
+            }));
+            l.Add(("↩ Undo handled", () => { foreach (var h in mine) Outstanding.MarkHandled(h, false); Program.Balloon("Nova Enhance", "↩ They show as waiting again (after the next refresh)."); }));
+        }
+        l.Add(("💬 Ask Nova about these", () => { if (askMany != null) askMany(hs); else Screens.MailAsk(hs[0]); }));
+        l.Add(($"✦ Draft a reply to each ({hs.Count})", () => DraftEach(hs, owner)));
+        l.Add(("-", null));
+        l.Add(($"📌 Save as one task ({hs.Count} emails)", () => Screens.Saved(Work.FromMail($"{hs.Count} emails — {Outstanding.NormSubject(hs[0].Subject ?? "")}…", null, "mail", hs, "menu"))));
+        l.Add(("➕ Add to a task…", () =>
+        {
+            var open = Work.All().Where(t => t.Status != "done").OrderByDescending(t => t.Created).Take(25).ToList();
+            if (open.Count == 0) { MessageBox.Show(owner, "No open tasks yet.", "Nova Enhance"); return; }
+            var menu = new ContextMenuStrip { Font = Th.F(10), ShowImageMargin = false };
+            foreach (var t in open)
+            {
+                var tt = t;
+                menu.Items.Add(tt.Title, null, (_, _) => { foreach (var h in hs) tt.Items.Add(Work.FromHit(h)); tt.Add($"{hs.Count} emails added"); Work.Save(tt); Program.Balloon("📌 My Work", $"{hs.Count} emails added to “{tt.Title}”"); });
+            }
+            menu.Show(Cursor.Position);
+        }));
+        l.Add(("📊 Export the list (Excel)", () => Export(hs)));
+        l.Add(("-", null));
+        l.Add(($"💾 Save all as .msg into a folder…", () => SaveAll(hs, owner)));
+        l.Add(("⧉ Copy all as files (paste into a folder or an email)", () => { var p = ToFiles(hs); if (p.Count > 0) { var c = new System.Collections.Specialized.StringCollection(); c.AddRange(p.ToArray()); Clipboard.SetFileDropList(c); Program.Balloon("Nova Enhance", $"✓ {p.Count} emails copied — Ctrl+V in a folder or an email"); } }));
+        l.Add(("📎 Attach all to a new email", () => { var p = ToFiles(hs); if (p.Count > 0) Outlook.NewWithAttachments(p); }));
+        l.Add(($"Open all in Outlook ({hs.Count})", () => { if (!Sure(owner, "Open", hs.Count)) return; foreach (var h in hs) try { Outlook.Open(h.Entry, h.StoreId); } catch { } }));
+        return l;
+    }
+
+    static List<string> ToFiles(List<MailHit> hs)
+    {
+        var dir = Path.Combine(Paths.Cache, "copied emails", DateTime.Now.ToString("yyyyMMdd-HHmmss"));
+        Directory.CreateDirectory(dir);
+        var res = new List<string>();
+        foreach (var h in hs)
+            try
+            {
+                var f = Path.Combine(dir, MailFile.Name(h) + ".msg");
+                for (int i = 2; File.Exists(f); i++) f = Path.Combine(dir, MailFile.Name(h) + $" ({i}).msg");
+                Outlook.SaveMsg(h.Entry, h.StoreId, f);
+                res.Add(f);
+            }
+            catch (Exception e) { Log.Warn("bulk", "save " + h.Subject + ": " + e.Message); }
+        return res;
+    }
+
+    static void SaveAll(List<MailHit> hs, Form owner)
+    {
+        using var d = new FolderBrowserDialog { Description = $"Save {hs.Count} emails (.msg with attachments) into…" };
+        var last = Store.Str("win_msg_dir");
+        if (last.Length > 0 && Directory.Exists(last)) d.SelectedPath = last;
+        if (d.ShowDialog(owner) != DialogResult.OK) return;
+        int ok = 0;
+        foreach (var h in hs)
+            try
+            {
+                var f = Path.Combine(d.SelectedPath, MailFile.Name(h) + ".msg");
+                for (int i = 2; File.Exists(f); i++) f = Path.Combine(d.SelectedPath, MailFile.Name(h) + $" ({i}).msg");
+                Outlook.SaveMsg(h.Entry, h.StoreId, f);
+                Work.LogMail(h, "💾 Saved as " + Path.GetFileName(f));
+                ok++;
+            }
+            catch (Exception e) { Log.Warn("bulk", "save " + h.Subject + ": " + e.Message); }
+        Store.Set("win_msg_dir", d.SelectedPath);
+        Program.Balloon("Nova Enhance", $"💾 {ok} of {hs.Count} emails saved in {Path.GetFileName(d.SelectedPath)}");
+    }
+
+    public static void Export(List<MailHit> hs)
+    {
+        var head = new[] { "No.", "Date", "From", "To", "Cc", "Subject", "Status", "Waiting (days)", "Attachments", "Folder" };
+        var data = hs.Select((h, i) => new[]
+        {
+            (i + 1).ToString(), h.Date.ToString("dd MMM yyyy HH:mm"), h.Sent ? "Me" : h.FromName, h.To, h.Cc, h.Subject,
+            h.Status switch { "needs" or "week" => "waiting for my reply", "follow" => "no answer yet", "fyi" => "FYI", _ => "" }, h.DaysWaiting > 0 ? h.DaysWaiting.ToString() : "", h.AttNames, h.Folder
+        }).ToList();
+        var path = Path.Combine(Prompts.Folder, $"{hs.Count} emails {DateTime.Now:dd MMM yyyy HHmm}.xlsx");
+        Prompts.Xlsx(path, $"{hs.Count} emails", head, data);
+        Shell.Open(path);
+    }
+
+    static async void DraftEach(List<MailHit> hs, Form owner)
+    {
+        if (!Store.AiSeesFull && !ConfirmSend.LocalHandlesPrivate) { MessageBox.Show(owner, "✦ Draft reply needs Settings → Email & AI → AI sees C or D (or the local AI).", "Nova Enhance"); return; }
+        if (MessageBox.Show(owner, $"Nova will write a draft reply to each of the {hs.Count} emails and open them in Outlook (nothing is sent).", "Nova Enhance", MessageBoxButtons.OKCancel) != DialogResult.OK) return;
+        var instr = Prompt.AskLong(owner, $"✦ Draft {hs.Count} replies", "✎ Instructions for all the replies (optional) — what to say, tone, length, language…");
+        if (instr == null) return;
+        int ok = 0;
+        foreach (var h in hs)
+            try
+            {
+                var d = await Assistant.Draft(h, (h.Sent ? "This is a polite follow-up to my own email that got no answer. " : "") + instr, CancellationToken.None);
+                Outlook.Reply(h.Entry, h.StoreId, d, false);
+                ok++;
+            }
+            catch (Exception e) { Log.Warn("bulk", "draft " + h.Subject + ": " + e.Message); }
+        Program.Balloon("Nova Enhance", $"✦ {ok} draft replies opened in Outlook — check them and send.");
+    }
+}
+
+/// <summary>The bar shown when several emails are picked: “5 selected” and the actions for all of them.</summary>
+class PickBar : FlowLayoutPanel
+{
+    readonly Label count;
+    readonly Func<List<MailHit>> get;
+    readonly Action clear;
+    public Action<List<MailHit>> HandledMany, AskMany;
+
+    public PickBar(Func<List<MailHit>> get, Action clear)
+    {
+        this.get = get; this.clear = clear;
+        AutoSize = true; AutoSizeMode = AutoSizeMode.GrowAndShrink; WrapContents = true; Visible = false;
+        BackColor = Color.FromArgb(0x2A, 0x25, 0x52); Padding = new Padding(8, 3, 8, 3); Margin = new Padding(0, 2, 0, 6);
+        count = Th.L("", 10, Color.White, true); count.Margin = new Padding(0, 7, 10, 0);
+    }
+
+    public void Refresh2()
+    {
+        var hs = get();
+        SuspendLayout();
+        foreach (Control c in Controls) if (c != count) c.Dispose();
+        Controls.Clear();
+        Visible = hs.Count > 1;
+        if (Visible)
+        {
+            count.Text = $"☑ {hs.Count} selected";
+            Controls.Add(count);
+            foreach (var (text, act) in Bulk.Actions(hs, FindForm(), HandledMany, AskMany).Where(x => x.Text != "-").Take(6))
+            {
+                var b = Th.B(text, act); b.Font = Th.F(9); Controls.Add(b);
+            }
+            var more = Th.B("More ▾", null); more.Font = Th.F(9);
+            more.Click += (_, _) => EmailMenu.ShowMany(get(), more, more.PointToScreen(new Point(0, more.Height)), HandledMany, AskMany);
+            Controls.Add(more);
+            var x = Th.B("✗ Clear (Esc)", clear); x.Font = Th.F(9); Controls.Add(x);
+        }
+        ResumeLayout();
+        (Parent as Stack)?.FitAll();
     }
 }

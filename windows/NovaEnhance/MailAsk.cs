@@ -63,7 +63,7 @@ class MailAskForm : NovaForm
 
     public MailAskForm()
     {
-        Text = "Nova Enhance · ✦ Ask Nova about this email";
+        Text = "Nova Enhance · 💬 Talk about this email";
         Width = Math.Max(900, Store.Int("win_mailask_w", 1150)); Height = Math.Max(640, Store.Int("win_mailask_h", 880));
         MinimumSize = new Size(760, 560);
         top = new Stack { Dock = DockStyle.Top, AutoScroll = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(16, 10, 16, 6) };
@@ -72,7 +72,7 @@ class MailAskForm : NovaForm
         Controls.Add(webHost); Controls.Add(bottom); Controls.Add(top);
 
         var hr = top.Add(Th.Row());
-        hr.Controls.Add(Th.L("✦ Ask Nova about this email", 13, Th.Text, true));
+        hr.Controls.Add(Th.L("💬 Talk about this email", 13, Th.Text, true));
         hr.Controls.Add(Th.B("🕘 Chat history", Screens.ChatHistory));
         hr.Controls.Add(Th.B("＋ New chat", NewChat));
         hr.Controls.Add(Th.B("⇩ Word", SaveWord));
@@ -130,7 +130,7 @@ class MailAskForm : NovaForm
         conv = resume;
         status.Text = "";
         prompt.Text = "";
-        if (h == null) { head.Text = "No email selected — select an email in Outlook, then press ✦ Ask Nova about this email again."; meta.Text = ""; atts.Controls.Clear(); Draw(); return; }
+        if (h == null) { head.Text = "No email selected — select an email in Outlook, then press 💬 Talk about this email (Ctrl+Alt+Q) again."; meta.Text = ""; atts.Controls.Clear(); Draw(); return; }
         head.Text = "✉ " + h.Subject;
         meta.Text = $"{(h.Sent ? "You" : h.FromName)} → {h.To}" + (h.Cc.Length > 0 ? $" · Cc: {h.Cc}" : "") + $" · {h.Date:ddd dd MMM yyyy HH:mm}";
         atts.Controls.Clear();

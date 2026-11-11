@@ -737,7 +737,7 @@ class SettingsForm : NovaForm
         page.Add(Th.Section("How Nova knows your files"));
         page.Add(Th.Check("Keep the list of file names up to date (new, renamed and deleted files within seconds; a full check every day)", Projects.Indexer.On, v => Projects.Indexer.On = v));
         Note("1 · Names only: Nova lists every file name, folder, date and revision of your projects — a few minutes, then instant.\n2 · Inside only when needed: when you ask something, Nova picks the likely files by their names and opens just those (OCR included for scanned drawings).\n3 · Remembered for ALL of Nova: a file read once (by Ask about this email, Ask AI, Search inside a folder, Nova Chat…) is known by every feature; if the file changes, it is read again when needed.\n4 · One Nova search: every question also looks at your emails, 🧠 Nova Memory and past answers in 🕘 Chat history, and your projects are the one project list everywhere (Ask Nova groups, Brief, prompts).\n📂 Find a project file (tray menu, or here): type a drawing number or a few words — results as you type, latest revision first, Enter opens, right-click to attach it to an email.");
-        Note("📐 Drawing numbers: when an email (or the text you highlight in Outlook) mentions a drawing or document number, ✦ Ask about this email finds the file by its name in the project — the latest PDF first, then Word / Excel, CAD last (never used for the answer) — and marks older revisions as superseded.");
+        Note("📐 Drawing numbers: when an email (or the text you highlight in Outlook) mentions a drawing or document number, 💬 Talk about this email finds the file by its name in the project — the latest PDF first, then Word / Excel, CAD last (never used for the answer) — and marks older revisions as superseded.");
     }
 
     // ------------------------------------------------------------------ Folder search
@@ -863,7 +863,7 @@ class SettingsForm : NovaForm
         hr.Controls.Add(Th.L("— ✦ Ask Nova about the email open or selected in Outlook (any Outlook window; no ribbon needed). Not Ctrl+Shift+Q: that is Outlook's New meeting.", 10, Th.Text));
         Note("In the browser (with the Nova add-on): Alt + G fix grammar · Alt + T translate · right-click selected text → ✦ Nova Enhance.", Th.Text);
         Note("Right-click a folder → Search inside with Nova — find codes, references and sentences inside its files.", Th.Text);
-        Note("Left-click the ✦ icon near the clock = Ask Nova · right-click = menu.", Th.Text);
+        Note("Left-click the ✦ icon near the clock = 🔍 Search for email · right-click = menu.", Th.Text);
         page.Add(Th.Section("Start"));
         page.Add(Th.Check("Start Nova Enhance with Windows", Store.Autostart, v => { Store.Autostart = v; Startup.Apply(); }));
     }
@@ -1324,7 +1324,7 @@ class SettingsForm : NovaForm
     {
         page.Add(Th.L("✦ Nova Enhance for Windows", 13, Th.Text, true));
         Note($"Version 1.0 · build {Program.Build}", Th.Text);
-        Note("Enhance text anywhere (Ctrl+Shift+E), Ask Nova about your email (Ctrl+Shift+F), morning brief and follow-ups. Works with the Nova Enhance phone app.");
+        Note("Enhance text anywhere (Ctrl+Shift+E), 🔍 Search for email (Ctrl+Shift+F), 💬 Talk about this email (Ctrl+Alt+Q), morning brief and follow-ups. Works with the Nova Enhance phone app.");
         Note("All your files: " + Paths.Root, Th.Text);
         page.Add(Th.L(Program.Sign, 11, Th.AccentText, true));
     }

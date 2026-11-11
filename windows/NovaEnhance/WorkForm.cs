@@ -9,6 +9,11 @@ class WorkForm : NovaForm
     readonly Stack detail;
     string currentId, project;
     List<WorkTask> tasks = new();
+    // ☑ Several tasks picked (Ctrl+click · Shift+click · Ctrl+A): the bar's actions apply to all.
+    readonly List<string> picked = new();
+    readonly List<string> shownOrder = new();
+    string pickAnchor;
+    FlowLayoutPanel pickBar;
 
     public WorkForm()
     {
@@ -25,8 +30,16 @@ class WorkForm : NovaForm
         counts = Th.L("", 9, Th.AccentText, true); counts.MaximumSize = new Size(290, 0);
         top.Controls.Add(counts);
         list = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, BackColor = left.BackColor };
+        pickBar = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, BackColor = Color.FromArgb(0x2A, 0x25, 0x52), Padding = new Padding(4), Visible = false };
         left.Controls.Add(list);
+        left.Controls.Add(pickBar);
         left.Controls.Add(top);
+        KeyPreview = true;
+        KeyDown += (_, e) =>
+        {
+            if (e.Control && e.KeyCode == Keys.A && !(ActiveControl is TextBoxBase)) { picked.Clear(); picked.AddRange(shownOrder); DrawList(); e.Handled = true; e.SuppressKeyPress = true; }
+            else if (e.KeyCode == Keys.Escape && picked.Count > 0) { picked.Clear(); DrawList(); e.Handled = true; }
+        };
         detail = new Stack();
         // Wide window: the task on the left, its emails previewed on the right (◀ ▶ through them).
         split = new SplitContainer { Dock = DockStyle.Fill, BackColor = Th.Bg, Panel2Collapsed = true, SplitterWidth = 6, FixedPanel = FixedPanel.Panel2 };
@@ -44,6 +57,57 @@ class WorkForm : NovaForm
         split.SplitterMoved += (_, _) => { if (wide) Store.SetInt("win_work_pane", split.Panel2.Width); };
         Shown += (_, _) => { Relayout(); Reload(currentId); };
         Activated += (_, _) => { if (Visible) DrawList(); };
+    }
+
+    void Clicked(string id)
+    {
+        var mk = Control.ModifierKeys;
+        if ((mk & Keys.Control) != 0)
+        {
+            if (picked.Count == 0 && currentId != null && currentId != id) picked.Add(currentId);
+            if (!picked.Remove(id)) picked.Add(id);
+            pickAnchor = id;
+        }
+        else if ((mk & Keys.Shift) != 0)
+        {
+            var a = pickAnchor ?? currentId ?? id;
+            int i = shownOrder.IndexOf(a), j = shownOrder.IndexOf(id);
+            if (i < 0) i = j;
+            picked.Clear();
+            for (int k = Math.Min(i, j); k <= Math.Max(i, j); k++) picked.Add(shownOrder[k]);
+        }
+        else { picked.Clear(); pickAnchor = id; currentId = id; DrawList(); DrawDetail(); return; }
+        DrawList();
+    }
+
+    void DrawPickBar()
+    {
+        foreach (Control c in pickBar.Controls) c.Dispose();
+        pickBar.Controls.Clear();
+        var sel = tasks.Where(t => picked.Contains(t.Id)).ToList();
+        pickBar.Visible = sel.Count > 1;
+        if (!pickBar.Visible) return;
+        var l = Th.L($"☑ {sel.Count} selected", 9.5f, Color.White, true); l.Margin = new Padding(2, 6, 6, 0);
+        pickBar.Controls.Add(l);
+        bool Sure(string what) => sel.Count <= 5 || MessageBox.Show(this, $"{what} {sel.Count} tasks?", "Nova Enhance", MessageBoxButtons.YesNo) == DialogResult.Yes;
+        void B(string text, Action a) { var b = Th.B(text, a); b.Font = Th.F(9); pickBar.Controls.Add(b); }
+        B("✓ Done", () => { if (!Sure("Mark as done")) return; foreach (var t in sel) { t.Status = "done"; t.Done = DateTime.Now; t.Add("✓ Done"); Work.Save(t); } picked.Clear(); Reload(currentId); });
+        B("⏸ Waiting", () => { foreach (var t in sel) { t.Status = "waiting"; t.Add("⏸ Waiting for others"); Work.Save(t); } picked.Clear(); Reload(currentId); });
+        B("↩ To do", () => { foreach (var t in sel) { t.Status = "todo"; t.Add("↩ To do"); Work.Save(t); } picked.Clear(); Reload(currentId); });
+        B("📊 Export", () =>
+        {
+            var head = new[] { "No.", "Task", "Status", "Due", "Created", "Emails / files", "Project" };
+            var data = sel.Select((t, i) => new[] { (i + 1).ToString(), t.Title, t.Status, t.Due?.ToString("dd MMM yyyy") ?? "", t.Created.ToString("dd MMM yyyy"), t.Items.Count.ToString(), string.Join(", ", t.Tags) }).ToList();
+            var x = System.IO.Path.Combine(Prompts.Folder, $"{sel.Count} tasks {DateTime.Now:dd MMM yyyy HHmm}.xlsx");
+            Prompts.Xlsx(x, $"{sel.Count} tasks", head, data); Shell.Open(x);
+        });
+        B("🗑 Delete", () =>
+        {
+            if (MessageBox.Show(this, $"Delete {sel.Count} tasks? (The emails themselves are not touched.)", "Nova Enhance", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+            foreach (var t in sel) Work.Delete(t);
+            picked.Clear(); Reload(null);
+        });
+        B("✗", () => { picked.Clear(); DrawList(); });
     }
 
     public void Reload(string id = null)
@@ -67,6 +131,7 @@ class WorkForm : NovaForm
         list.SuspendLayout();
         foreach (Control c in list.Controls) c.Dispose();
         list.Controls.Clear();
+        shownOrder.Clear();
         var monday = DateTime.Today.AddDays(-(((int)DateTime.Today.DayOfWeek + 6) % 7));
         void Group(string title, IEnumerable<WorkTask> items)
         {
@@ -77,9 +142,10 @@ class WorkForm : NovaForm
             foreach (var t in l)
             {
                 var tag = t.Status == "done" ? $"✓ {t.Done:ddd}" : t.Overdue ? "overdue" : t.DueToday ? "today" : t.Due != null ? t.Due.Value.ToString("ddd dd") : t.Status == "waiting" ? $"{(DateTime.Now - t.Created).Days} d" : $"{t.OpenCount}";
-                var b = Th.B($"{t.Title}", () => { currentId = t.Id; DrawList(); DrawDetail(); });
+                shownOrder.Add(t.Id);
+                var b = Th.B($"{t.Title}", () => Clicked(t.Id));
                 b.AutoSize = false; b.Width = 286; b.Height = 32; b.TextAlign = ContentAlignment.MiddleLeft; b.AutoEllipsis = true; b.Font = Th.F(9.5f);
-                b.BackColor = t.Id == currentId ? Th.Card2 : list.BackColor;
+                b.BackColor = picked.Contains(t.Id) ? Color.FromArgb(0x33, 0x2C, 0x66) : t.Id == currentId ? Th.Card2 : list.BackColor;
                 b.ForeColor = t.Status == "done" ? Th.Muted : Th.Text;
                 var tip = new ToolTip(); tip.SetToolTip(b, tag);
                 b.Text = $"{t.Title}   ·  {tag}";
@@ -107,6 +173,7 @@ class WorkForm : NovaForm
         }
         if (tasks.Count == 0) list.Controls.Add(Th.Wrap("No tasks yet. In Ask Nova, the brief, folder search, Nova Chat or the PDF panel press 📌 Save as task — or ＋ New task.", 9.5f, Th.Muted));
         list.ResumeLayout();
+        DrawPickBar();
     }
 
     void DrawDetail()

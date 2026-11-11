@@ -18,6 +18,14 @@ class MailList : FlowLayoutPanel
     public List<(string Why, MailHit Hit)> HiddenShown;
     readonly Dictionary<MailHit, Control> cards = new();
     public MailHit Selected { get; private set; }
+    /// <summary>💬 Nova's filter from the conversation: which emails, in which order, with a reason each.</summary>
+    public NovaListFilter Nova;
+    /// <summary>Several emails picked (Ctrl+click · Shift+click · Ctrl+A): every action applies to all of them.</summary>
+    public readonly List<MailHit> Picked = new();
+    public Action OnPick;
+    public Action<List<MailHit>> OnHandledMany, OnAskMany;
+    MailHit pickAnchor;
+    static readonly Color PickColor = Color.FromArgb(0x33, 0x2C, 0x66);
     public List<MailHit> Order { get; } = new();
     static readonly Color SelColor = Color.FromArgb(0x26, 0x2A, 0x40), GreyCard = Color.FromArgb(0x15, 0x18, 0x1F);
 
@@ -35,9 +43,10 @@ class MailList : FlowLayoutPanel
         cards.Clear();
         Order.Clear();
         var all = hits.ToList();
-        var main = all.Where(h => h.MaybeAnswered.Length == 0).ToList();
-        var maybe = all.Where(h => h.MaybeAnswered.Length > 0).ToList();
-        if (GroupKey == null) foreach (var h in main) Add(h, width, false);
+        if (Nova?.Order != null) { var set = all.ToHashSet(); all = Nova.Order.Where(set.Contains).ToList(); }
+        var main = Nova?.Order != null ? all : all.Where(h => h.MaybeAnswered.Length == 0).ToList();
+        var maybe = Nova?.Order != null ? new List<MailHit>() : all.Where(h => h.MaybeAnswered.Length > 0).ToList();
+        if (GroupKey == null || Nova?.Order != null) foreach (var h in main) Add(h, width, false);
         else
             foreach (var g in main.GroupBy(GroupKey).OrderBy(g => g.Key == "Other" ? 1 : 0).ThenBy(g => g.Key))
             {
@@ -63,6 +72,52 @@ class MailList : FlowLayoutPanel
         ResumeLayout();
         if (Selected != null && !cards.ContainsKey(Selected)) Selected = null;
         if (Selected != null) PaintCard(Selected);
+        if (Picked.RemoveAll(h => !cards.ContainsKey(h)) > 0) OnPick?.Invoke();
+        foreach (var h in Picked) PaintCard(h);
+    }
+
+    // ------------------------------------------------------------------ picking several emails
+
+    void Clicked(MailHit h)
+    {
+        var mk = Control.ModifierKeys;
+        if ((mk & Keys.Control) != 0)
+        {
+            if (Picked.Count == 0 && Selected != null && Selected != h) Picked.Add(Selected);
+            if (!Picked.Remove(h)) Picked.Add(h);
+            pickAnchor = h;
+        }
+        else if ((mk & Keys.Shift) != 0)
+        {
+            var a = pickAnchor ?? Selected ?? h;
+            int i = Order.IndexOf(a), j = Order.IndexOf(h);
+            if (i < 0) i = j;
+            Picked.Clear();
+            for (int k = Math.Min(i, j); k <= Math.Max(i, j); k++) Picked.Add(Order[k]);
+        }
+        else
+        {
+            var had = Picked.Count > 0;
+            Picked.Clear();
+            pickAnchor = h;
+            if (Compact) Select(h);
+            if (had) { foreach (var c in cards.Keys) PaintCard(c); OnPick?.Invoke(); }
+            return;
+        }
+        foreach (var c in cards.Keys) PaintCard(c);
+        if (Compact && (mk & Keys.Shift) == 0 && Picked.Contains(h)) { var old = Selected; Selected = h; if (old != null) PaintCard(old); OnSelect?.Invoke(h); PaintCard(h); }
+        OnPick?.Invoke();
+    }
+
+    public void PickAll() { Picked.Clear(); Picked.AddRange(Order); foreach (var c in cards.Keys) PaintCard(c); OnPick?.Invoke(); }
+
+    public bool ClearPicks()
+    {
+        if (Picked.Count == 0) return false;
+        Picked.Clear();
+        foreach (var c in cards.Keys) PaintCard(c);
+        OnPick?.Invoke();
+        return true;
     }
 
     void Add(MailHit h, int width, bool grey)
@@ -84,11 +139,16 @@ class MailList : FlowLayoutPanel
         if (Parent is ScrollableControl sc) try { sc.ScrollControlIntoView(cards[h]); } catch { }
     }
 
-    void OpenMenu(MailHit h, Point pt) => EmailMenu.Show(h, this, pt, OnSummary, OnDraft, OnHandled, Compact ? m => Select(m) : null);
+    void OpenMenu(MailHit h, Point pt)
+    {
+        if (Picked.Count > 1 && Picked.Contains(h)) { EmailMenu.ShowMany(Picked.ToList(), this, pt, OnHandledMany, OnAskMany); return; }
+        EmailMenu.Show(h, this, pt, OnSummary, OnDraft, OnHandled, Compact ? m => Select(m) : null);
+    }
 
     /// <summary>Menu key / Shift+F10: the menu of the selected email.</summary>
     public bool ShowMenu()
     {
+        if (Picked.Count > 1 && cards.TryGetValue(Picked[^1], out var pc)) { EmailMenu.ShowMany(Picked.ToList(), this, pc.PointToScreen(new Point(60, 34)), OnHandledMany, OnAskMany); return true; }
         var h = Selected ?? Order.FirstOrDefault();
         if (h == null || !cards.TryGetValue(h, out var c)) return false;
         OpenMenu(h, c.PointToScreen(new Point(60, 34)));
@@ -112,7 +172,7 @@ class MailList : FlowLayoutPanel
     void PaintCard(MailHit h)
     {
         if (!cards.TryGetValue(h, out var c)) return;
-        var back = h == Selected && Compact ? SelColor : h.MaybeAnswered.Length > 0 || (HiddenShown?.Any(x => x.Hit == h) ?? false) ? GreyCard : Th.Card;
+        var back = Picked.Contains(h) ? PickColor : h == Selected && Compact ? SelColor : h.MaybeAnswered.Length > 0 || (HiddenShown?.Any(x => x.Hit == h) ?? false) ? GreyCard : Th.Card;
         c.BackColor = back;
     }
 
@@ -129,6 +189,12 @@ class MailList : FlowLayoutPanel
         var textColor = grey ? Th.Muted : Th.Text;
         var top = Th.Row(false);
         top.Controls.Add(new Dot(grey ? Color.FromArgb(0x6B, 0x73, 0x85) : DotColor(h.Status)));
+        if (Nova?.Order != null && Nova.Tags.TryGetValue(h, out var ntag) && ntag.Length > 0)
+        {
+            var nl = Th.L($"✦ {Nova.Order.IndexOf(h) + 1} · {ntag}", 9, Color.FromArgb(0xB9, 0xB0, 0xFF), true);
+            nl.Margin = new Padding(0, 0, 0, 2);
+            card.Controls.Add(nl);
+        }
         var subjText = string.IsNullOrWhiteSpace(h.Subject) ? "(no subject)" : h.Subject;
         var subj = Th.L(subjText, Compact ? 10 : 10.5f, textColor, true);
         if (Compact) { subj.AutoSize = false; subj.AutoEllipsis = true; subj.Width = width - 60; subj.Height = 22; }
@@ -190,17 +256,15 @@ class MailList : FlowLayoutPanel
             }));
             btns.Controls.Add(Th.B("Summary", () => OnSummary?.Invoke(h)));
             btns.Controls.Add(Th.B(h.Sent ? "✦ Draft follow-up" : "✦ Draft reply", () => OnDraft?.Invoke(h), true));
-        btns.Controls.Add(Th.B("✦ Ask about this email", () => Screens.MailAsk(h)));
+        btns.Controls.Add(Th.B("💬 Talk about this email", () => Screens.MailAsk(h)));
             if (!h.Sent && OnHandled != null) btns.Controls.Add(Th.B("✓ Handled", () => OnHandled(h)));
             btns.Controls.Add(Th.B("💾 Save as…", () => MailFile.SaveAs(h, FindForm())));
             btns.Controls.Add(Th.B("⧉ Copy as file", () => MailFile.Copy(h, FindForm())));
             card.Controls.Add(btns);
         }
-        else
-        {
-            void Hook(Control c) { c.Cursor = Cursors.Hand; c.Click += (_, _) => Select(h); foreach (Control k in c.Controls) Hook(k); }
-            Hook(card);
-        }
+        // Click a card to read it · Ctrl+click / Shift+click to pick several (every action then applies to all of them).
+        void Hook(Control c) { if (c is Button) return; if (Compact) c.Cursor = Cursors.Hand; c.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) Clicked(h); }; foreach (Control k in c.Controls) Hook(k); }
+        Hook(card);
         // Right-click: the usual options for this email.
         EmailMenu.Hook(card, h, pt => { if (Compact) Select(h); OpenMenu(h, pt); return true; });
         return card;
@@ -343,7 +407,7 @@ class ReadPane : Panel
         btns.Controls.Add(Th.B("Open in Outlook", () => { try { Outlook.Open(h.Entry, h.StoreId); } catch (Exception e) { MessageBox.Show("Could not open it in Outlook: " + e.Message, "Nova Enhance"); } }));
         btns.Controls.Add(Th.B("Summary", () => OnSummary?.Invoke(h)));
         btns.Controls.Add(Th.B(h.Sent ? "✦ Draft follow-up" : "✦ Draft reply", () => OnDraft?.Invoke(h), true));
-        btns.Controls.Add(Th.B("✦ Ask about this email", () => Screens.MailAsk(h)));
+        btns.Controls.Add(Th.B("💬 Talk about this email", () => Screens.MailAsk(h)));
         if (!h.Sent) btns.Controls.Add(Th.B("✓ Mark as handled", () => OnHandled?.Invoke(h)));
         btns.Controls.Add(Th.B("💾 Save as…", () => MailFile.SaveAs(h, FindForm())));
         btns.Controls.Add(Th.B("⧉ Copy as file", () => MailFile.Copy(h, FindForm())));
@@ -510,10 +574,13 @@ class AskForm : NovaForm
     DateTime lastCheck = DateTime.Now;
     readonly System.Windows.Forms.Timer liveTimer;
     bool rechecking;
+    // 💬 Nova conversation at the bottom · ☑ several emails picked
+    readonly TalkPanel talk;
+    readonly PickBar pickBar;
 
     public AskForm()
     {
-        Text = "Ask Nova · your email";
+        Text = "Nova Enhance · 🔍 Search for email";
         Width = Math.Max(820, Store.Int("win_ask_w", 820)); Height = Math.Max(600, Store.Int("win_ask_h", 760));
         MinimumSize = new Size(620, 500);
         KeyPreview = true;
@@ -526,13 +593,21 @@ class AskForm : NovaForm
         pane = new ReadPane { Dock = DockStyle.Fill, Margin = new Padding(0) };
         split.Panel2.Padding = new Padding(0, 4, 12, 12);
         split.Panel2.Controls.Add(pane);
+        // 💬 Talk with Nova about the results — below the list, drag the divider to resize.
+        talk = new TalkPanel("ask", () => new TalkContext { All = hits.ToList(), Focus = list.Picked.Count > 0 ? list.Picked.ToList() : list.Selected != null ? new List<MailHit> { list.Selected } : new(), Where = "search results: " + lastQuestion },
+            f => { list.Nova = f; ShowList(); })
+        { Dock = DockStyle.Bottom, Height = Math.Clamp(Store.Int("win_ask_talk", 300), 160, 900) };
+        var talkSplit = new Splitter { Dock = DockStyle.Bottom, Height = 6, BackColor = Color.FromArgb(0x23, 0x28, 0x38), MinExtra = 160, MinSize = 140 };
+        talkSplit.SplitterMoved += (_, _) => Store.SetInt("win_ask_talk", talk.Height);
         Controls.Add(split);
+        Controls.Add(talkSplit);
+        Controls.Add(talk);
         Controls.Add(stack);
         Controls.Add(new IndexLine { Dock = DockStyle.Bottom });
 
         var head = stack.Add(Th.Row(false));
-        head.Controls.Add(Th.L("🔍 Ask Nova", 14, Th.Text, true));
-        head.Controls.Add(Th.L("about your email", 10, Th.Muted));
+        head.Controls.Add(Th.L("🔍 Search for email", 14, Th.Text, true));
+        head.Controls.Add(Th.L("ask in your own words · 💬 talk with Nova below", 10, Th.Muted));
         var fbtn = Th.B("📁 Search inside a folder instead", () => Screens.FolderSearch(null));
         fbtn.Margin = new Padding(16, 2, 0, 0);
         head.Controls.Add(fbtn);
@@ -612,6 +687,8 @@ class AskForm : NovaForm
         // ⏳ The remaining number: fixed at the top, updated on every change.
         countBar = stack.Add(Th.Wrap("", 10.5f, Th.Text), true);
         countBar.BackColor = Color.FromArgb(0x1A, 0x1F, 0x2C); countBar.Padding = new Padding(10, 6, 10, 6); countBar.Font = Th.F(10.5f, true); countBar.Visible = false;
+        stack.Add(talk.ChipBar);
+        pickBar = stack.Add(new PickBar(() => list.Picked.ToList(), () => list.ClearPicks()));
         message = stack.Add(Th.Wrap("", 10, Th.Text));
         message.BackColor = Th.Card;
         message.Padding = new Padding(8);
@@ -621,6 +698,10 @@ class AskForm : NovaForm
         list.OnDraft = Draft;
         list.OnHandled = MarkHandled;
         list.OnSelect = h => pane.Show(h);
+        list.OnPick = () => pickBar.Refresh2();
+        list.OnHandledMany = hs => { foreach (var h in hs) { hits.Remove(h); rawHits.Remove(h); } list.ClearPicks(); ShowList(); };
+        list.OnAskMany = hs => { talk.AskAbout(hs); };
+        pickBar.HandledMany = list.OnHandledMany; pickBar.AskMany = list.OnAskMany;
         pane.OnSummary = Summary;
         pane.OnDraft = Draft;
         pane.OnHandled = MarkHandled;
@@ -657,7 +738,9 @@ class AskForm : NovaForm
         follow.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; Run(follow.Text, true); } };
         KeyDown += (_, e) =>
         {
-            if (e.KeyCode == Keys.Escape) Hide();
+            var typing = question.Focused || follow.Focused || instr.Focused || talk.ContainsFocus;
+            if (e.KeyCode == Keys.Escape) { if (!list.ClearPicks()) Hide(); }
+            else if (e.Control && e.KeyCode == Keys.A && !typing) { list.PickAll(); e.Handled = true; e.SuppressKeyPress = true; }
             else if ((e.KeyCode == Keys.Apps || (e.Shift && e.KeyCode == Keys.F10)) && !question.Focused && !follow.Focused && !instr.Focused) { list.ShowMenu(); e.Handled = true; }
             else if (wide && (e.KeyCode == Keys.Down || e.KeyCode == Keys.Up) && !question.Focused && !follow.Focused)
             { list.MoveBy(e.KeyCode == Keys.Down ? 1 : -1); e.Handled = true; }
@@ -818,7 +901,9 @@ class AskForm : NovaForm
                 info.Text += Outstanding.LiveChecked
                     ? " · Index still building — your replies were checked live in Outlook"
                     : " · ⚠ Index still building and Outlook is closed — some of these may already be answered";
+            list.Nova = null;
             ShowList();
+            talk.ListLoaded();
             bottom.Visible = true;
             follow.Text = "";
             History.Add("ask", Ai.Active()?.Id ?? "", "", "ask-mail", q, $"{hits.Count} results · {ans.Explain}");
@@ -1120,6 +1205,12 @@ class BriefForm : NovaForm
     bool busy;
     int mode = -1;   // 0 = one column · 1 = list + reading pane (1300 px +) · 2 = columns + reading pane (1800 px +)
     int lastW;
+    // 💬 Nova tab in the right pane · ☑ several emails picked
+    readonly TalkPanel talk;
+    readonly PickBar pickBar;
+    readonly Button tabEmail, tabNova;
+    bool talkOpen;
+    List<MailHit> Picks() => new[] { needs, fyi, follow }.SelectMany(l => l.Picked).Distinct().ToList();
 
     public BriefForm()
     {
@@ -1144,7 +1235,18 @@ class BriefForm : NovaForm
         split.Panel1.Controls.Add(cols);
         pane = new ReadPane { Dock = DockStyle.Fill };
         split.Panel2.Padding = new Padding(0, 4, 12, 12);
+        // Right pane: 👁 Email (the preview) · 💬 Nova (talk about your brief — the list follows the conversation).
+        talk = new TalkPanel("brief",
+            () => new TalkContext { All = lastNeeds.Concat(lastFollow).ToList(), Focus = Picks() is { Count: > 0 } p ? p : new[] { needs, fyi, follow }.Select(l => l.Selected).Where(x => x != null).Take(1).ToList(), Where = "morning brief: emails waiting for my reply, FYI, and my emails with no answer" },
+            f => { needs.Nova = fyi.Nova = follow.Nova = f; Draw(); })
+        { Dock = DockStyle.Fill, Visible = false };
+        var tabs = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 38, BackColor = Th.Bg, Padding = new Padding(0, 2, 0, 2) };
+        tabEmail = Th.Chip("👁 Email", true, () => ShowTab(false));
+        tabNova = Th.Chip("💬 Nova", false, () => ShowTab(true));
+        tabs.Controls.Add(tabEmail); tabs.Controls.Add(tabNova);
         split.Panel2.Controls.Add(pane);
+        split.Panel2.Controls.Add(talk);
+        split.Panel2.Controls.Add(tabs);
         Controls.Add(split);
         Controls.Add(top);
 
@@ -1156,10 +1258,13 @@ class BriefForm : NovaForm
         row.Controls.Add(Th.B("📌 My Work", () => Screens.Work(null)));
         row.Controls.Add(Th.B("⇩ Export", Export));
         row.Controls.Add(Th.B("📁 Briefs folder", () => Shell.Open(Paths.Briefs)));
-        row.Controls.Add(Th.B("🔍 Ask Nova", Screens.Ask));
+        row.Controls.Add(Th.B("🔍 Search for email", Screens.Ask));
+        row.Controls.Add(Th.B("💬 Talk with Nova", () => { talkOpen = true; Relayout(true); ShowTab(true); }, true));
         row.Controls.Add(Th.B("⚙ Rules", () => Screens.Settings("Email & AI")));
         message = top.Add(Th.Wrap("", 10, Th.Text), true);
         message.BackColor = Th.Card; message.Padding = new Padding(8); message.Visible = false;
+        top.Add(talk.ChipBar);
+        pickBar = top.Add(new PickBar(Picks, () => { foreach (var l in new[] { needs, fyi, follow }) l.ClearPicks(); }));
 
         calTitle = Th.Section("📅 Today and tomorrow");
         calBox = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = Color.Transparent, Margin = new Padding(0) };
@@ -1182,10 +1287,20 @@ class BriefForm : NovaForm
                 foreach (var o in new[] { needs, follow, fyi }) if (o != me) o.Unselect();
                 pane.Show(h);
             };
+            l.OnPick = () => pickBar.Refresh2();
+            l.OnHandledMany = hs =>
+            {
+                foreach (var h in hs) { lastNeeds.Remove(h); lastFollow.Remove(h); }
+                foreach (var o in new[] { needs, fyi, follow }) o.Picked.Clear();
+                Draw(); pickBar.Refresh2();
+                message.Visible = true; message.Text = $"✓ {hs.Count} emails marked as handled — they won't show as waiting again."; top.FitAll();
+            };
+            l.OnAskMany = hs => { talkOpen = true; Relayout(true); ShowTab(true); talk.AskAbout(hs); };
         }
         pane.OnSummary = Summary;
         pane.OnDraft = Draft;
         pane.OnHandled = Handled;
+        pickBar.HandledMany = needs.OnHandledMany; pickBar.AskMany = needs.OnAskMany;
 
         layoutTimer = new System.Windows.Forms.Timer { Interval = 180 };
         layoutTimer.Tick += (_, _) => { layoutTimer.Stop(); Relayout(false); };
@@ -1194,7 +1309,12 @@ class BriefForm : NovaForm
         split.SplitterMoved += (_, _) => { if (mode > 0) { Store.SetInt("win_brief_pane", split.Panel2.Width); Relayout(true); } };
         KeyDown += (_, e) =>
         {
-            if (e.KeyCode == Keys.Escape) Hide();
+            if (e.KeyCode == Keys.Escape) { if (!new[] { needs, fyi, follow }.Select(l => l.ClearPicks()).ToList().Any(x => x)) Hide(); }
+            else if (e.Control && e.KeyCode == Keys.A && !talk.ContainsFocus)
+            {
+                var l = new[] { needs, fyi, follow }.FirstOrDefault(x => x.Selected != null || x.Picked.Count > 0) ?? needs;
+                l.PickAll(); e.Handled = true; e.SuppressKeyPress = true;
+            }
             else if (e.KeyCode == Keys.Apps || (e.Shift && e.KeyCode == Keys.F10)) { (new[] { needs, fyi, follow }.FirstOrDefault(x => x.Selected != null) ?? needs).ShowMenu(); e.Handled = true; }
             else if (mode > 0 && (e.KeyCode == Keys.Down || e.KeyCode == Keys.Up))
             {
@@ -1211,11 +1331,19 @@ class BriefForm : NovaForm
         Relayout(true);
     }
 
+    /// <summary>The right pane: 👁 Email or 💬 Nova.</summary>
+    void ShowTab(bool nova)
+    {
+        talk.Visible = nova; pane.Visible = !nova;
+        Th.SetChip(tabEmail, !nova); Th.SetChip(tabNova, nova);
+        if (nova) talk.FocusInput();
+    }
+
     /// <summary>Wider window = more detail: reading pane from 1300 px, columns from 1800 px.</summary>
     void Relayout(bool force)
     {
         var w = ClientSize.Width;
-        int m = w >= 1800 ? 2 : w >= 1300 ? 1 : 0;
+        int m = w >= 1800 ? 2 : w >= 1300 || talkOpen ? 1 : 0;
         if (m != mode)
         {
             mode = m;
@@ -1373,9 +1501,11 @@ class BriefForm : NovaForm
         {
             var (n, f) = await BriefLogic.Build(CancellationToken.None);
             lastNeeds = n; lastFollow = f;
+            needs.Nova = fyi.Nova = follow.Nova = null;
             await DrawCalendar(n, true);
             lastCheck = DateTime.Now;
             Draw();
+            talk.ListLoaded();
             Counts();
             if (n.Count == 0 && f.Count == 0)
             {

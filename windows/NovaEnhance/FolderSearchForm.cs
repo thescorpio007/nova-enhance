@@ -41,6 +41,7 @@ class FolderSearchForm : NovaForm
     // ---------------------------------------------------------------- state
     readonly ConcurrentQueue<(FileHit Hit, string Removed)> inbox = new();
     string namesOnlyFor;
+    TableLayoutPanel qrow;
     AttachBar attach;   // a drawing number found by name: the next press also searches inside the files
     readonly List<FileHit> all = new();
     readonly Dictionary<string, FileHit> byPath = new(StringComparer.OrdinalIgnoreCase);
@@ -89,7 +90,7 @@ class FolderSearchForm : NovaForm
         frow.Controls.Add(recent, 2, 0);
         var gd = Th.B("☁ Google Drive…", PickDrive); gd.Margin = new Padding(8, 0, 0, 0); frow.Controls.Add(gd, 3, 0);
 
-        var qrow = top.Add(new TableLayoutPanel { ColumnCount = 5, RowCount = 1, AutoSize = false, Height = 42, BackColor = Color.Transparent, Margin = new Padding(0, 4, 0, 2) }, true);
+        qrow = top.Add(new TableLayoutPanel { ColumnCount = 5, RowCount = 1, AutoSize = false, Height = 42, BackColor = Color.Transparent, Margin = new Padding(0, 4, 0, 2) }, true);
         qrow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         for (int i = 0; i < 4; i++) qrow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         query = Th.Prose(Th.Box(false)); query.Font = Th.F(12.5f); query.Dock = DockStyle.Fill;
@@ -247,10 +248,47 @@ class FolderSearchForm : NovaForm
         filesList.ColumnClick += (_, e) => { sortDesc = sortCol == e.Column ? !sortDesc : e.Column is 2 or 4 or 5; sortCol = e.Column; dirty = true; RefreshList(); };
         filesList.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter && Selected() is { } h) Opener.Open(h, h.Pieces.FirstOrDefault(), matcher?.Query); };
         var menu = new ContextMenuStrip { Font = Th.F(10) };
-        menu.Items.Add("Open", null, (_, _) => { if (Selected() is { } h) Opener.Open(h, h.Pieces.FirstOrDefault(), matcher?.Query); });
+        menu.Items.Add("Open", null, (_, _) =>
+        {
+            var sel = SelectedAll();
+            if (sel.Count > 5 && MessageBox.Show(this, $"Open {sel.Count} files?", "Nova Enhance", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
+            foreach (var h in sel.Take(30)) Opener.Open(h, h.Pieces.FirstOrDefault(), matcher?.Query);
+        });
         menu.Items.Add("📁 Show in folder", null, (_, _) => { if (Selected() is { } h && string.IsNullOrEmpty(h.Remote)) Shell.Select(h.Path); });
-        menu.Items.Add("⧉ Copy path", null, (_, _) => { if (Selected() is { } h) Clipboard.SetText(string.IsNullOrEmpty(h.Remote) ? h.Path : DriveLink(h)); });
+        menu.Items.Add("⧉ Copy path", null, (_, _) => { var sel = SelectedAll(); if (sel.Count > 0) Clipboard.SetText(string.Join(Environment.NewLine, sel.Select(h => string.IsNullOrEmpty(h.Remote) ? h.Path : DriveLink(h)))); });
         menu.Items.Add("⧉ Pop out the preview", null, (_, _) => { if (Selected() is { } h) new PreviewWindow(h, matcher, 0, false).Show(); });
+        // ☑ Several files (Ctrl+click · Shift+click · Ctrl+A): the actions below apply to all of them.
+        filesList.MultiSelect = true;
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("⧉ Copy the selected files (paste into an email or a folder)", null, (_, _) =>
+        {
+            var c = new System.Collections.Specialized.StringCollection();
+            c.AddRange(SelectedAll().Where(h => string.IsNullOrEmpty(h.Remote)).Select(h => FileCheck.Resolve(h.Path)).ToArray());
+            if (c.Count > 0) Clipboard.SetFileDropList(c);
+        });
+        menu.Items.Add("📎 Attach the selected files to a new email", null, (_, _) =>
+        {
+            try { Outlook.NewWithAttachments(SelectedAll().Where(h => string.IsNullOrEmpty(h.Remote)).Select(h => FileCheck.Resolve(h.Path)).ToList()); }
+            catch (Exception e) { MessageBox.Show(this, "⚠ " + e.Message, "Nova Enhance"); }
+        });
+        menu.Items.Add("💬 Ask Nova about the selected files", null, (_, _) =>
+        {
+            var fs = SelectedAll().Where(h => string.IsNullOrEmpty(h.Remote) && !FileType.IsModel(h.Path)).Take(FileTalk.Max).ToList();
+            if (askMode) { attach.Add(fs.Select(h => FileCheck.Resolve(h.Path))); query.Focus(); }
+            else foreach (var h in fs) Screens.HubAttach(FileCheck.Resolve(h.Path));
+        });
+        menu.Items.Add("📊 Export the selected files (Excel)", null, (_, _) =>
+        {
+            var sel = SelectedAll();
+            var head = new[] { "No.", "File", "Type", "Hits", "Folder", "Modified", "Size", "Path" };
+            var data = sel.Select((h, i) => new[] { (i + 1).ToString(), Path.GetFileName(h.Path), FileType.Of(h.Path), h.Hits.ToString(), Path.GetDirectoryName(h.Path) ?? "",
+                h.Mtime > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(h.Mtime).LocalDateTime.ToString("dd MMM yyyy") : "", Projects.Size(h.Size), h.Path }).ToList();
+            var x = Path.Combine(Prompts.Folder, $"{sel.Count} files {DateTime.Now:dd MMM yyyy HHmm}.xlsx");
+            Prompts.Xlsx(x, $"{sel.Count} files", head, data);
+            Shell.Open(x);
+        });
+        menu.Opening += (_, _) => { var n = filesList.SelectedItems.Count; menu.Items[0].Text = n > 1 ? $"Open ({n})" : "Open"; };
+        filesList.KeyDown += (_, e) => { if (e.Control && e.KeyCode == Keys.A) { foreach (ListViewItem i in filesList.Items) i.Selected = true; e.Handled = true; } };
         filesList.ContextMenuStrip = menu;
         problemsList = NewList(("File", 300), ("Problem", 330), ("What you can do", 240));
         problemsList.Visible = false;
@@ -288,7 +326,7 @@ class FolderSearchForm : NovaForm
         Controls.Add(bottom);
         Controls.Add(top);
 
-        query.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; Start(); } };
+        query.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter && !e.Shift) { e.SuppressKeyPress = true; Start(); } };
         KeyDown += (_, e) => { if (e.KeyCode == Keys.Escape) { if (worker != null || asking) Stop(); else Hide(); } };
         FormClosing += (_, e) => { if (e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Stop(); Hide(); } };
         Shown += (_, _) =>
@@ -365,6 +403,7 @@ class FolderSearchForm : NovaForm
     }
 
     FileHit Selected() => filesList.SelectedItems.Count > 0 ? filesList.SelectedItems[0].Tag as FileHit : null;
+    List<FileHit> SelectedAll() => filesList.SelectedItems.Cast<ListViewItem>().Select(i => i.Tag as FileHit).Where(h => h != null).ToList();
 
     static string DriveLink(FileHit h) { var p = h.Remote.Split('|'); return GDrive.WebLink(p[0], p.Length > 1 ? p[1] : ""); }
 
@@ -585,6 +624,8 @@ class FolderSearchForm : NovaForm
         micBtn.Visible = ask;
         answerPanel.Visible = ask && answerBox.Text.Length > 0;
         searchBtn.Text = ask ? "✦ Ask" : "🔍 Search";
+        // Ask AI: three lines to type the question (Enter = ask · Shift+Enter = new line).
+        query.Multiline = ask; query.ScrollBars = ask ? ScrollBars.Vertical : ScrollBars.None; qrow.Height = ask ? 82 : 42;
         query.PlaceholderText = ask ? "e.g. What is the fire rating required for the curtain wall?" : "e.g. A-201 Rev C · RFI-044 · fire rating of the curtain wall";
         intro.Text = ask
             ? "Ask in your own words: the AI answers from the files of this folder, with the file and page of every point. You are asked before any extract is sent."
