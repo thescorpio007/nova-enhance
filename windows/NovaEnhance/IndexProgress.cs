@@ -241,3 +241,59 @@ class IndexLine : Panel
         text.Invalidate();
     }
 }
+
+/// <summary>One clear progress row: title · ● ● ● while working · big % · full-width bar · details. Refreshes itself.</summary>
+class ProgressRow : Panel
+{
+    readonly Label title, pct, detail;
+    readonly WorkDots dots;
+    readonly Panel back, fill;
+    readonly Func<(string Title, int Percent, string Detail, bool Working)> read;
+    readonly System.Windows.Forms.Timer t;
+
+    public ProgressRow(Func<(string Title, int Percent, string Detail, bool Working)> read, int everyMs = 3000)
+    {
+        this.read = read;
+        Height = 62; BackColor = Color.FromArgb(0x18, 0x1C, 0x24); Margin = new Padding(0, 3, 0, 3);
+        title = new Label { AutoSize = true, Font = Th.F(10.5f, true), ForeColor = Th.Text, Location = new Point(12, 7), UseMnemonic = false };
+        dots = new WorkDots();
+        pct = new Label { AutoSize = true, Font = Th.F(12, true), ForeColor = Th.Text, UseMnemonic = false };
+        back = new Panel { Height = 8, BackColor = Color.FromArgb(0x2A, 0x30, 0x40), Location = new Point(12, 32) };
+        fill = new Panel { Height = 8, Width = 0, BackColor = Th.Accent, Dock = DockStyle.Left };
+        back.Controls.Add(fill);
+        detail = new Label { AutoSize = true, Font = Th.F(9), ForeColor = Th.Muted, Location = new Point(12, 43), UseMnemonic = false };
+        Controls.AddRange(new Control[] { title, dots, pct, back, detail });
+        t = new System.Windows.Forms.Timer { Interval = everyMs };
+        t.Tick += (_, _) => Update2();
+        t.Start();
+        Disposed += (_, _) => t.Dispose();
+        Resize += (_, _) => Lay();
+        Update2();
+    }
+
+    void Lay()
+    {
+        dots.Location = new Point(title.Right + 6, title.Top + 4);
+        pct.Location = new Point(Math.Max(dots.Right + 8, Width - pct.Width - 14), 4);
+        back.Width = Math.Max(100, Width - 24);
+    }
+
+    void Update2()
+    {
+        if (IsDisposed) return;
+        try
+        {
+            var (ti, p, de, w) = read();
+            p = Math.Clamp(p, 0, 100);
+            title.Text = ti;
+            pct.Text = p >= 100 ? "✓ 100 %" : p + " %";
+            pct.ForeColor = p >= 100 ? Th.Good : Th.Text;
+            fill.BackColor = p >= 100 ? Th.Good : Th.Accent;
+            detail.Text = de;
+            dots.On = w && p < 100;
+            Lay();
+            fill.Width = (int)(back.Width * p / 100.0);
+        }
+        catch { }
+    }
+}

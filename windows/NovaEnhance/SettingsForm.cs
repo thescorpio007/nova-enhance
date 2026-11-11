@@ -465,11 +465,18 @@ class SettingsForm : NovaForm
         if (folders.Count == 0) Note("The list fills in while Nova reads Outlook — open this page again in a few minutes.", Th.Muted);
         // How far back each mailbox / archive is searchable.
         var stats = MailIndex.StoreStats();
-        foreach (var sst in stats)
+        var statsAt = DateTime.Now;
+        foreach (var sst0 in stats)
         {
-            var spct = sst.Total > 0 ? Math.Min(100, 100L * sst.Indexed / sst.Total) : 100;
-            Note($"{(spct >= 100 ? "✓" : "⏳")} {sst.Store} · {sst.Indexed:N0} of {sst.Total:N0} emails · {(sst.Oldest is { } sOld ? sOld.ToString("dd MMM yyyy") : "—")} → {(sst.Newest is { } sNew ? sNew.ToString("dd MMM yyyy") : "—")} · {(spct >= 100 ? "complete" : spct + " %")}",
-                spct >= 100 ? Th.Good : Th.Muted);
+            var stName = sst0.Store;
+            page.Add(new ProgressRow(() =>
+            {
+                if (DateTime.Now - statsAt > TimeSpan.FromSeconds(5)) { stats = MailIndex.StoreStats(); statsAt = DateTime.Now; }
+                var stX = stats.FirstOrDefault(y => y.Store == stName);
+                var stPc = stX.Total > 0 ? (int)Math.Min(100, 100L * stX.Indexed / stX.Total) : 100;
+                var stSpan = (stX.Oldest is { } o1 ? o1.ToString("dd MMM yyyy") : "—") + " → " + (stX.Newest is { } n1 ? n1.ToString("dd MMM yyyy") : "—");
+                return ("✉ " + stName, stPc, $"{stX.Indexed:N0} of {stX.Total:N0} emails · {stSpan}", !IndexProgress.Now.Complete);
+            }), true);
         }
         // 📂 Archive files not open in Outlook (option B: opened for indexing, closed again after).
         page.Add(Th.Section("📂 Archive files (.pst) not open in Outlook"));
@@ -627,6 +634,23 @@ class SettingsForm : NovaForm
             rbFill.Width = (int)(w * (Projects.ReadAll.On && rt > 0 ? (double)rd / rt : o.Names > 0 ? (double)o.Read / o.Names : 0));
         }
         Overall();
+        // ● ● ● and a clear % for the two jobs on your folders.
+        page.Add(new ProgressRow(() =>
+        {
+            var o2 = Projects.Overall();
+            var m = System.Text.RegularExpressions.Regex.Match(o2.ListingText ?? "", @"(\d+)\s*%");
+            var p2 = o2.Listing ? (m.Success ? int.Parse(m.Groups[1].Value) : 50) : 100;
+            return ("📛 File names of your projects", p2, o2.Listing ? o2.ListingText : $"{o2.Names:N0} files listed · kept up to date", o2.Listing);
+        }), true);
+        page.Add(new ProgressRow(() =>
+        {
+            var o3 = Projects.Overall();
+            var ra3 = Projects.ReadAll.Counts; var t3 = ra3.Sum(x => x.Total); var d3 = ra3.Sum(x => x.Done);
+            var on3 = Projects.ReadAll.On && t3 > 0;
+            var p3 = on3 ? (int)(100L * d3 / t3) : o3.Names > 0 ? (int)(100L * o3.Read / o3.Names) : 0;
+            var working = on3 && d3 < t3 && !Projects.ReadAll.Paused && !Projects.ReadAll.Phase.StartsWith("⏸") && !Projects.ReadAll.Phase.StartsWith("✓");
+            return ("📖 Read inside the files", p3, on3 ? $"{d3:N0} of {t3:N0} readable files · {Projects.ReadAll.Phase}" : $"{o3.Read:N0} files read · grows as you ask (or switch on 📖 Read everything below)", working);
+        }), true);
 
         if (lastScan != null)
         {
@@ -824,9 +848,16 @@ class SettingsForm : NovaForm
     {
         page.Add(Th.Section("✉ Emails per project"));
         Note("Nova sorts every email of the index into one of your projects, on this PC. The 📁 project button in 🔍 Search for email (and the conversations) uses it. Your corrections always win.");
+        page.Add(new ProgressRow(() =>
+        {
+            int tt = MailProjects.Total, dd = MailProjects.Done;
+            var pp = tt > 0 ? (int)(100L * dd / tt) : 0;
+            return ("📁 Sorting emails into projects", pp, tt == 0 ? "waiting for the email index…" : $"{dd:N0} of {tt:N0} emails checked · {MailProjects.Sorted:N0} in a project · {MailProjects.Phase}", dd < tt || MailProjects.Phase.StartsWith("✦"));
+        }), true);
         var prog = page.Add(Th.L("", 10.5f, Th.Text, true));
         var (pb, pf) = Bar(Th.Accent);
         page.Add(pb);
+        prog.Visible = pb.Visible = false;
         var counts = Note("", Th.Muted);
         var phase = Note("", Th.Muted);
         void Live()
