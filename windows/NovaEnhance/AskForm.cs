@@ -204,7 +204,7 @@ class MailList : FlowLayoutPanel
         card.Controls.Add(top);
 
         var who = h.Sent ? "You → " + Short(h.To, 4) : Compact ? h.FromName : $"{h.FromName} → {Short(h.To, width > 900 ? 4 : 2)}";
-        var meta = who + (!Compact && h.Cc.Length > 0 ? " · Cc: " + Short(h.Cc, width > 900 ? 4 : 2) : "") + $" · {h.Date:ddd dd MMM HH:mm}";
+        var meta = who + (!Compact && h.Cc.Length > 0 ? " · Cc: " + Short(h.Cc, width > 900 ? 4 : 2) : "") + $" · {h.Date:ddd dd MMM yyyy} · {h.Date:HH:mm}";
         if (h.AttNames.Length > 0) meta += " · 📎 " + h.AttNames.Split(';').Length;
         if (!grey && h.Status is "needs" or "week") meta += $" · waiting {h.DaysWaiting} day{(h.DaysWaiting == 1 ? "" : "s")}";
         if (h.Status == "follow") meta += $" · no answer for {h.DaysWaiting} days";
@@ -586,6 +586,95 @@ class AskForm : NovaForm
     readonly TextBox instr;
     readonly FlowLayoutPanel planBox, resultRow;
     readonly Label resultLbl, countBar;
+    readonly FlowLayoutPanel sortBar, filterBar;
+    string sortBy = Store.Str("win_ask_sort", "best"), filterVal = "";
+    bool sortAsc = Store.Bool("win_ask_sort_asc", false);
+    Func<MailHit, string> planGroup;
+
+    static readonly (string Key, string Label)[] Sorts =
+    {
+        ("best", "✦ Best match"), ("date", "📅 Date"), ("disc", "🔧 Discipline"), ("type", "📄 Type"), ("proj", "📁 Project"), ("from", "👤 From"), ("no", "🔢 Doc. number")
+    };
+
+    /// <summary>The value of an email for a sort / group / filter dimension.</summary>
+    static string KeyOf(MailHit h, string dim) => dim switch
+    {
+        "disc" => DocCodes.DiscLabel(DocCodes.Of(h).Disc),
+        "type" => DocCodes.TypeLabel(DocCodes.Of(h).Type),
+        "proj" => MailProjects.Of(h.Id) is { Length: > 0 } p ? p : "Unsorted",
+        "from" => h.Sent ? "Me (sent)" : (h.FromName ?? "").Trim().Length > 0 ? h.FromName.Trim() : "Other",
+        _ => ""
+    };
+
+    /// <summary>The list as shown: filtered by the chip you picked, then sorted (and grouped for discipline / type / project / sender).</summary>
+    List<MailHit> View()
+    {
+        var dim = FilterDim();
+        var v = hits.ToList();
+        if (filterVal.Length > 0)
+        {
+            var f = v.Where(h => KeyOf(h, dim) == filterVal).ToList();
+            if (f.Count > 0) v = f; else filterVal = "";
+        }
+        IEnumerable<MailHit> o = sortBy switch
+        {
+            "date" => sortAsc ? v.OrderBy(h => h.Date) : v.OrderByDescending(h => h.Date),
+            "disc" or "type" or "proj" or "from" => sortAsc ? v.OrderBy(h => h.Date) : v.OrderByDescending(h => h.Date),
+            "no" => (sortAsc ? v.OrderByDescending(h => DocCodes.SortNo(DocCodes.Of(h).No)) : v.OrderBy(h => DocCodes.Of(h).No.Length == 0 ? 1 : 0).ThenBy(h => DocCodes.SortNo(DocCodes.Of(h).No))).ThenBy(h => h.Date),
+            _ => v
+        };
+        return o.ToList();
+    }
+
+    string FilterDim() => sortBy is "type" or "proj" or "from" ? sortBy : "disc";
+
+    void RenderSortBars()
+    {
+        bool show = hits.Count > 1;
+        sortBar.Visible = filterBar.Visible = show;
+        if (!show) return;
+        sortBar.SuspendLayout(); filterBar.SuspendLayout();
+        foreach (Control c in sortBar.Controls.Cast<Control>().ToList()) c.Dispose();
+        foreach (Control c in filterBar.Controls.Cast<Control>().ToList()) c.Dispose();
+        var lab = Th.L("Sort by", 9.5f, Th.Muted); lab.Margin = new Padding(2, 7, 6, 0); sortBar.Controls.Add(lab);
+        foreach (var (k, l) in Sorts)
+        {
+            var key = k;
+            var on = sortBy == key;
+            var text = l + (on && key is "date" or "no" ? (key == "date" ? (sortAsc ? " ↑ oldest" : " ↓ newest") : (sortAsc ? " ↓" : " ↑")) : "");
+            var b = Th.Chip(text, on, () =>
+            {
+                if (sortBy == key && key is "date" or "no") sortAsc = !sortAsc;
+                else { sortBy = key; if (key == "date") sortAsc = false; }
+                if (FilterDim() != (filterVal.Length > 0 ? lastFilterDim : FilterDim())) filterVal = "";
+                Store.Set("win_ask_sort", sortBy); Store.SetBool("win_ask_sort_asc", sortAsc);
+                ShowList();
+            });
+            b.Font = Th.F(9);
+            sortBar.Controls.Add(b);
+        }
+        // Quick filters with counts (the dimension you sort by; discipline otherwise).
+        var dim = FilterDim();
+        lastFilterDim = dim;
+        var groups = hits.GroupBy(h => KeyOf(h, dim)).OrderByDescending(g => g.Count()).ThenBy(g => g.Key).ToList();
+        if (groups.Count >= 2)
+        {
+            var fl = Th.L(dim switch { "type" => "Type", "proj" => "Project", "from" => "From", _ => "Discipline" }, 9.5f, Th.Muted); fl.Margin = new Padding(2, 7, 6, 0); filterBar.Controls.Add(fl);
+            var all = Th.Chip($"All {hits.Count}", filterVal.Length == 0, () => { filterVal = ""; ShowList(); }); all.Font = Th.F(9); filterBar.Controls.Add(all);
+            foreach (var g in groups.Take(14))
+            {
+                var val = g.Key;
+                var shortName = dim is "disc" or "type" ? val.Split(" · ")[0] : val.Length > 22 ? val[..22] + "…" : val;
+                var c = Th.Chip($"{shortName} {g.Count()}", filterVal == val, () => { filterVal = filterVal == val ? "" : val; ShowList(); });
+                c.Font = Th.F(9);
+                new ToolTip().SetToolTip(c, val);
+                filterBar.Controls.Add(c);
+            }
+        }
+        else filterBar.Visible = false;
+        sortBar.ResumeLayout(); filterBar.ResumeLayout();
+    }
+    string lastFilterDim = "disc";
     readonly LinkLabel hiddenLink, moreLink;
     readonly Button levelA, levelB, myPrompts;
     string level = Prompts.Level;
@@ -760,6 +849,9 @@ class AskForm : NovaForm
         // ⏳ The remaining number: fixed at the top, updated on every change.
         countBar = stack.Add(Th.Wrap("", 10.5f, Th.Text), true);
         countBar.BackColor = Color.FromArgb(0x1A, 0x1F, 0x2C); countBar.Padding = new Padding(10, 6, 10, 6); countBar.Font = Th.F(10.5f, true); countBar.Visible = false;
+        // ↕ Sort by … and quick filters (discipline / type / project / sender), from the document numbers.
+        sortBar = stack.Add(new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, BackColor = Color.Transparent, Margin = new Padding(0, 2, 0, 0), Visible = false, Tag = "w" });
+        filterBar = stack.Add(new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, BackColor = Color.Transparent, Margin = new Padding(0, 0, 0, 2), Visible = false, Tag = "w" });
         stack.Add(talk.ChipBar);
         pickBar = stack.Add(new PickBar(() => list.Picked.ToList(), () => list.ClearPicks()));
         message = stack.Add(Th.Wrap("", 10, Th.Text));
@@ -1052,7 +1144,7 @@ class AskForm : NovaForm
             }
             plan = null;
             planBox.Visible = resultRow.Visible = false;
-            list.GroupKey = null; list.HiddenShown = null;
+            planGroup = null; filterVal = ""; list.HiddenShown = null;
             var mainCount = hits.Count(h => h.MaybeAnswered.Length == 0);
             var maybeCount = hits.Count - mainCount;
             var count = hits.Count == 0 ? "No emails found" : $"{mainCount} email{(mainCount == 1 ? "" : "s")} found" + (maybeCount > 0 ? $" · {maybeCount} probably answered (grey, at the bottom)" : "");
@@ -1233,7 +1325,7 @@ class AskForm : NovaForm
         }
         hidden = hid;
         hits = kept.Concat(Prompts.Apply(maybe, plan).Kept).ToList();
-        list.GroupKey = plan.Group.Length > 0 ? (Func<MailHit, string>)(h => Prompts.GroupKey(h, plan)) : null;
+        planGroup = plan.Group.Length > 0 ? (Func<MailHit, string>)(h => Prompts.GroupKey(h, plan)) : null;
         ShowList();
         var label = Ai.LabelOf(Ai.Current()) ?? "AI";
         resultLbl.Text = $"✓ {kept.Count} email{(kept.Count == 1 ? "" : "s")} · {main.Count} found → {afterRules} after your rules" +
@@ -1379,12 +1471,15 @@ class AskForm : NovaForm
         lastWidth = ListWidth();
         var sel = list.Selected;
         list.HiddenShown = showHidden && hidden.Count > 0 ? hidden : null;
-        list.Show(hits, lastWidth);
+        var view = View();
+        list.GroupKey = sortBy is "disc" or "type" or "proj" or "from" ? (Func<MailHit, string>)(h => KeyOf(h, sortBy)) : planGroup;
+        list.Show(view, lastWidth);
+        RenderSortBars();
         listHost.FitAll();
         UpdateCounts();
         if (wide)
         {
-            if (sel != null && hits.Contains(sel)) list.Select(sel);
+            if (sel != null && view.Contains(sel)) list.Select(sel);
             else if (list.Order.Count > 0) list.Select(list.Order[0]);
             else pane.Show(null);
         }
