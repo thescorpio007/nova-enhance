@@ -1599,6 +1599,19 @@ class SettingsForm : NovaForm
             }, dd == 7));
         }
         er.Controls.Add(Th.B("📁 Activity folder", () => Shell.Open(Activity.Dir)));
+        Note("Your exports are kept: Nova-Activity-User-…zip in Documents\\Nova Enhance\\Activity.", Th.Muted);
+
+        page.Add(Th.Section("💾 Automatic save"));
+        Note("Nova saves the same ZIP by itself (last " + Activity.KeepDays + " days, names hidden) as Nova-Activity-Auto.zip — each automatic save replaces the previous one. Your own exports (User) are never replaced.");
+        var ar = page.Add(Th.Row(false));
+        ar.Controls.Add(Th.L("Save", 10, Th.Text));
+        var autoStatus = Note("", Th.Muted);
+        void AutoLine() => autoStatus.Text = Activity.AutoEvery == 0 ? "Off" :
+            (Activity.LastAuto == DateTime.MinValue ? "No automatic save yet — the first one comes within a few minutes." : $"Last automatic save: {Activity.LastAuto:dd MMM HH:mm} · next about {Activity.LastAuto.AddHours(Activity.AutoEvery):dd MMM HH:mm}") +
+            (File.Exists(Activity.AutoFile) ? "  ·  " + Activity.AutoFile : "");
+        foreach (var (h0, l0) in new[] { (0, "Off"), (1, "every 1 h"), (6, "every 6 h"), (24, "every 1 day") })
+        { var hh = h0; ar.Controls.Add(Th.Radio(l0, Activity.AutoEvery == hh, () => { Activity.AutoEvery = hh; AutoLine(); })); }
+        AutoLine();
         Note("The ZIP holds work text (first lines of emails sent to the AI) — share it only with Claude.", Th.Warn);
     }
 

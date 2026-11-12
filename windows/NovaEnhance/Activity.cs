@@ -207,13 +207,56 @@ static class Activity
         };
     }
 
-    public static string Export(int days, Action<string> status = null)
+    // ------------------------------------------------------------------ 💾 Automatic save (every 1 h / 6 h / 1 day)
+
+    /// <summary>0 = off, otherwise hours between automatic saves (1, 6 or 24).</summary>
+    public static int AutoEvery { get => Store.Int("win_act_auto", 0); set { Store.SetInt("win_act_auto", value); } }
+    public static DateTime LastAuto
+    {
+        get => DateTime.TryParse(Store.Str("win_act_auto_last", ""), System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var d) ? d : DateTime.MinValue;
+        set => Store.Set("win_act_auto_last", value.ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture));
+    }
+    public static string AutoFile => Path.Combine(Dir, "Nova-Activity-Auto.zip");
+    static Thread autoThread;
+
+    /// <summary>Background job: when the time comes (or was missed while Nova was closed) the Auto file is written again.</summary>
+    public static void StartAuto()
+    {
+        if (autoThread != null) return;
+        autoThread = new Thread(() => Guard.Run("activity auto-save", () =>
+        {
+            Thread.Sleep(TimeSpan.FromMinutes(2));          // let Nova finish starting first
+            while (true)
+            {
+                var h = AutoEvery;
+                if (h > 0 && DateTime.Now - LastAuto >= TimeSpan.FromHours(h)) SaveAuto();
+                Thread.Sleep(TimeSpan.FromMinutes(1));
+            }
+        })) { IsBackground = true, Name = "Nova activity auto-save", Priority = ThreadPriority.BelowNormal };
+        autoThread.Start();
+    }
+
+    /// <summary>Writes Nova-Activity-Auto.zip (replacing the previous one only once the new one is complete).</summary>
+    public static void SaveAuto()
+    {
+        try
+        {
+            var tmp = Export(KeepDays, null, true);
+            File.Move(tmp, AutoFile, true);
+            LastAuto = DateTime.Now;
+        }
+        catch (Exception e) { Log.Warn("activity", "automatic save: " + e.Message); }
+    }
+
+    /// <summary>📦 One ZIP. Yours: Nova-Activity-User-…zip (kept). Automatic: written as a temporary file, then it replaces Nova-Activity-Auto.zip.</summary>
+    public static string Export(int days, Action<string> status = null, bool auto = false)
     {
         status?.Invoke("Reading the activity…");
         var items = Read(days);
         status?.Invoke("Hiding names and email addresses…");
         var hider = new Hider();
-        var path = Path.Combine(Paths.Logs, $"Nova-Activity-{days}d-{DateTime.Now:yyyy-MM-dd-HHmm}.zip");
+        var path = auto ? Path.Combine(Dir, "Nova-Activity-Auto.zip.part") : Path.Combine(Dir, $"Nova-Activity-User-{days}d-{DateTime.Now:yyyy-MM-dd-HHmm}.zip");
+        if (auto) try { File.Delete(path); } catch { }
         using (var z = ZipFile.Open(path, ZipArchiveMode.Create))
         {
             void Add(string name, string text)
@@ -222,7 +265,7 @@ static class Activity
                 using var w = new StreamWriter(e.Open(), new UTF8Encoding(false));
                 w.Write(text);
             }
-            Add("README.txt", $"Nova Enhance activity history · last {days} days · {items.Count:N0} tasks · exported {DateTime.Now:dd MMM yyyy HH:mm} · build {Program.Build}\r\n" +
+            Add("README.txt", $"Nova Enhance activity history · last {days} days · {items.Count:N0} tasks · {(auto ? $"saved automatically (every {AutoEvery} h)" : "saved by the user")} {DateTime.Now:dd MMM yyyy HH:mm} · build {Program.Build}\r\n" +
                               "Names and email addresses are replaced by Person N / personN@… (the same label for the same person). Project codes, subjects and file names are kept.\r\n" +
                               "activity.jsonl = one task per line: steps with milliseconds, thinking (what Nova understood and decided), AI calls with the text sent.\r\n" + Program.Sign + "\r\n");
             status?.Invoke("Writing the summary…");

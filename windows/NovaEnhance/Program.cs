@@ -250,6 +250,7 @@ class NovaContext : ApplicationContext
         Guard.Stage("meaning search"); Semantic.Start();
         Guard.Stage("email projects"); MailProjects.Start();
         Guard.Stage("archive reader"); Pst.Start();
+        Guard.Stage("activity auto-save"); Activity.StartAuto();
         Guard.Stage("started");
     }
 
