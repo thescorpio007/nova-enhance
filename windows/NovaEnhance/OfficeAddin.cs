@@ -472,7 +472,7 @@ static class Server
         catch { }
     }
 
-    static async Task<(string, string, Dictionary<string, string>, string)> Read(Stream s)
+    internal static async Task<(string, string, Dictionary<string, string>, string)> Read(Stream s)
     {
         var buf = new byte[65536];
         var ms = new MemoryStream();

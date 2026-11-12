@@ -3,7 +3,7 @@ namespace NovaEnhance;
 /// <summary>Settings, split into sections like the phone app.</summary>
 class SettingsForm : NovaForm
 {
-    static readonly string[] Sections = { "AI & API keys", "About me", "Enhancement", "Email & AI", "📥 Email index", "🗂 Mailboxes & archives", "📂 Folders in the index", "📁 Email projects", "Folder search", "📁 Projects", "✦ Prompts", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "🧪 Activity history", "About" };
+    static readonly string[] Sections = { "AI & API keys", "About me", "Enhancement", "Email & AI", "📥 Email index", "🗂 Mailboxes & archives", "📂 Folders in the index", "📁 Email projects", "Folder search", "📁 Projects", "✦ Prompts", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "🧪 Activity history", "🔌 Test connector", "About" };
     readonly ListBox nav;
     readonly Panel host;
     Stack page;
@@ -92,6 +92,7 @@ class SettingsForm : NovaForm
                 case "Updates": Updates(); break;
                 case "Error log": ErrorLog(); break;
                 case "🧪 Activity history": ActivityPage(); break;
+                case "🔌 Test connector": TestConnectorPage(); break;
                 case "Office tab": OfficeTab(); break;
                 default: About(); break;
             }
@@ -1531,6 +1532,39 @@ class SettingsForm : NovaForm
     bool logErrorsOnly;
 
     int actDays = 1;
+
+    /// <summary>🔌 Test connector: Claude (through the Claude desktop app) tests Nova on this PC with test tools only.</summary>
+    void TestConnectorPage()
+    {
+        Note("Lets Claude test Nova on this PC through the Claude desktop app — so problems are checked and fixed without screenshots and ZIPs. Off by default · this PC only (127.0.0.1) · its own key · web pages can't use it.");
+        page.Add(Th.Section("What Claude can do"));
+        Note("✓ Nova's status (index, mailboxes, archive files, projects, background jobs)\n✓ run a real email search and see every step, timing and decision\n✓ check whether an email (subject words or a document number) is in the index\n✓ read the 🧪 Activity history, the error log, crash and freeze notes\n✓ run self-checks (index, phrase search, Outlook, archives, AI keys, LM Studio)");
+        Note("✗ never email bodies or the text sent to the AI · ✗ never 🔒 private emails, folders and files (wallet, password, bank…) · ✗ can't send, move or delete anything · names and addresses are hidden as Person N / personN@…", Th.Muted);
+        page.Add(Th.Section("On / off"));
+        var st = Note("", Th.Muted);
+        void Line() => st.Text = !TestConnector.On ? "Off — Claude can't reach Nova." :
+            TestConnector.Running ? $"✓ On — waiting for Claude on 127.0.0.1:{TestConnector.Port}" : "⚠ Could not start: " + TestConnector.LastError;
+        page.Add(Th.Check("🔌 Let Claude test Nova on this PC", TestConnector.On, v => { TestConnector.On = v; Line(); }));
+        Line();
+
+        page.Add(Th.Section("Connect Claude desktop (once)"));
+        Note("1. Press “Add to Claude desktop” (Nova writes its entry in Claude desktop's settings; the old file is kept as .bak).\n2. Quit Claude desktop completely (tray icon → Quit) and open it again.\n3. In Claude desktop, open the chat with Claude and choose “Link to this computer” (or start a new task on this PC). Claude now sees the tools “nova_status, nova_search, nova_find_email, nova_activity, nova_errors, nova_selfcheck”.");
+        var cr = page.Add(Th.Row(false));
+        var cst = Note("", Th.Muted);
+        cr.Controls.Add(Th.B("➕ Add to Claude desktop", () =>
+        {
+            try { var f = TestConnector.AddToClaude(); cst.Text = "✓ Added in " + string.Join(" · ", f) + " — now quit and reopen Claude desktop."; }
+            catch (Exception ex) { cst.Text = "⚠ " + ex.Message; }
+        }, true));
+        cr.Controls.Add(Th.B("⧉ Copy the setup (by hand)", () => { Clipboard.SetText(TestConnector.Snippet()); cst.Text = "⧉ Copied — paste it into claude_desktop_config.json (Claude desktop → Settings → Developer → Edit Config)."; }));
+        cr.Controls.Add(Th.B("🔑 New key", () => { TestConnector.NewKey(); cst.Text = "🔑 New key made — the old one stops working at once. Restart Claude desktop so it uses the new one."; }));
+        cr.Controls.Add(Th.B("📁 Claude desktop settings", () => { var f = TestConnector.ClaudeConfigs()[0]; Shell.Open(Path.GetDirectoryName(f)!); }));
+
+        page.Add(Th.Section("Last calls from Claude"));
+        string calls; lock (TestConnector.Calls) calls = TestConnector.Calls.Count == 0 ? "No call yet." : string.Join("\r\n", TestConnector.Calls);
+        page.Add(new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Height = 200, BackColor = Th.Bg, ForeColor = Th.Text, Font = new Font("Consolas", 9.5f), BorderStyle = BorderStyle.FixedSingle, Text = calls }, true);
+        Note("Every call is also kept in 🧪 Activity history (feature “🧪 test connector”).", Th.Muted);
+    }
 
     /// <summary>🧪 Activity history: every task with its steps, timings and thinking — exported as one ZIP for Claude.</summary>
     void ActivityPage()

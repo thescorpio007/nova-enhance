@@ -155,7 +155,7 @@ static class Activity
     // ------------------------------------------------------------------ 📦 Export for Claude
 
     /// <summary>Names → "Person 12", addresses → "person12@…" (always the same label for the same person).</summary>
-    class Hider
+    internal class Hider
     {
         readonly Dictionary<string, int> ids = new(StringComparer.OrdinalIgnoreCase);
         readonly List<(Regex Rx, string Name)> names = new();
