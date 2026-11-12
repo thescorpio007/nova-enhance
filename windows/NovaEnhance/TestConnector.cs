@@ -17,7 +17,7 @@ namespace NovaEnhance;
 static class TestConnector
 {
     public const int Port = 47322;
-    public static bool On { get => Store.Bool("win_tc_on", false); set { Store.SetBool("win_tc_on", value); if (value) Start(); else Stop(); } }
+    public static bool On { get => Store.Bool("win_tc_on", false); set { Store.SetBool("win_tc_on", value); if (value) Start(); else if (!Remote.On) { try { listener?.Stop(); } catch { } listener = null; } } }
     public static string Key
     {
         get { var k = Store.Str("win_tc_key", ""); if (k.Length < 20) { k = NewKey(); } return k; }
@@ -33,7 +33,9 @@ static class TestConnector
 
     public static void Start()
     {
-        if (listener != null || !On) return;
+        Relay.Start();
+        if (Remote.On) Remote.StartTunnel();
+        if (listener != null || !(On || Remote.On)) return;
         try
         {
             listener = new TcpListener(IPAddress.Loopback, Port); listener.Start();
@@ -43,7 +45,10 @@ static class TestConnector
         catch (Exception e) { listener = null; LastError = e.Message; Log.Error("🧪 test connector", e); }
     }
 
-    public static void Stop() { try { listener?.Stop(); } catch { } listener = null; }
+    public static void Stop() { try { listener?.Stop(); } catch { } listener = null; Remote.StopTunnel(); }
+
+    /// <summary>The PC part runs when any way in is on (Claude desktop, GitHub relay, internet).</summary>
+    public static bool Needed => On || Relay.On || Remote.On;
 
     static async Task Accept(TcpListener l)
     {
@@ -63,27 +68,111 @@ static class TestConnector
             var stream = client.GetStream();
             var (method, path, headers, body) = await Server.Read(stream);
             if (method == null) return;
-            int code = 200; JsonObject res;
-            // Only Nova's own MCP part: the key, and never a web page (browsers always send an Origin).
-            if (method != "POST" || !path.StartsWith("/tc/") || headers.ContainsKey("Origin") || !headers.TryGetValue("X-Nova-Key", out var k) || k != Key)
-            { code = 403; res = new JsonObject { ["error"] = "forbidden" }; }
-            else
+            int code = 200; string json;
+            var p = path.Split('?')[0];
+            JsonObject Body() { try { return string.IsNullOrWhiteSpace(body) ? new JsonObject() : JsonNode.Parse(body)?.AsObject() ?? new JsonObject(); } catch { return new JsonObject(); } }
+            if (p.StartsWith("/tc/"))
             {
-                JsonObject req;
-                try { req = string.IsNullOrWhiteSpace(body) ? new JsonObject() : JsonNode.Parse(body)?.AsObject() ?? new JsonObject(); } catch { req = new JsonObject(); }
-                var tool = path[4..].Split('?')[0];
-                lock (Calls) { Calls.Insert(0, $"{DateTime.Now:dd MMM HH:mm:ss}  {tool}  {Cut(req.ToJsonString(), 120)}"); if (Calls.Count > 30) Calls.RemoveAt(30); }
-                using var act = Activity.Begin("🧪 test connector · " + tool, req.ToJsonString());
-                try { res = new JsonObject { ["text"] = await Tool(tool, req) }; act.Result = "ok"; }
-                catch (Exception e) { res = new JsonObject { ["error"] = e.Message }; act.Fail(e.Message); }
+                // Nova's own MCP part (Claude desktop): the key, and never a web page (browsers always send an Origin).
+                if (method != "POST" || headers.ContainsKey("Origin") || !headers.TryGetValue("X-Nova-Key", out var k) || k != Key)
+                { code = 403; json = new JsonObject { ["error"] = "forbidden" }.ToJsonString(); }
+                else
+                {
+                    JsonObject res;
+                    try { res = new JsonObject { ["text"] = await RunTool("Claude desktop", p[4..], Body()) }; }
+                    catch (Exception e) { res = new JsonObject { ["error"] = e.Message }; }
+                    json = res.ToJsonString();
+                }
             }
-            var bytes = Encoding.UTF8.GetBytes(res.ToJsonString());
-            var head = $"HTTP/1.1 {code} {(code == 200 ? "OK" : "Forbidden")}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {bytes.Length}\r\nConnection: close\r\n\r\n";
+            else if (Remote.On && Remote.Secret.Length >= 20 && p == "/" + Remote.Secret + "/mcp")
+            {
+                // 🌍 B · claude.ai custom connector through the tunnel (MCP "streamable HTTP", plain JSON answers).
+                if (method != "POST") { code = 405; json = "{}"; }
+                else
+                {
+                    var resp = await Rpc(Body(), async (tool, args) =>
+                    {
+                        try { return (await RunTool("claude.ai (internet)", tool, JsonNode.Parse(args)?.AsObject() ?? new JsonObject()), false); }
+                        catch (Exception e) { return (e.Message, true); }
+                    });
+                    if (resp == null) { code = 202; json = ""; } else json = resp.ToJsonString();
+                }
+            }
+            else { code = 404; json = "{\"error\":\"not found\"}"; }
+            var bytes = Encoding.UTF8.GetBytes(json);
+            var head = $"HTTP/1.1 {code} {(code switch { 200 => "OK", 202 => "Accepted", 403 => "Forbidden", 405 => "Method Not Allowed", _ => "Not Found" })}\r\n" +
+                       (bytes.Length > 0 ? "Content-Type: application/json; charset=utf-8\r\n" : "") + $"Content-Length: {bytes.Length}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n";
             await stream.WriteAsync(Encoding.ASCII.GetBytes(head));
-            await stream.WriteAsync(bytes);
+            if (bytes.Length > 0) await stream.WriteAsync(bytes);
             await stream.FlushAsync();
         }
         catch { }
+    }
+
+    // ------------------------------------------------------------------ every call: approval (if asked), Activity, last calls
+
+    /// <summary>"Ask me before each request" (on by default): a window on this PC — Allow · Allow for 1 hour · Deny.</summary>
+    public static bool AskEach { get => Store.Bool("win_tc_ask", true); set => Store.SetBool("win_tc_ask", value); }
+    static DateTime allowUntil = DateTime.MinValue;
+
+    internal static async Task<string> RunTool(string via, string tool, JsonObject req)
+    {
+        tool = tool.Replace("nova_", "");
+        lock (Calls) { Calls.Insert(0, $"{DateTime.Now:dd MMM HH:mm:ss}  {via}  {tool}  {Cut(req.ToJsonString(), 120)}"); if (Calls.Count > 30) Calls.RemoveAt(30); }
+        if (!await Approve(via, tool, req)) throw new Exception("Declined on the PC (Ask me before each request).");
+        using var act = Activity.Begin("🧪 test connector · " + tool, via + " · " + req.ToJsonString());
+        try { var t = await Tool(tool, req); act.Result = "ok · " + via; return t; }
+        catch (Exception e) { act.Fail(e.Message); throw; }
+    }
+
+    static Task<bool> Approve(string via, string tool, JsonObject req)
+    {
+        if (!AskEach || DateTime.Now < allowUntil) return Task.FromResult(true);
+        var m = Program.Marshal;
+        if (m == null || !m.IsHandleCreated) return Task.FromResult(false);
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var what = tool switch
+        {
+            "search" => $"run the email search “{S(req, "question")}”" + (S(req, "project").Length > 0 ? $" (project {S(req, "project")})" : ""),
+            "find_email" => $"check whether “{S(req, "text")}” is in the email index",
+            "activity" => "read the 🧪 Activity history",
+            "errors" => "read the error log",
+            "selfcheck" => "run the self-checks",
+            "status" => "read Nova's status",
+            _ => tool
+        };
+        try
+        {
+            m.BeginInvoke(() =>
+            {
+                bool ok = false;
+                try
+                {
+                    using var f = new Form
+                    {
+                        Text = "🔌 Claude asks to test Nova", TopMost = true, StartPosition = FormStartPosition.CenterScreen, FormBorderStyle = FormBorderStyle.FixedDialog,
+                        MaximizeBox = false, MinimizeBox = false, ClientSize = new Size(620, 190), BackColor = Th.Bg, ForeColor = Th.Text, Font = Th.F(10.5f), ShowInTaskbar = true
+                    };
+                    f.Controls.Add(new Label { Text = $"Claude ({via}) asks to {what}.\n\nThe answer holds subjects, document numbers, dates and steps — names hidden, never email bodies or 🔒 private emails.", Left = 18, Top = 16, Width = 584, Height = 100 });
+                    var row = new FlowLayoutPanel { Left = 14, Top = 128, Width = 600, Height = 50, BackColor = Th.Bg };
+                    row.Controls.Add(Th.B("✓ Allow", () => { f.DialogResult = DialogResult.Yes; }, true));
+                    row.Controls.Add(Th.B("✓ Allow for 1 hour", () => { f.DialogResult = DialogResult.Retry; }));
+                    row.Controls.Add(Th.B("✗ Deny", () => { f.DialogResult = DialogResult.No; }));
+                    f.Controls.Add(row);
+                    var t = new System.Windows.Forms.Timer { Interval = 180000 };
+                    t.Tick += (_, _) => { t.Stop(); f.DialogResult = DialogResult.No; };
+                    t.Start();
+                    var r = f.ShowDialog();
+                    t.Dispose();
+                    if (r == DialogResult.Retry) allowUntil = DateTime.Now.AddHours(1);
+                    ok = r is DialogResult.Yes or DialogResult.Retry;
+                }
+                catch { }
+                tcs.TrySetResult(ok);
+            });
+        }
+        catch { return Task.FromResult(false); }
+        return tcs.Task;
     }
 
     static string Cut(string s, int n) => s.Length > n ? s[..n] + "…" : s;
@@ -216,65 +305,73 @@ static class TestConnector
         ("selfcheck", "Runs Nova's self-checks: index, full-text and phrase search, Outlook, archive files, renamed archives, Gemini key, local AI, activity history, background jobs.", "{\"type\":\"object\",\"properties\":{}}")
     };
 
+    /// <summary>One MCP JSON-RPC message → its answer (null for notifications). Used by Claude desktop (stdio) and claude.ai (internet).</summary>
+    internal static async Task<JsonObject> Rpc(JsonObject m, Func<string, string, Task<(string Text, bool Err)>> call)
+    {
+        var id = m["id"]?.DeepClone();
+        var method = m["method"]?.ToString() ?? "";
+        if (id == null) return null;   // notifications
+        JsonNode result = null; JsonObject error = null;
+        try
+        {
+            switch (method)
+            {
+                case "initialize":
+                    result = new JsonObject
+                    {
+                        ["protocolVersion"] = m["params"]?["protocolVersion"]?.ToString() ?? "2025-06-18",
+                        ["capabilities"] = new JsonObject { ["tools"] = new JsonObject() },
+                        ["serverInfo"] = new JsonObject { ["name"] = "nova-enhance-test", ["version"] = Program.Build.ToString() },
+                        ["instructions"] = "Test tools for Nova Enhance for Windows on the user's PC (by A.HAMROUNI). Names are hidden as Person N; email bodies are never given."
+                    };
+                    break;
+                case "ping": result = new JsonObject(); break;
+                case "tools/list":
+                    result = new JsonObject { ["tools"] = new JsonArray(Tools.Select(t => (JsonNode)new JsonObject { ["name"] = "nova_" + t.Name, ["description"] = t.Desc, ["inputSchema"] = JsonNode.Parse(t.Schema) }).ToArray()) };
+                    break;
+                case "tools/call":
+                {
+                    var name = (m["params"]?["name"]?.ToString() ?? "").Replace("nova_", "");
+                    var (text, err) = await call(name, m["params"]?["arguments"]?.ToJsonString() ?? "{}");
+                    result = new JsonObject { ["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = text }), ["isError"] = err };
+                    break;
+                }
+                default: error = new JsonObject { ["code"] = -32601, ["message"] = "Method not found: " + method }; break;
+            }
+        }
+        catch (Exception e) { error = new JsonObject { ["code"] = -32603, ["message"] = e.Message }; }
+        var resp = new JsonObject { ["jsonrpc"] = "2.0", ["id"] = id };
+        if (error != null) resp["error"] = error; else resp["result"] = result;
+        return resp;
+    }
+
     public static int Mcp()
     {
         var stdin = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false));
         var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(180) };
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(240) };
         string line;
         while ((line = stdin.ReadLine()) != null)
         {
             if (line.Trim().Length == 0) continue;
             JsonObject m;
             try { m = JsonNode.Parse(line)!.AsObject(); } catch { continue; }
-            var id = m["id"]?.DeepClone();
-            var method = m["method"]?.ToString() ?? "";
-            if (id == null) continue;   // notifications
-            JsonNode result = null; JsonObject error = null;
-            try
+            var resp = Rpc(m, async (name, args) =>
             {
-                switch (method)
+                try
                 {
-                    case "initialize":
-                        result = new JsonObject
-                        {
-                            ["protocolVersion"] = m["params"]?["protocolVersion"]?.ToString() ?? "2025-06-18",
-                            ["capabilities"] = new JsonObject { ["tools"] = new JsonObject() },
-                            ["serverInfo"] = new JsonObject { ["name"] = "nova-enhance-test", ["version"] = Program.Build.ToString() },
-                            ["instructions"] = "Test tools for Nova Enhance for Windows on this PC (by A.HAMROUNI). Names are hidden as Person N; email bodies are never given."
-                        };
-                        break;
-                    case "ping": result = new JsonObject(); break;
-                    case "tools/list":
-                        result = new JsonObject { ["tools"] = new JsonArray(Tools.Select(t => (JsonNode)new JsonObject { ["name"] = "nova_" + t.Name, ["description"] = t.Desc, ["inputSchema"] = JsonNode.Parse(t.Schema) }).ToArray()) };
-                        break;
-                    case "tools/call":
-                    {
-                        var name = (m["params"]?["name"]?.ToString() ?? "").Replace("nova_", "");
-                        var args = m["params"]?["arguments"]?.ToJsonString() ?? "{}";
-                        string text; bool isErr = false;
-                        try
-                        {
-                            Store.Load();
-                            using var req = new HttpRequestMessage(HttpMethod.Post, $"http://127.0.0.1:{Port}/tc/{name}") { Content = new StringContent(args, Encoding.UTF8, "application/json") };
-                            req.Headers.Add("X-Nova-Key", Store.Str("win_tc_key", ""));
-                            using var res = http.Send(req);
-                            var o = JsonNode.Parse(res.Content.ReadAsStringAsync().GetAwaiter().GetResult())?.AsObject();
-                            if (o?["error"] is { } er) { isErr = true; text = er.ToString() == "forbidden" ? "Nova refused: the Test connector key changed — in Nova Settings → 🧪 Test connector press “Add to Claude desktop” again, then restart Claude desktop." : "Nova: " + er; }
-                            else text = o?["text"]?.ToString() ?? "";
-                        }
-                        catch (HttpRequestException) { isErr = true; text = "Nova is not running on this PC, or Settings → 🧪 Test connector is off."; }
-                        catch (TaskCanceledException) { isErr = true; text = "Nova did not answer within 3 minutes."; }
-                        result = new JsonObject { ["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = text }), ["isError"] = isErr };
-                        break;
-                    }
-                    default: error = new JsonObject { ["code"] = -32601, ["message"] = "Method not found: " + method }; break;
+                    Store.Load();
+                    using var req = new HttpRequestMessage(HttpMethod.Post, $"http://127.0.0.1:{Port}/tc/{name}") { Content = new StringContent(args, Encoding.UTF8, "application/json") };
+                    req.Headers.Add("X-Nova-Key", Store.Str("win_tc_key", ""));
+                    using var res = await http.SendAsync(req);
+                    var o = JsonNode.Parse(await res.Content.ReadAsStringAsync())?.AsObject();
+                    if (o?["error"] is { } er) return (er.ToString() == "forbidden" ? "Nova refused: the Test connector key changed — in Nova Settings → 🔌 Test connector press “Add to Claude desktop” again, then restart Claude desktop." : "Nova: " + er, true);
+                    return (o?["text"]?.ToString() ?? "", false);
                 }
-            }
-            catch (Exception e) { error = new JsonObject { ["code"] = -32603, ["message"] = e.Message }; }
-            var resp = new JsonObject { ["jsonrpc"] = "2.0", ["id"] = id };
-            if (error != null) resp["error"] = error; else resp["result"] = result;
-            stdout.WriteLine(resp.ToJsonString());
+                catch (HttpRequestException) { return ("Nova is not running on this PC, or Settings → 🔌 Test connector is off.", true); }
+                catch (TaskCanceledException) { return ("Nova did not answer within 4 minutes.", true); }
+            }).GetAwaiter().GetResult();
+            if (resp != null) stdout.WriteLine(resp.ToJsonString());
         }
         return 0;
     }

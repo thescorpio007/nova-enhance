@@ -1540,14 +1540,57 @@ class SettingsForm : NovaForm
         page.Add(Th.Section("What Claude can do"));
         Note("✓ Nova's status (index, mailboxes, archive files, projects, background jobs)\n✓ run a real email search and see every step, timing and decision\n✓ check whether an email (subject words or a document number) is in the index\n✓ read the 🧪 Activity history, the error log, crash and freeze notes\n✓ run self-checks (index, phrase search, Outlook, archives, AI keys, LM Studio)");
         Note("✗ never email bodies or the text sent to the AI · ✗ never 🔒 private emails, folders and files (wallet, password, bank…) · ✗ can't send, move or delete anything · names and addresses are hidden as Person N / personN@…", Th.Muted);
-        page.Add(Th.Section("On / off"));
+        page.Add(Th.Section("Safety"));
         var st = Note("", Th.Muted);
-        void Line() => st.Text = !TestConnector.On ? "Off — Claude can't reach Nova." :
+        void Line() => st.Text = !TestConnector.On ? "Claude desktop: off." :
             TestConnector.Running ? $"✓ On — waiting for Claude on 127.0.0.1:{TestConnector.Port}" : "⚠ Could not start: " + TestConnector.LastError;
-        page.Add(Th.Check("🔌 Let Claude test Nova on this PC", TestConnector.On, v => { TestConnector.On = v; Line(); }));
-        Line();
+        page.Add(Th.Check("✋ Ask me before each request (Allow · Allow for 1 hour · Deny)", TestConnector.AskEach, v => TestConnector.AskEach = v));
+        Note("Three ways for Claude to reach Nova — use the one that works on this PC.", Th.Muted);
 
-        page.Add(Th.Section("Connect Claude desktop (once)"));
+        // ---------------- 🌐 A · GitHub relay
+        page.Add(Th.Section("🌐 A · GitHub relay — no app to install (recommended)"));
+        Note("Claude writes a test request into YOUR PRIVATE GitHub repository; Nova checks it every 30 s, runs the test here and writes the answer back. No port is opened on this PC; works from any Claude chat that has GitHub. Answers are deleted after 7 days.");
+        Note("Once: 1. On github.com create a PRIVATE repository named nova-test-relay (tick “Add a README”).  2. github.com → Settings → Developer settings → Fine-grained tokens → Generate: Repository access = Only select repositories → nova-test-relay; Permissions → Contents = Read and write; Expiration = 90 days.  3. Paste the key below, press Save and check.", Th.Muted);
+        var rr = page.Add(Th.Row(false));
+        rr.Controls.Add(Th.L("Repository", 10, Th.Text));
+        var repoBox = new TextBox { Text = Relay.Repo, Width = 300, BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.FixedSingle, Font = Th.F(10f) };
+        rr.Controls.Add(repoBox);
+        rr.Controls.Add(Th.L("GitHub key", 10, Th.Text));
+        var tokBox = new TextBox { Text = Relay.Token.Length > 0 ? "••••••••••••" : "", Width = 300, UseSystemPasswordChar = true, BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.FixedSingle, Font = Th.F(10f) };
+        rr.Controls.Add(tokBox);
+        var rst = Note(Relay.Status.Length > 0 ? Relay.Status : Relay.On ? "On" : "Off", Th.Muted);
+        var rb = page.Add(Th.Row(false));
+        rb.Controls.Add(Th.B("💾 Save and check", async () =>
+        {
+            Relay.Repo = repoBox.Text;
+            if (tokBox.Text.Length > 0 && !tokBox.Text.StartsWith("••")) Relay.Token = tokBox.Text;
+            rst.Text = "⏳ checking…";
+            try { rst.Text = await Relay.Check(); } catch (Exception ex) { rst.Text = "⚠ " + ex.Message; }
+        }, true));
+        page.Add(Th.Check("🌐 Answer Claude's requests through this repository", Relay.On, async v =>
+        {
+            if (v) { try { await Relay.Check(); } catch (Exception ex) { rst.Text = "⚠ " + ex.Message + " — not switched on (untick and tick again after fixing)."; return; } }
+            Relay.On = v; rst.Text = v ? "✓ On — Nova checks every 30 s" : "Off";
+        }));
+
+        // ---------------- 🌍 B · internet connector (claude.ai)
+        page.Add(Th.Section("🌍 B · Internet connector for claude.ai"));
+        Note("Nova opens a secure Cloudflare tunnel (one small program, downloaded once, no admin rights) and gets a secret internet address. Add it in claude.ai → Settings → Connectors → Add custom connector (name: Nova test). Answers are instant. The address changes each time Nova or the tunnel restarts — paste the new one in claude.ai. Company networks or antivirus may block tunnels; then use A.");
+        var bst = Note("", Th.Muted);
+        var urlBox = new TextBox { ReadOnly = true, Width = 900, BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.FixedSingle, Font = new Font("Consolas", 9.5f) };
+        void BLine() { bst.Text = !Remote.On ? "Off" : Remote.Status; urlBox.Text = Remote.Url.Length > 0 ? Remote.Url : "(the address appears here when the tunnel is online — press ↻)"; }
+        page.Add(Th.Check("🌍 Open the internet connector", Remote.On, v => { Remote.On = v; BLine(); }));
+        page.Add(urlBox, true);
+        var ub = page.Add(Th.Row(false));
+        ub.Controls.Add(Th.B("⧉ Copy the address", () => { if (Remote.Url.Length > 0) { Clipboard.SetText(Remote.Url); bst.Text = "⧉ Copied — paste it in claude.ai → Settings → Connectors → Add custom connector."; } }, true));
+        ub.Controls.Add(Th.B("↻ Refresh", BLine));
+        ub.Controls.Add(Th.B("🔑 New secret address", () => { Remote.NewSecret(); BLine(); bst.Text = "🔑 New secret — the old address stops working; paste the new one in claude.ai."; }));
+        ub.Controls.Add(Th.B("🌐 claude.ai connectors", () => Shell.Open("https://claude.ai/settings/connectors")));
+        BLine();
+
+        page.Add(Th.Section("C · Claude desktop app (if it is installed)"));
+        page.Add(Th.Check("🔌 Let Claude desktop test Nova on this PC", TestConnector.On, v => { TestConnector.On = v; Line(); }));
+        Line();
         Note("1. Press “Add to Claude desktop” (Nova writes its entry in Claude desktop's settings; the old file is kept as .bak).\n2. Quit Claude desktop completely (tray icon → Quit) and open it again.\n3. In Claude desktop, open the chat with Claude and choose “Link to this computer” (or start a new task on this PC). Claude now sees the tools “nova_status, nova_search, nova_find_email, nova_activity, nova_errors, nova_selfcheck”.");
         var cr = page.Add(Th.Row(false));
         var cst = Note("", Th.Muted);
