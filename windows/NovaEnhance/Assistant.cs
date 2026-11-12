@@ -47,6 +47,8 @@ Rules:
 - ""summarise/summarize the last one / this email / number 2"" -> intent summarize with target. ""draft/write a reply to …"" -> intent draft with target.
 - Dates: relative to today. ""last month"" = the previous calendar month; ""this week"" = since Monday; leave empty when no date is mentioned.
 - groups: one group per idea the emails must be about, each with the forms people really write (abbreviation, full words, singular, plural, codes, the English form). Understand construction short forms (SS stainless steel, SSM material submittal, SDS shop drawing, WIR inspection request, MS method statement). Never put names or dates in groups.
+- folder: ""any"" unless the user clearly says received / inbox / sent / ""I sent"". Approvals and replies are often sent BY the user, so never limit to received by yourself.
+- Project codes (SLV, C7…) stay codes: never expand them into guessed names. ""approved"" is not a group (Nova checks approval codes itself).
 - When a previous filter is given, the new request refines it: keep everything unless the request changes it.";
 
     /// <summary>📐 A document / drawing number in the question: its emails at once, no AI needed (subject, text and attachment names).</summary>
@@ -110,6 +112,10 @@ Rules:
         q.Cc.AddRange(sx.Cc);
         if (sx.From.Any(x => x.Equals("me", StringComparison.OrdinalIgnoreCase))) q.Folder = "sent";
         if (sx.To.Any(x => x.Equals("me", StringComparison.OrdinalIgnoreCase))) q.MeIn = "to";
+        // Sent and received both count, unless the question says which (the AI used to limit to "received" by itself).
+        if (q.Folder != "any" && ans.Intent is not ("outstanding" or "followup") && !sx.From.Any(x => x.Equals("me", StringComparison.OrdinalIgnoreCase)) &&
+            !Regex.IsMatch(question ?? "", @"\b(received|inbox|incoming|sent|outgoing|i sent|i wrote|i replied|my (replies|reply|emails))\b", RegexOptions.IgnoreCase))
+            q.Folder = "any";
         if (sx.HasAttach != null) q.HasAttach = sx.HasAttach;
         if (sx.After != null) q.After = sx.After;
         if (sx.Before != null) q.Before = sx.Before;
@@ -146,6 +152,7 @@ Rules:
             }
             foreach (var g in sx.Or) { groups.RemoveAll(x => x.Any(t => g.Contains(t, StringComparer.OrdinalIgnoreCase))); groups.Add(g.ToList()); }
             groups.RemoveAll(g => g.Any(t => sx.Not.Contains(t, StringComparer.OrdinalIgnoreCase)));
+            groups.RemoveAll(g => g.All(t => Regex.IsMatch(t, @"^(approv|accept)", RegexOptions.IgnoreCase)));   // scored by approval codes instead
             // 📁 The project is a filter, not a word to find.
             if (q.Project.Length > 1)
             {

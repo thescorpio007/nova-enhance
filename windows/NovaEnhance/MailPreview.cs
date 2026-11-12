@@ -38,7 +38,7 @@ static class MailPreview
         if (File.Exists(file) && File.GetLastWriteTime(file) > DateTime.Now.AddHours(-12)) return file;
         dynamic app = running;
         dynamic ns = app.GetNamespace("MAPI");
-        dynamic item = ns.GetItemFromID(h.Entry, h.StoreId);
+        dynamic item = Outlook.Item(ns, h.Entry, h.StoreId);
         try
         {
             string html = "";
@@ -88,7 +88,7 @@ static class MailPreview
     {
         dynamic app = Outlook.Get();
         dynamic ns = app.GetNamespace("MAPI");
-        dynamic item = ns.GetItemFromID(h.Entry, h.StoreId);
+        dynamic item = Outlook.Item(ns, h.Entry, h.StoreId);
         try
         {
             dynamic atts = item.Attachments;

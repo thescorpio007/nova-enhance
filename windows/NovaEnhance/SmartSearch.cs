@@ -12,7 +12,7 @@ static class Abbrev
 {
     static readonly (string Short, string[] Long)[] List =
     {
-        ("FHC", new[] { "fire hose cabinet", "fire hose cabinets" }), ("FHR", new[] { "fire hose reel" }), ("FLS", new[] { "fire and life safety", "fire life safety" }),
+        ("FHC", new[] { "fire hose cabinet", "fire hose cabinets", "fire hose reel cabinet" }), ("FHR", new[] { "fire hose reel" }), ("FHRC", new[] { "fire hose reel cabinet" }), ("FLS", new[] { "fire and life safety", "fire life safety" }),
         ("FACP", new[] { "fire alarm control panel" }), ("SS", new[] { "stainless steel" }), ("MS", new[] { "mild steel", "method statement" }), ("GI", new[] { "galvanized iron", "galvanised" }),
         ("BOH", new[] { "back of house" }), ("FOH", new[] { "front of house" }), ("MEP", new[] { "mechanical electrical plumbing" }), ("HVAC", new[] { "air conditioning", "ventilation" }),
         ("RFI", new[] { "request for information" }), ("WIR", new[] { "work inspection request", "inspection request" }), ("MIR", new[] { "material inspection request" }),
@@ -40,8 +40,8 @@ static class Abbrev
         new[] { "raised floor", "access floor" },
         new[] { "shop drawing", "SDS", "SHD", "shop dwg" },
         new[] { "method statement", "MS" },
-        new[] { "fire hose cabinet", "FHC", "hose cabinet" },
-        new[] { "fire hose reel", "FHR", "hose reel" },
+        new[] { "fire hose cabinet", "FHC", "hose cabinet", "fire hose reel cabinet", "FHRC", "hose reel cabinet" },
+        new[] { "fire hose reel", "FHR", "hose reel", "FHRC" },
         new[] { "material submittal", "SSM", "MAT", "material sample", "sample submittal" },
         new[] { "inspection request", "WIR", "work inspection" },
         new[] { "expansion joint", "movement joint" },
@@ -176,7 +176,7 @@ static class SmartSearch
     }
 
     static readonly Dictionary<string, Regex> rxCache = new(StringComparer.OrdinalIgnoreCase);
-    static Regex Rx(string term) { lock (rxCache) { if (!rxCache.TryGetValue(term, out var r)) rxCache[term] = r = SearchSyntax.PhraseRx(term); return r; } }
+    static Regex Rx(string term) { lock (rxCache) { if (!rxCache.TryGetValue(term, out var r)) rxCache[term] = r = SearchSyntax.PhraseRx(term, term.Trim().Contains(' ') ? 2 : 0); return r; } }   // phrases: up to 2 words in between
 
     /// <summary>Where an idea is in the email: subject 3 · attachment name 2.5 · the new text 1 · only in quoted history / signature 0.2.</summary>
     static (double Score, string Term, string Where) Place(MailHit h, List<string> terms, bool inIndex)
@@ -205,7 +205,7 @@ static class SmartSearch
                 foreach (var t in groups[gi].Take(6))
                 {
                     var q0 = Clone(baseQ);
-                    if (t.Contains(' ') || t.Contains('-')) q0.Phrase = t; else q0.Words = new() { t };
+                    if (t.Contains(' ') || t.Contains('-')) { q0.Phrase = t; if (t.Trim().Contains(' ')) q0.Near = 2; } else q0.Words = new() { t };
                     try { total += await Task.Run(() => MailIndex.CountIds(q0, 20001), ct); } catch (OperationCanceledException) { throw; } catch { }
                     if (total > 20000) break;
                 }
@@ -221,7 +221,7 @@ static class SmartSearch
                 ct.ThrowIfCancellationRequested();
                 await SearchGate.Wait(ct);
                 var q = Clone(baseQ);
-                if (t.Contains(' ') || t.Contains('-')) q.Phrase = t; else q.Words = new() { t };
+                if (t.Contains(' ') || t.Contains('-')) { q.Phrase = t; if (t.Trim().Contains(' ')) q.Near = 2; } else q.Words = new() { t };
                 try { foreach (var (id, d) in await Task.Run(() => MailIndex.SearchIds(q, 40000), ct)) { set.Add(id); dates[id] = d; } }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception e) { Log.Warn("ai search", "ids: " + e.Message); continue; }
@@ -229,6 +229,26 @@ static class SmartSearch
             }
             gIds.Add(set);
         }
+        // A very common idea still finds candidates together with a key word of each other idea ("SSM" + "hose"),
+        // so an email written differently ("Fire Hose Reel Cabinet") is not missed.
+        foreach (var gc in common)
+            for (int gj = 0; gj < n; gj++)
+            {
+                if (common.Contains(gj)) continue;
+                var keys = groups[gj].Where(t => t.Contains(' ')).SelectMany(t => t.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+                    .Where(w => w.Length >= 4 && !Regex.IsMatch(w, "^(fire|with|from|type|area|room|level|floor|wall|work|works|system|panel|door)$", RegexOptions.IgnoreCase))
+                    .Distinct(StringComparer.OrdinalIgnoreCase).Take(2).ToList();
+                foreach (var kw in keys)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var qb = Clone(baseQ);
+                    qb.Words = new() { groups[gc][0], kw };
+                    try { foreach (var (id, d) in await Task.Run(() => MailIndex.SearchIds(qb, 5000), ct)) { gIds[gj].Add(id); dates[id] = d; } }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception e) { Log.Warn("ai search", "bridge: " + e.Message); }
+                    queries++;
+                }
+            }
         Activity.Current?.Mark("find every match (all years)", $"{queries} searches · " + string.Join(" · ", gIds.Select((g, i) => common.Contains(i) ? $"{groups[i][0]} (very common — scored only)" : $"{groups[i][0]} {g.Count:N0}")));
         var count = new Dictionary<long, int>();
         foreach (var set in gIds) foreach (var id in set) count[id] = count.TryGetValue(id, out var c) ? c + 1 : 1;
@@ -243,6 +263,10 @@ static class SmartSearch
         var light = await Task.Run(() => MailIndex.ByIds(cand, 3000, 8000), ct);
         Activity.Current?.Mark("read candidates", $"{light.Count:N0} of {count.Count:N0}");
         await SearchGate.Wait(ct);
+        // What the question asks for: "approved" (codes 1/2, approved as noted…), recent first, old first, all of them.
+        var ql = question.ToLowerInvariant();
+        bool wantsApproved = Regex.IsMatch(ql, @"\bapprov"), wantsRecent = Regex.IsMatch(ql, @"\b(latest|recent|recently|newest|last (week|month|days?)|this (week|month))\b"),
+             wantsOld = Regex.IsMatch(ql, @"\b(old|older|oldest|earliest|first|history)\b"), wantsAll = Regex.IsMatch(ql, @"\b(all|every|each|history|list)\b");
         // 3 · Score by WHERE each idea is; hard rules ("quotes", subject:, -words) and the project checked here.
         var scored = new List<(MailHit H, double S, int Strong, (double Score, string Term, string Where)[] P)>();
         foreach (var h in light)
@@ -257,8 +281,8 @@ static class SmartSearch
                 s += places[gi].Item1;
                 if (places[gi].Item1 >= 1) strong++;
             }
-            var days = (DateTime.Now - h.Date).TotalDays;
-            s += days < 30 ? 0.5 : days < 180 ? 0.25 : 0;
+            if (wantsRecent) { var days = (DateTime.Now - h.Date).TotalDays; s += days < 30 ? 0.5 : days < 180 ? 0.25 : 0; }
+            if (wantsApproved && Approval.IsMatch((h.Subject ?? "") + " " + (h.AttNames ?? "") + " " + h.NewPart)) s += 1.5;
             if (semantic.Contains(h.Id)) s += 2;
             scored.Add((h, s, strong, places));
         }
@@ -294,7 +318,9 @@ static class SmartSearch
                 var sb = new StringBuilder($"Question: {question}\nCandidate emails:\n");
                 for (int i = 0; i < pool.Count; i++) sb.Append($"[{i + 1}] {pool[i].H.Date:dd MMM yyyy} · {(pool[i].H.Sent ? "Me" : pool[i].H.FromName)} · {pool[i].H.Subject}{(pool[i].H.AttNames.Length > 0 ? " · 📎 " + pool[i].H.AttNames : "")} · “{pool[i].H.FirstLines(160)}”\n");
                 var sys = "You pick the emails that really answer the user's question, most relevant first. Reply with JSON only: {\"keep\":[{\"i\":3,\"why\":\"4 to 10 words: what this email is\"}]}. " +
-                          "Keep at most 15 (fewer is better when only a few fit). Drop emails about another subject that only mention the words in passing. " +
+                          (wantsAll ? "The user wants ALL of them: keep every email that is about the question (up to 60), most relevant first; drop only emails clearly about another subject. "
+                                    : "Keep at most 15 (fewer is better when only a few fit). Drop emails about another subject that only mention the words in passing. ") +
+                          (wantsApproved ? "Approval is often not written in the email: a returned / signed submittal with comments, Code 1 or Code 2, approved as noted all count. " : "") +
                           "Understand construction short forms (FHC fire hose cabinet, SS stainless steel, BOH back of house, SSM material submittal, SDS shop drawing, WIR inspection request, blockwork = block wall…).";
                 var j = Ai.ParseJson(await SearchGate.Limit(t => Ai.Chat(sys, sb.ToString(), true, true, ai, t), 25, ct));
                 var keep = new List<MailHit>();
@@ -306,22 +332,45 @@ static class SmartSearch
                         h.Why = w.Length > 0 ? w + (h.Why.Length > 0 ? "   " + h.Why : "") : h.Why;
                         keep.Add(h);
                     }
-                if (keep.Count > 0) { picked = keep; reranked = true; }
+                if (keep.Count > 0)
+                {
+                    // "all …": the AI only puts the best first — the other good matches follow, never cut.
+                    if (wantsAll) keep.AddRange(pool.Select(x => x.H).Where(h => !keep.Contains(h)));
+                    picked = keep; reranked = true;
+                }
             }
             catch (OperationCanceledException) { throw; }
             catch (TimeoutException) { slow = true; }
             catch (Exception e) { Log.Warn("ai search", "rerank: " + e.Message); }
         Activity.Current?.Mark(reranked ? "AI ranking" : slow ? "AI ranking (too slow, skipped)" : "no AI ranking", $"{picked.Count} kept");
-        picked = reranked ? picked : picked.Take(30).ToList();
-        // The full emails for the ones kept (the list above read only their beginning).
-        var full = await Task.Run(() => MailIndex.ByIds(picked.Select(h => h.Id)), ct);
+        picked = picked.Take(60).ToList();
+        // The full emails for the ones kept (the list above read only their beginning), in the order picked.
+        var full = await Task.Run(() => MailIndex.ByIds(picked.Select(h => h.Id), 500), ct);
+        var order = picked.Select((h, i) => (h.Id, i)).ToDictionary(x => x.Id, x => x.i);
         foreach (var h in full) h.Why = picked.First(x => x.Id == h.Id).Why;
-        r.Hits = full;
+        full = full.OrderBy(h => order.TryGetValue(h.Id, out var i) ? i : 999).ToList();
+        if (wantsOld) full = full.OrderBy(h => h.Date).ToList();
+        r.Hits = Revisions(full);
         var years = r.Hits.Count > 0 ? (r.Hits.Min(h => h.Date).Year == r.Hits.Max(h => h.Date).Year ? $" · {r.Hits.Min(h => h.Date).Year}" : $" · {r.Hits.Min(h => h.Date).Year}–{r.Hits.Max(h => h.Date).Year}") : "";
         r.Searched = "Searched: " + string.Join(" · ", groups.Select(g => string.Join(" / ", g.Take(3)))) +
                      $"  —  {queries} searches · all years · matched {pass}" + precision + (semantic.Count > 0 ? $" · meaning search {semantic.Count}" : "") +
                      $" · {count.Count:N0} candidates → {r.Hits.Count} best{years}" + (reranked ? $" (✦ {Ai.LabelOf(ai)} picked)" : slow ? " (the AI was slow — best scored shown)" : "");
         return r;
+    }
+
+    /// <summary>Approval in the subject, attachment names or new text: Code 1 / Code 2 / A / B, approved (as noted), no objection, signed submittal with comments.</summary>
+    static readonly Regex Approval = new(@"\bcode\s*[-:#]?\s*(1|2|a|b)\b|\bapproved\b|\bapproval\b|no objection|\bNOC\b|signed\s+(sample\s+|material\s+)?submittal|with\s+(the\s+)?(client|engineer|consultant)'?s?\s+comments",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled, TimeSpan.FromSeconds(1));
+
+    static readonly Regex DocNo = new(@"\b[A-Z0-9]{2,6}(?:-[A-Z0-9]{1,6}){2,5}-\d{3,6}", RegexOptions.Compiled);
+
+    /// <summary>Revisions of the same document number stay together (SSM-00012 Rev00, Rev01…), in the place of the first one.</summary>
+    static List<MailHit> Revisions(List<MailHit> list)
+    {
+        string Key(MailHit h) { var m = DocNo.Match((h.Subject ?? "").ToUpperInvariant()); return m.Success ? m.Value : "#" + h.Id; }
+        var seen = new List<string>(); var by = new Dictionary<string, List<MailHit>>();
+        foreach (var h in list) { var k = Key(h); if (!by.TryGetValue(k, out var g)) { by[k] = g = new(); seen.Add(k); } g.Add(h); }
+        return seen.SelectMany(k => by[k].Count > 1 ? by[k].OrderBy(h => h.Date).ToList() : by[k]).ToList();
     }
 
     static bool Pass(MailHit h, MailQuery q)

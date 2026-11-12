@@ -117,7 +117,10 @@ class SearchSyntax
     // ------------------------------------------------------------------ checking (forgiving: spaces, hyphens, capitals, plurals)
 
     /// <summary>"block wall" → matches "Block-Wall", "block walls", "BLOCK  WALL" (not "blockwork").</summary>
-    public static Regex PhraseRx(string phrase)
+    public static Regex PhraseRx(string phrase) => PhraseRx(phrase, 0);
+
+    /// <summary>gap = how many other words may sit between the words of the phrase ("fire hose reel cabinet" for "fire hose cabinet").</summary>
+    public static Regex PhraseRx(string phrase, int gap)
     {
         var words = Regex.Split(phrase.Trim(), @"[\s\-_./]+").Where(w => w.Length > 0).ToList();
         string W(string w)
@@ -125,7 +128,8 @@ class SearchSyntax
             var e = Regex.Escape(w).Replace(@"\*", @"[\p{L}\p{N}]*");
             return Regex.IsMatch(w, @"[A-Za-z]$") && !w.EndsWith("*") ? e + "(?:e?s)?" : e;
         }
-        var core = string.Join(@"[\s\-_./]*", words.Select(W));
+        var join = gap > 0 ? @"[\s\-_./]*(?:[\p{L}\p{N}]{1,20}[\s\-_./]+){0," + gap + "}" : @"[\s\-_./]*";
+        var core = string.Join(join, words.Select(W));
         return new Regex(@"(?<![\p{L}\p{N}])" + core + @"(?![\p{L}\p{N}])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
     }
 

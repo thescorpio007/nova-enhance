@@ -60,6 +60,46 @@ static class Outlook
         try { if (o != null && Marshal.IsComObject(o)) Marshal.ReleaseComObject(o); } catch { }
     }
 
+    /// <summary>An email by its Outlook address. If its archive was renamed or moved (archive.pst → archive1.pst), Nova finds it in the
+    /// archives open in Outlook — inside a .pst every email keeps its identity — and moves the whole archive in the index to the new file.</summary>
+    public static dynamic Item(dynamic ns, string entry, string store)
+    {
+        try { return ns.GetItemFromID(entry, store); }
+        catch (Exception first)
+        {
+            if (string.IsNullOrEmpty(store)) throw;
+            var moved = MailIndex.MovedStore(store);
+            if (moved.Length > 0) try { return ns.GetItemFromID(entry, moved); } catch { }
+            if (Archives.Reopen(ns, store)) try { return ns.GetItemFromID(entry, store); } catch { }
+            dynamic stores = null;
+            try
+            {
+                stores = ns.Stores;
+                int n = (int)stores.Count;
+                for (int i = 1; i <= n; i++)
+                {
+                    dynamic st = null; string sid = "";
+                    try { st = stores.Item(i); sid = Convert.ToString(st.StoreID) ?? ""; } catch { } finally { Release(st); }
+                    if (sid.Length == 0 || sid == store || sid == moved) continue;
+                    try
+                    {
+                        var it = ns.GetItemFromID(entry, sid);
+                        var oldId = store; var newId = sid;
+                        _ = Task.Run(() => { try { MailIndex.MoveStore(oldId, newId); } catch (Exception e) { Log.Warn("archives", "relink: " + e.Message); } });
+                        return it;
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+            finally { Release(stores); }
+            var m = Regex.Match(first.Message, @"[A-Za-z]:\\[^""]+?\.(pst|ost)", RegexOptions.IgnoreCase);
+            if (m.Success)
+                throw new InvalidOperationException($"This email was in “{Path.GetFileName(m.Value)}”, which was renamed or moved. Open the renamed archive in Outlook (File → Open & Export → Open Outlook Data File) or in Nova's 📂 Archive reader, then try again — Nova will link it by itself.", first);
+            throw;
+        }
+    }
+
     public static string S(Func<object> f)
     {
         try { return Convert.ToString(f()) ?? ""; } catch { return ""; }
@@ -71,7 +111,7 @@ static class Outlook
         dynamic item = null;
         try
         {
-            item = ns.GetItemFromID(entry, store);
+            item = Item(ns, entry, store);
             dynamic pa = item.PropertyAccessor;
             int verb = 0; DateTime? when = null;
             try { verb = Convert.ToInt32(pa.GetProperty("http://schemas.microsoft.com/mapi/proptag/0x10810003")); } catch { }
@@ -88,7 +128,7 @@ static class Outlook
     {
         dynamic app = Get();
         dynamic ns = app.GetNamespace("MAPI");
-        dynamic item = ns.GetItemFromID(entry, store);
+        dynamic item = Item(ns, entry, store);
         try { item.SaveAs(path, 9); }   // olMSGUnicode
         finally { Release(item); Release(ns); }
     }
@@ -99,14 +139,8 @@ static class Outlook
         if (entry != null && entry.StartsWith("pst:")) { Program.UiContext?.Post(_ => Screens.PstReader(entry), null); return; }
         dynamic app = Get();
         dynamic ns = app.GetNamespace("MAPI");
-        dynamic item;
-        try { item = ns.GetItemFromID(entry, store); }
-        catch
-        {
-            // 📂 An archive Nova closed after indexing: open it again in Outlook, then show the email.
-            if (!Archives.Reopen(ns, store)) throw;
-            item = ns.GetItemFromID(entry, store);
-        }
+        // 📂 An archive Nova closed after indexing is opened again; a renamed archive is found (Item).
+        dynamic item = Item(ns, entry, store);
         item.Display(false);
     }
 
@@ -200,7 +234,7 @@ static class Outlook
     {
         dynamic app = Get();
         dynamic ns = app.GetNamespace("MAPI");
-        dynamic item = ns.GetItemFromID(entry, store);
+        dynamic item = Item(ns, entry, store);
         try { var b = S(() => item.Body); return b.Length > 20000 ? b[..20000] : b; } finally { Release(item); Release(ns); }
     }
 
@@ -210,7 +244,7 @@ static class Outlook
     {
         dynamic app = Get();
         dynamic ns = app.GetNamespace("MAPI");
-        dynamic item = ns.GetItemFromID(entry, store);
+        dynamic item = Item(ns, entry, store);
         dynamic reply = all ? item.ReplyAll() : item.Reply();
         reply.Display(false);
         string existing = Convert.ToString(reply.HTMLBody) ?? "";
@@ -279,6 +313,8 @@ class MailQuery
     public string Project = "";
     /// <summary>Only the emails of one mailbox / archive (e.g. "pst:…" for an archive read directly).</summary>
     public string Store = "";
+    /// <summary>A phrase may have up to this many words in between ("fire hose cabinet" finds "fire hose reel cabinet").</summary>
+    public int Near = 0;
 }
 
 /// <summary>
@@ -313,6 +349,32 @@ static class MailIndex
             File.WriteAllBytes(f, ProtectedData.Protect(key, Entropy, DataProtectionScope.CurrentUser));
         }
         return Convert.ToHexString(key);
+    }
+
+    /// <summary>Renamed / moved archives: old Outlook store address → new one.</summary>
+    public static string MovedStore(string oldId)
+    {
+        try { var m = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(Store.Str("win_store_moved", "{}")); return m != null && m.TryGetValue(oldId, out var v) ? v : ""; }
+        catch { return ""; }
+    }
+
+    /// <summary>Every email of a renamed / moved archive now points to its new file (one step, no re-indexing).</summary>
+    public static void MoveStore(string oldId, string newId)
+    {
+        Dictionary<string, string> m;
+        try { m = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(Store.Str("win_store_moved", "{}")) ?? new(); } catch { m = new(); }
+        m[oldId] = newId;
+        foreach (var k in m.Keys.ToList()) if (m[k] == oldId) m[k] = newId;
+        Store.Set("win_store_moved", System.Text.Json.JsonSerializer.Serialize(m));
+        int n;
+        using (var c = Open())
+        using (var cmd = c.CreateCommand())
+        {
+            cmd.CommandText = "UPDATE mail SET store=$n WHERE store=$o";
+            cmd.Parameters.AddWithValue("$n", newId); cmd.Parameters.AddWithValue("$o", oldId);
+            n = cmd.ExecuteNonQuery();
+        }
+        Log.Warn("archives", $"🔗 a renamed / moved archive was found again in Outlook — {n:N0} emails linked to it");
     }
 
     public static SqliteConnection Open()
@@ -1058,7 +1120,7 @@ static class MailIndex
             try { MailProjects.Ensure(); } catch { }
             where.Add(q.Project == "?"
                 ? "m.id NOT IN (SELECT id FROM mproj WHERE proj<>'')"
-                : $"(m.id IN (SELECT id FROM mproj WHERE proj={P(q.Project)}) OR m.id NOT IN (SELECT id FROM mproj))");
+                : $"(m.id IN (SELECT id FROM mproj WHERE proj={P(q.Project)}) OR m.id NOT IN (SELECT id FROM mproj WHERE proj<>''))");   // + unsorted ones (checked by Fits)
         }
 
         var words = q.Words.Select(Fold).Where(w => w.Length > 0).ToList();
@@ -1068,12 +1130,19 @@ static class MailIndex
             if (Fts)
             {
                 var parts = words.Select(w => "\"" + w + "\"*").ToList();
-                if (phrase.Length > 0) parts.Add("\"" + phrase + "\"");
+                if (phrase.Length > 0)
+                {
+                    var toks = System.Text.RegularExpressions.Regex.Split(phrase, @"[^\p{L}\p{N}]+").Where(t => t.Length > 0).ToList();
+                    parts.Add(q.Near > 0 && toks.Count >= 2
+                        ? "NEAR(" + string.Join(" ", toks.Select((t, i) => "\"" + t + "\"" + (i == toks.Count - 1 ? "*" : ""))) + ", " + q.Near + ")"
+                        : "\"" + phrase + "\"");
+                }
                 where.Add($"m.id IN (SELECT rowid FROM mail_fts WHERE mail_fts MATCH {P(string.Join(" AND ", parts))})");
             }
             else
             {
-                foreach (var w in words.Append(phrase).Where(w => w.Length > 0))
+                var ws = q.Near > 0 ? words.Concat(phrase.Split(' ', StringSplitOptions.RemoveEmptyEntries)) : words.Append(phrase);
+                foreach (var w in ws.Where(w => w.Length > 0))
                 {
                     var like = P("%" + w + "%");
                     where.Add($"(m.subject LIKE {like} OR m.body LIKE {like} OR m.att_names LIKE {like} OR m.att_text LIKE {like} OR m.from_name LIKE {like})");

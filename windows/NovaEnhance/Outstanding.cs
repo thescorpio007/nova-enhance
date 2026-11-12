@@ -238,7 +238,7 @@ static class Outstanding
         dynamic item = null, conv = null, table = null;
         try
         {
-            item = ns.GetItemFromID(h.Entry, h.StoreId);
+            item = Outlook.Item(ns, h.Entry, h.StoreId);
             conv = item.GetConversation();
             if (conv == null) return false;
             table = conv.GetTable();
