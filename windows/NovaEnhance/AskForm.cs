@@ -1623,6 +1623,7 @@ class BriefForm : NovaForm
         {
             if (settingSplit || split.Panel2Collapsed || split.Width < 600) return;
             Store.SetInt("win_brief_pane_pct", Math.Clamp((int)Math.Round(100.0 * split.Panel2.Width / split.Width), 22, 60));
+            BeginInvoke(() => Relayout(false));   // dragging the divider may change the layout (columns ↔ one list)
         };
         split.Panel1.BackColor = split.Panel2.BackColor = Th.Bg;
         one = new Stack { Padding = new Padding(16, 4, 8, 8) };
@@ -1738,7 +1739,9 @@ class BriefForm : NovaForm
     void Relayout(bool force)
     {
         var w = ClientSize.Width;
-        int m = w >= 1800 ? 2 : w >= 1300 || talkOpen ? 1 : 0;
+        // Columns only when the LIST side (the window minus the email pane) is wide enough — never squeezed columns.
+        var paneW = (int)(w * Store.Int("win_brief_pane_pct", 33) / 100.0);
+        int m = w - paneW >= 1150 ? 2 : w >= 1300 || talkOpen ? 1 : 0;
         if (m != mode)
         {
             mode = m;
@@ -1814,8 +1817,26 @@ class BriefForm : NovaForm
         finally { rechecking = false; }
     }
 
+    /// <summary>Columns with nothing to show (follow-ups off, no meeting, no FYI) take no room: the waiting list gets it.</summary>
+    void FitColumns(int fyCount)
+    {
+        if (mode != 2) return;
+        bool aOn = (Store.FollowUps && lastFollow.Count > 0) || (lastMeetings?.Count ?? 0) > 0;
+        bool cOn = fyCount > 0;
+        cols.SuspendLayout();
+        cols.ColumnStyles[0] = aOn ? new ColumnStyle(SizeType.Percent, 30f) : new ColumnStyle(SizeType.Absolute, 0);
+        cols.ColumnStyles[1] = new ColumnStyle(SizeType.Percent, 40f);
+        cols.ColumnStyles[2] = cOn ? new ColumnStyle(SizeType.Percent, 30f) : new ColumnStyle(SizeType.Absolute, 0);
+        colA.Visible = aOn; colC.Visible = cOn;
+        var home = cOn ? colC : colB;   // the signature stays visible
+        if (sign.Parent != home) { sign.Parent?.Controls.Remove(sign); home.Add(sign); }
+        cols.ResumeLayout(true);
+        cols.PerformLayout();
+    }
+
     void Draw()
     {
+        if (mode == 2) FitColumns(lastNeeds.Count(h => h.Status == "fyi"));
         var w = ListWidth(colB);
         lastW = w;
         if (lastNeeds.Count + lastFollow.Count > 0 || !busy) Counts();
