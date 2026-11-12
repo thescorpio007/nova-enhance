@@ -109,6 +109,18 @@ static class Ai
     static readonly HttpClient SlowHttp = new(new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(5) }) { Timeout = TimeSpan.FromMinutes(10) };
     static readonly Dictionary<string, int> ThinkMode = new();
 
+    /// <summary>Who answered the last question (shown under the answer when another AI stood in).</summary>
+    public static string LastBy = "";
+
+    /// <summary>The cloud AI that stands in for the local one: your default if it is cloud, then Gemini, then any key.</summary>
+    static Provider CloudBackup()
+    {
+        var a = Active();
+        if (a != null && a.Id != "local") return a;
+        if (HasKey("gemini")) return ById("gemini");
+        return WithKeys.FirstOrDefault(x => x.Id != "local");
+    }
+
     class Busy : Exception { public Busy(string m) : base(m) { } }
 
     /// <summary>One question, one answer. Retries busy/connection errors twice.</summary>
@@ -116,18 +128,25 @@ static class Ai
     {
         if (p != null) return await ChatOne(system, user, fast, json, p, ct);
         var first = Current();
-        try { return await ChatOne(system, user, fast, json, first, ct); }
+        try { var r0 = await ChatOne(system, user, fast, json, first, ct); LastBy = LabelOf(first); return r0; }
         catch (AiException e) when (!ct.IsCancellationRequested)
         {
             var others = new List<Provider>();
             // Local AI not running or too slow → your cloud AI (routing rule).
-            if (first?.Id == "local" && Route != "manual") { var cloud = Active(); if (cloud != null && cloud.Id != "local") others.Add(cloud); }
+            // LM Studio closed (option A): the question goes to Gemini instead — unless it holds private words (those stay on this PC).
+            bool down = e.Message.Contains("not running", StringComparison.OrdinalIgnoreCase);
+            if (first?.Id == "local" && (Route != "manual" || down))
+            {
+                if (Projects.Private.IsMatch(system + " " + user))
+                { if (down) throw new AiException("LM Studio is closed, and this question holds private words (bank, password…) so Nova kept it on this PC — start LM Studio (Developer → Start server) and ask again"); }
+                else if (CloudBackup() is { } cloud) others.Add(cloud);
+            }
             // Your AI is busy? Settings → ✦ Prompts: use my other AI key.
             if (Store.Str("win_ai_busy", "other") == "other" && Regex.IsMatch(e.Message, "busy|too long|429|503|500|overloaded|quota|rate", RegexOptions.IgnoreCase))
                 others.AddRange(WithKeys.Where(x => x.Id != first?.Id && !others.Contains(x)));
             foreach (var other in others)
             {
-                try { var r = await ChatOne(system, user, fast, json, other, ct); Log.Warn("ai", $"{LabelOf(first)}: {e.Message} — answered by {LabelOf(other)}"); return r; }
+                try { var r = await ChatOne(system, user, fast, json, other, ct); Log.Warn("ai", $"{LabelOf(first)}: {e.Message} — answered by {LabelOf(other)}"); LastBy = LabelOf(other) + (down ? " (LM Studio is closed)" : ""); return r; }
                 catch (AiException) { }
             }
             throw;

@@ -187,6 +187,10 @@ class TalkPanel : Panel
     {
         var t = (q ?? "").Trim().ToLowerInvariant();
         if (Regex.IsMatch(t, @"^(please\s+)?(only|hide|without|exclude|remove|keep|sort|group|which of (these|them)|of these|from this list|in this list)\b")) return false;
+        // A follow-up about what is already on screen ("When was it sent?", "who replied to that?") is answered, not searched.
+        if (Regex.IsMatch(t, @"^(when|who|whom|whose|where|why|how|what|which|did|does|do|was|were|is|are|has|have|had|can|could|tell me)\b") &&
+            Regex.IsMatch(t, @"\b(it|its|this|that|they|them|their|he|she|his|her|these|those|him)\b") &&
+            !Regex.IsMatch(t, @"\b(search|find|look for|all emails?|every)\b")) return false;
         if (listCount == 0) return true;
         return Regex.IsMatch(t, @"^(please\s+|can you\s+|nova,?\s+)?(find|search|look for|look up|get me|bring|show me (all|every|the emails?)|any emails?|all emails?|emails? (about|from|regarding|on|with))\b") ||
                Regex.IsMatch(t, @"\b(search (again|for|the mailbox|all)|find (all|every|me))\b");
@@ -356,7 +360,7 @@ class TalkPanel : Panel
                 if (!string.IsNullOrWhiteSpace(again) && Research != null) a += $"\n\n🔍 Searching again: “{again}”";
             }
             var cited = new HashSet<string>(Regex.Matches(a, @"\b([EADFMH]\d{1,3})\b").Select(x => x.Groups[1].Value));
-            var nova = new ConvMsg { Role = "nova", Text = a, Ai = Ai.LabelOf(Ai.Current()), Src = src.Where(s => cited.Contains(s.Id)).ToList() };
+            var nova = new ConvMsg { Role = "nova", Text = a, Ai = Ai.LastBy.Length > 0 ? Ai.LastBy : Ai.LabelOf(Ai.Current()), Src = src.Where(s => cited.Contains(s.Id)).ToList() };
             conv.Msgs.Add(nova);
             conv.Updated = DateTime.Now;
             Conversations.Save(conv);

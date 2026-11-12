@@ -81,7 +81,7 @@ static class Abbrev
         return res.Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
-    static readonly Regex Filler = new("^(the|and|for|with|this|that|from|please|check|find|show|email|emails|mail|about|what|which|are|was|were|have|has|you|your|our|any|all|can|in|on|of|to|a|an|is|it|be|by|at|or|as|do|me|my|types?|areas?|related|regarding|limited|only|project|projects|before|after|since|latest|new|send|sent|list|get|give|need|some|there)$");
+    static readonly Regex Filler = new("^(the|and|for|with|this|that|from|please|check|find|show|email|emails|mail|about|what|which|are|was|were|have|has|you|your|our|any|all|can|in|on|of|to|a|an|is|it|be|by|at|or|as|do|me|my|types?|areas?|related|regarding|limited|only|project|projects|before|after|since|latest|new|send|sent|list|get|give|need|some|there|when|who|whom|whose|where|why|how|did|does|done|tell|they|them|their|he|she|his|her|him|these|those|its|was|been)$");
 
     /// <summary>A question → groups of terms (each group = one idea with its other forms), without AI. Phrases stay together.</summary>
     public static List<List<string>> Groups(string question)
