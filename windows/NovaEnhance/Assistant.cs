@@ -82,7 +82,7 @@ Rules:
             if (sx.Any) user.Append("\n(Nova applies these rules itself, do not repeat them: " + sx.Describe() + ")");
             // Privacy A: only the question (and the dates above) leave the PC.
             // ⏱ The AI has 20 s to understand; after that Nova plans the search itself (ideas + short forms) and carries on.
-            try { f = Ai.ParseJson(await SearchGate.Limit(t => Ai.Chat(ParseSystem, user.ToString(), true, true, SmartSearch.Cloud(), t), 20, ct)); }
+            try { f = Ai.ParseJson(await SmartSearch.CloudChat(ParseSystem, user.ToString(), 20, ct)); }
             catch (OperationCanceledException) { throw; }
             catch (Exception e) { Log.Warn("ask", "understand: " + e.Message); f = LocalParse(question); ans.Slow = true; }
         }
@@ -190,6 +190,7 @@ Rules:
         if (sx.Any) ans.Explain = sx.Describe() + (ans.Explain.Length > 0 ? " · " + ans.Explain : "");
         if (ans.Slow) ans.Explain = "⏱ the AI took more than 20 s, so Nova planned the search itself · " + ans.Explain.Replace(" (no AI key — simple search)", "");
         if (ans.Explain.Length == 0) ans.Explain = Describe(q);
+        ans.Hits = ans.Hits.GroupBy(MailIndex.SameKey).Select(g => g.First()).ToList();   // the same email from two archives: once
         ans.Seconds = sw.Elapsed.TotalSeconds;
         return ans;
     }
@@ -255,6 +256,8 @@ Rules:
     }
 
     /// <summary>Without the AI (no key, or the AI too slow): dates, then the important words — filler words and the project left out.</summary>
+    static readonly Regex Instruction = new(@"^(show|find|search|look|check|list|give|get|bring|display|all|every|each|any|old|older|oldest|earliest|new|newer|newest|latest|recent|recently|approved|approve|approval|approvals|accepted|please|me|my|kindly|history)$", RegexOptions.IgnoreCase);
+
     static JsonObject LocalParse(string q)
     {
         var o = new JsonObject { ["intent"] = "search" };
@@ -302,11 +305,16 @@ Rules:
         var projWords = proj == null ? new List<string>() : proj.Codes.Append(proj.Code).Concat(proj.Name.Split(' ')).Where(x => x.Length > 1).ToList();
         if (Regex.IsMatch(t, @"\b(sent by me|i sent|my emails)\b", RegexOptions.IgnoreCase)) o["folder"] = "sent";
         if (Regex.IsMatch(t, @"\bwith attachments?\b", RegexOptions.IgnoreCase)) o["has_attachments"] = true;
-        var words = Regex.Split(t, @"[^\p{L}\p{N}\-]+").Where(w => w.Length > 1 && !Stop.Contains(w) && !projWords.Contains(w, StringComparer.OrdinalIgnoreCase) && !Regex.IsMatch(w, @"^\d{4}$")).Distinct(StringComparer.OrdinalIgnoreCase).Take(8).ToArray();
-        var arr = new JsonArray(); foreach (var w in words) arr.Add(w);
+        // Instruction words say HOW to search (old → oldest first, approved → approval codes, all → every match), they are not search words.
+        var words = Regex.Split(t, @"[^\p{L}\p{N}\-]+").Where(w => w.Length > 1 && !Stop.Contains(w) && !projWords.Contains(w, StringComparer.OrdinalIgnoreCase) && !Regex.IsMatch(w, @"^\d{4}$") && !Instruction.IsMatch(w)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        // "samples" is the SSM idea when SSM is asked too (otherwise it stays as "sample").
+        if (words.Any(w => w.Equals("SSM", StringComparison.OrdinalIgnoreCase))) words.RemoveAll(w => Regex.IsMatch(w, @"^samples?$", RegexOptions.IgnoreCase));
+        else words = words.Select(w => Regex.IsMatch(w, @"^samples$", RegexOptions.IgnoreCase) ? "sample" : w).ToList();
+        var wordsArr = words.Take(8).ToArray();
+        var arr = new JsonArray(); foreach (var w in wordsArr) arr.Add(w);
         o["words"] = arr;
-        o["clean"] = string.Join(" ", words);
-        o["explain"] = (proj != null ? "📁 " + proj.Code + " only · " : "") + (notes.Count > 0 ? string.Join(" · ", notes) + " · " : "") + "Words: " + string.Join(", ", words) + (Ai.Active() == null ? " (no AI key — simple search)" : "");
+        o["clean"] = string.Join(" ", wordsArr);
+        o["explain"] = (proj != null ? "📁 " + proj.Code + " only · " : "") + (notes.Count > 0 ? string.Join(" · ", notes) + " · " : "") + "Words: " + string.Join(", ", wordsArr) + (Ai.Active() == null ? " (no AI key — simple search)" : "");
         return o;
     }
 

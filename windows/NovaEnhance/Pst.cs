@@ -201,6 +201,19 @@ static class Pst
 
     public static void Start()
     {
+        // Old "cannot access" messages for archives Outlook has open → the real state.
+        try
+        {
+            var inOutlook = Archives.StoreFiles();
+            foreach (var x in All.Values.Where(x => x.Status.StartsWith("⚠") && x.Status.Contains("being used by another process")))
+            {
+                var name = inOutlook.FirstOrDefault(o => o.Value.Equals(x.Path, StringComparison.OrdinalIgnoreCase)).Key;
+                x.Status = name != null ? $"✓ open in Outlook as “{name}” — indexed through Outlook" : "⏸ in use by Outlook — indexed through Outlook while it is open there";
+                Save(x);
+            }
+        }
+        catch { }
+
         if (thread != null) return;
         thread = new Thread(() => Guard.Run("archive reader", Loop)) { IsBackground = true, Name = "Nova pst", Priority = ThreadPriority.BelowNormal };
         thread.Start();
@@ -225,6 +238,11 @@ static class Pst
             }
             stopNow = false;
             try { IndexOne(next); }
+            catch (IOException e) when (e.Message.Contains("being used by another process"))
+            {
+                // Outlook (or another program) has the file open: not an error — when Outlook has it, it is indexed through Outlook.
+                next.Status = "⏸ in use by Outlook — indexed through Outlook while it is open there"; next.Queued = false; Save(next);
+            }
             catch (Exception e) { next.Status = "⚠ " + e.Message; next.Queued = false; Save(next); Log.Error("archive reader · " + next.Name, e); }
         }
     }

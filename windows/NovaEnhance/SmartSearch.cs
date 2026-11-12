@@ -299,7 +299,9 @@ static class SmartSearch
         var most = scored.Where(x => x.Strong >= need).ToList();
         var pass = strict.Count >= 5 || n <= 1 ? "every idea" : most.Count >= 5 ? $"most ideas ({need} of {n})" : "any idea";
         var pool = (strict.Count >= 5 || n <= 1 ? strict : most.Count >= 5 ? most : scored.Where(x => x.Strong >= 1 || semantic.Contains(x.H.Id)).ToList())
-            .OrderByDescending(x => x.S).ThenByDescending(x => x.H.Date).Take(60).ToList();
+            .OrderByDescending(x => x.S).ThenByDescending(x => x.H.Date)
+            .GroupBy(x => MailIndex.SameKey(x.H)).Select(g => g.First())   // the same email in two archives / the mailbox: once
+            .Take(60).ToList();
         // Why each email is there (shown under it, even without the AI).
         foreach (var x in pool)
         {
@@ -322,7 +324,7 @@ static class SmartSearch
                                     : "Keep at most 15 (fewer is better when only a few fit). Drop emails about another subject that only mention the words in passing. ") +
                           (wantsApproved ? "Approval is often not written in the email: a returned / signed submittal with comments, Code 1 or Code 2, approved as noted all count. " : "") +
                           "Understand construction short forms (FHC fire hose cabinet, SS stainless steel, BOH back of house, SSM material submittal, SDS shop drawing, WIR inspection request, blockwork = block wall…).";
-                var j = Ai.ParseJson(await SearchGate.Limit(t => Ai.Chat(sys, sb.ToString(), true, true, ai, t), 25, ct));
+                var j = Ai.ParseJson(await CloudChat(sys, sb.ToString(), 25, ct));
                 var keep = new List<MailHit>();
                 foreach (var k in j["keep"]?.AsArray() ?? new JsonArray())
                     if (int.TryParse(k?["i"]?.ToString(), out var i) && i >= 1 && i <= pool.Count && !keep.Contains(pool[i - 1].H))
@@ -356,6 +358,21 @@ static class SmartSearch
                      $"  —  {queries} searches · all years · matched {pass}" + precision + (semantic.Count > 0 ? $" · meaning search {semantic.Count}" : "") +
                      $" · {count.Count:N0} candidates → {r.Hits.Count} best{years}" + (reranked ? $" (✦ {Ai.LabelOf(ai)} picked)" : slow ? " (the AI was slow — best scored shown)" : "");
         return r;
+    }
+
+    /// <summary>The search AI with a second try: when it is busy or slow, once more with another cloud AI you have a key for
+    /// (or the same one, shorter) before Nova goes on without it.</summary>
+    public static async Task<string> CloudChat(string sys, string user, int seconds, CancellationToken ct)
+    {
+        var first = Cloud();
+        try { return await SearchGate.Limit(t => Ai.Chat(sys, user, true, true, first, t), seconds, ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception e)
+        {
+            var second = Ai.WithKeys.FirstOrDefault(p => p.Id != "local" && p.Id != first?.Id) ?? first;
+            Activity.Current?.Mark("AI second try", $"{Ai.LabelOf(first)}: {e.Message} → {Ai.LabelOf(second)}");
+            return await SearchGate.Limit(t => Ai.Chat(sys, user, true, true, second, t), Math.Max(10, seconds / 2), ct);
+        }
     }
 
     /// <summary>Approval in the subject, attachment names or new text: Code 1 / Code 2 / A / B, approved (as noted), no objection, signed submittal with comments.</summary>

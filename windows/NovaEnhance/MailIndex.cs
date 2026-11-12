@@ -351,6 +351,10 @@ static class MailIndex
         return Convert.ToHexString(key);
     }
 
+    /// <summary>The same email kept in two places (archive1 and archive2, or an archive and the mailbox): same subject, minute and sender.</summary>
+    public static string SameKey(MailHit h) =>
+        System.Text.RegularExpressions.Regex.Replace((h.Subject ?? "").ToLowerInvariant(), @"\s+", " ").Trim() + "|" + h.Date.ToString("yyyyMMddHHmm") + "|" + (h.FromAddr ?? h.FromName ?? "").ToLowerInvariant() + "|" + (h.Sent ? "s" : "r");
+
     /// <summary>Renamed / moved archives: old Outlook store address → new one.</summary>
     public static string MovedStore(string oldId)
     {
