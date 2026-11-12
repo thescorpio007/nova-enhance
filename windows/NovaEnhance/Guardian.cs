@@ -166,7 +166,8 @@ static class Guard
                 if (frozenChecks >= 3)
                 {
                     Crash($"Nova was frozen for {(int)silent.TotalSeconds} s — restarted by the Guardian");
-                    try { nova.Kill(true); } catch { }
+                    try { nova.Kill(true); } catch { try { nova.Kill(); } catch (Exception e) { Crash("could not close the frozen Nova: " + e.Message); } }
+                    try { nova.WaitForExit(10000); } catch { }
                     frozenChecks = 0;
                 }
             }

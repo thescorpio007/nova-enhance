@@ -417,8 +417,9 @@ static class Server
             try
             {
                 cert = OfficeAddin.Cert();
-                v4 = new TcpListener(IPAddress.Loopback, port); v4.Start(); _ = Accept(v4, true);
-                try { v6 = new TcpListener(IPAddress.IPv6Loopback, port); v6.Start(); _ = Accept(v6, true); } catch { v6 = null; }
+                // On background threads: the add-in must never wait for (or block) Nova's window thread.
+                v4 = new TcpListener(IPAddress.Loopback, port); v4.Start(); var l4 = v4; _ = Task.Run(() => Accept(l4, true));
+                try { v6 = new TcpListener(IPAddress.IPv6Loopback, port); v6.Start(); var l6 = v6; _ = Task.Run(() => Accept(l6, true)); } catch { v6 = null; }
                 LastError = "";
             }
             catch (Exception e) { LastError = e.Message; v4 = null; Log.Error("Office add-in · panel server", e); }
@@ -428,7 +429,7 @@ static class Server
     public static void StartBrowser()
     {
         if (web != null || !BrowserAddon.On) return;
-        try { web = new TcpListener(IPAddress.Loopback, BrowserAddon.Port); web.Start(); _ = Accept(web, false); }
+        try { web = new TcpListener(IPAddress.Loopback, BrowserAddon.Port); web.Start(); var lw = web; _ = Task.Run(() => Accept(lw, false)); }
         catch (Exception e) { web = null; LastError = e.Message; Log.Error("Browser add-on · server", e); }
     }
 

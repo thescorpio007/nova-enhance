@@ -63,12 +63,12 @@ static class BriefRules
         if (ai && b.AiCheck.Length > 0 && undecided.Count > 0 && SmartSearch.Cloud() != null)
             try
             {
-                var send = undecided.Where(h => !Projects.Private.IsMatch((h.Subject ?? "") + " " + h.FirstLines(200))).Take(60).ToList();
+                var send = undecided.Where(h => !Projects.Private.IsMatch((h.Subject ?? "") + " " + h.FirstLines(200))).Take(40).ToList();
                 var sb = new StringBuilder($"My instructions: {b.Instructions}\nWhat to judge: {b.AiCheck}\nEmails:\n");
                 for (int i = 0; i < send.Count; i++) sb.Append($"[{i + 1}] {send[i].Date:dd MMM} · {send[i].FromName} · {send[i].Subject} · “{send[i].FirstLines(240)}”\n");
                 var sys = "You sort emails for an architect's morning brief following HIS instructions. Reply with JSON only: {\"e\":[{\"i\":1,\"group\":\"urgent|waiting|fyi|hide\",\"why\":\"3-8 words\"}]}. " +
                           "Give a group only when the instructions say something about that email; otherwise leave it out.";
-                var j = Ai.ParseJson(await SearchGate.Limit(t => Ai.Chat(sys, sb.ToString(), true, true, SmartSearch.Cloud(), t), 45, ct));
+                var j = Ai.ParseJson(await SearchGate.Limit(t => Ai.Chat(sys, sb.ToString(), true, true, SmartSearch.Cloud(), t), 90, ct));
                 foreach (var x in j["e"]?.AsArray() ?? new JsonArray())
                 {
                     if (!int.TryParse(x?["i"]?.ToString(), out var i) || i < 1 || i > send.Count) continue;
