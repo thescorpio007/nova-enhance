@@ -258,7 +258,7 @@ class MailAskForm : NovaForm
         var t = new Thread(() => { try { tcs.SetResult(f()); } catch (Exception e) { tcs.SetException(e); } }) { IsBackground = true };
         t.SetApartmentState(ApartmentState.STA);
         t.Start();
-        return tcs.Task;
+        return Guard.Limit(tcs.Task, 60, "Outlook");
     }
 
     static readonly Regex RefRx = new(@"\b[A-Z][A-Z0-9]{1,6}(?:-[A-Z0-9]{1,8}){2,9}\b");

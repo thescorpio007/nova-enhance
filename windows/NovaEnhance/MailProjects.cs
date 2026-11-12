@@ -102,7 +102,7 @@ static class MailProjects
         if (thread != null) return;
         // Build 52: stricter rules (documents of another project are never claimed) → sort once again.
         if (Store.Int("win_mproj_ver", 0) < 2) { redo = true; Store.SetInt("win_mproj_ver", 2); }
-        thread = new Thread(Loop) { IsBackground = true, Name = "Nova email projects", Priority = ThreadPriority.BelowNormal };
+        thread = new Thread(() => Guard.Run("email projects", Loop)) { IsBackground = true, Name = "Nova email projects", Priority = ThreadPriority.BelowNormal };
         thread.Start();
     }
 

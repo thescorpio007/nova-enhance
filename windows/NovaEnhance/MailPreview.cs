@@ -23,7 +23,7 @@ static class MailPreview
         var t = new Thread(() => { try { tcs.SetResult(f()); } catch (Exception e) { tcs.SetException(e); } }) { IsBackground = true };
         t.SetApartmentState(ApartmentState.STA);
         t.Start();
-        return tcs.Task;
+        return Guard.Limit(tcs.Task, 60, "Outlook");
     }
 
     static string H(string s) => System.Net.WebUtility.HtmlEncode(s ?? "");

@@ -1491,6 +1491,21 @@ class SettingsForm : NovaForm
 
     void ErrorLog()
     {
+        // 🛡 Anti-crash: Guardian, safe background jobs, Outlook time limits, safe mode, crash reports.
+        page.Add(Th.Section("🛡 Anti-crash"));
+        if (Guard.SafeMode)
+        {
+            Note($"🛡 SAFE MODE — the background jobs are off because {Guard.SafeReason}. Switch them on below; if Nova closes again, the Error log shows which job it was.", Th.Warn);
+            var sr = page.Add(Th.Row(false));
+            sr.Controls.Add(Th.B("▶ Start all background jobs", () => { Guard.SafeMode = false; NovaContext.StartJobs(); Guard.StartOk(); Draw("Error log"); }, true));
+            sr.Controls.Add(Th.B("✉ Email index only", () => { MailIndex.Start(); IndexProgress.Start(); }));
+            sr.Controls.Add(Th.B("📁 Project folders only", () => Projects.Indexer.Start()));
+            sr.Controls.Add(Th.B("📖 Reading files only", () => Projects.ReadAll.Start()));
+            sr.Controls.Add(Th.B("📁 Email projects only", () => MailProjects.Start()));
+        }
+        page.Add(Th.Check("🛡 Guardian — restart Nova by itself if it closes unexpectedly or freezes (at most 3 times in 10 minutes)", Guard.On, v => { Guard.On = v; if (v) Guard.StartGuardian(); }));
+        Note("Each background job (email index, project folders, reading files, email projects, meaning search) is protected: if one fails, only that job stops and restarts a minute later. Calls to Outlook have a time limit, so a busy Outlook can't freeze Nova. After two starts that don't finish, Nova opens in safe mode. Every crash or restart is written here and in 🧪 Activity history.", Th.Muted);
+        if (Guard.JobsLine() is { Length: > 0 } jl) Note(jl, Th.Warn); else Note("✓ No background job has failed since Nova started.", Th.Good);
         var entries = Log.ReadAll();
         var today = entries.Where(e => e.Time.Date == DateTime.Today).ToList();
         var stats = page.Add(Th.Row(false));

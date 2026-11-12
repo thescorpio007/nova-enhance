@@ -17,6 +17,9 @@ static class Program
     {
         if (args.Contains("--smoke")) return Smoke.Run(args);
         if (args.Contains("--update-selftest")) return Updater.SelfTest(args);
+        // 🛡 The Guardian: a second copy that only watches Nova (restarts it after a crash or a freeze).
+        if (args.Contains("--guardian")) { Application.EnableVisualStyles(); return Guard.Watch(args); }
+        Restored = args.Contains("--restored");
 
         // Right-click a folder → "Search inside with Nova" starts NovaEnhance.exe --search "<folder>".
         var searchIdx = Array.IndexOf(args, "--search");
@@ -44,12 +47,15 @@ static class Program
         Application.SetCompatibleTextRenderingDefault(false);
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
         Application.ThreadException += (_, e) => Log.Error("ui", e.Exception);
-        AppDomain.CurrentDomain.UnhandledException += (_, e) => Log.Write("crash: " + e.ExceptionObject);
+        AppDomain.CurrentDomain.UnhandledException += (_, e) => { Guard.LastWords(e.ExceptionObject); Log.Write("crash: " + e.ExceptionObject); };
+        Microsoft.Win32.SystemEvents.SessionEnding += (_, _) => Guard.CleanExit();
         TaskScheduler.UnobservedTaskException += (_, e) => { Log.Error("task", e.Exception); e.SetObserved(); };
 
         Application.Run(new NovaContext(args.Contains("--tray") || StartSearch != null));
         return 0;
     }
+
+    public static bool Restored;
 
     public static void Balloon(string title, string text)
     {
@@ -71,17 +77,23 @@ class NovaContext : ApplicationContext
         Program.UiContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
         Paths.Ensure();
         Store.Load();
+        // 🛡 Two starts that never finished → safe mode (background jobs off, you switch them on one by one).
+        Guard.BeginStart();
         Startup.Apply();
         ExplorerMenu.Apply();
 
         tray = new NotifyIcon { Icon = Th.AppIcon, Text = "Nova Enhance", Visible = true };
         Program.Tray = tray;
         // ⏳ Pointing at the tray icon shows the email index progress.
-        IndexProgress.Start();
-        Projects.Indexer.Start();
-        Projects.ReadAll.Start();
-        Semantic.Start();
-        MailProjects.Start();
+        if (!Guard.SafeMode) StartJobs();
+        Guard.StartGuardian();
+        // 💓 The Guardian sees Nova is alive (and not frozen).
+        var beat = new System.Windows.Forms.Timer { Interval = 10000 };
+        beat.Tick += (_, _) => Guard.Heartbeat();
+        beat.Start();
+        var okTimer = new System.Windows.Forms.Timer { Interval = 60000 };
+        okTimer.Tick += (_, _) => { okTimer.Stop(); if (!Guard.SafeMode) Guard.StartOk(); };
+        okTimer.Start();
         var trayTip = new System.Windows.Forms.Timer { Interval = 5000 };
         trayTip.Tick += (_, _) =>
         {
@@ -139,7 +151,6 @@ class NovaContext : ApplicationContext
             Program.UiContext.Post(_ => Screens.FolderSearch(p), null);
         }, null, -1, false);
 
-        MailIndex.Start();
         if (Store.Bool("win_addin", false) || Store.Bool("win_addin_it", false))
         {
             Server.Start();
@@ -154,7 +165,27 @@ class NovaContext : ApplicationContext
         Program.UiContext.Post(_ =>
         {
             if (Program.StartSearch != null) Screens.FolderSearch(Program.StartSearch);
-            FirstRun(startedWithWindows);
+            // 🛡 Restarted by the Guardian: say so, keep the report, reopen the window you had.
+            if (Program.Restored)
+            {
+                var what = Guard.TakeCrashReport();
+                tray.ShowBalloonTip(10000, "🛡 Nova Enhance restarted", (what.Length > 0 ? what.Split('\n').Last().Trim() : "Nova closed unexpectedly") + " — the details are in Settings → Error log.", ToolTipIcon.Warning);
+                switch (Guard.LastScreenName())
+                {
+                    case "ask": Screens.Ask(); break;
+                    case "find": Screens.FindFile(null); break;
+                    case "folder": Screens.FolderSearch(null); break;
+                    case "brief": Screens.Brief(); break;
+                    case "hub": Screens.Hub(null); break;
+                    case "work": Screens.Work(null); break;
+                }
+            }
+            if (Guard.SafeMode)
+            {
+                tray.ShowBalloonTip(15000, "🛡 Nova Enhance — safe mode", $"Background jobs are off because {Guard.SafeReason}. Settings → Error log → 🛡 Anti-crash to switch them back on.", ToolTipIcon.Warning);
+                Screens.Settings("Error log");
+            }
+            else if (!Program.Restored) FirstRun(startedWithWindows);
             Tick();
         }, null);
     }
@@ -186,8 +217,21 @@ class NovaContext : ApplicationContext
         catch (Exception e) { Log.Error("tick", e); }
     }
 
+    /// <summary>The background jobs (each protected: a failure stops only that job, which restarts a minute later).</summary>
+    public static void StartJobs()
+    {
+        Guard.Stage("reading Outlook"); MailIndex.Start();
+        Guard.Stage("email index"); IndexProgress.Start();
+        Guard.Stage("project folders"); Projects.Indexer.Start();
+        Guard.Stage("reading project files"); Projects.ReadAll.Start();
+        Guard.Stage("meaning search"); Semantic.Start();
+        Guard.Stage("email projects"); MailProjects.Start();
+        Guard.Stage("started");
+    }
+
     void Quit()
     {
+        Guard.CleanExit();
         tray.Visible = false;
         MailIndex.Stop();
         Server.Stop();
@@ -237,6 +281,7 @@ static class Screens
 
     public static void Work(string id)
     {
+        Guard.Screen("work");
         try
         {
             if (work == null || work.IsDisposed) work = new WorkForm();
@@ -266,6 +311,7 @@ static class Screens
 
     public static void Hub(string text)
     {
+        Guard.Screen("hub");
         try
         {
             if (hub == null || hub.IsDisposed) hub = new HubForm();
@@ -288,6 +334,7 @@ static class Screens
 
     public static void FolderSearch(string path)
     {
+        Guard.Screen("folder");
         if (folder == null || folder.IsDisposed) folder = new FolderSearchForm();
         Show(folder);
         folder.Begin(path);
@@ -336,6 +383,7 @@ static class Screens
     /// <summary>📂 Find a project file by name (optionally with a search already typed).</summary>
     public static void FindFile(string q)
     {
+        Guard.Screen("find");
         if (finder == null || finder.IsDisposed) finder = new FileFinderForm();
         Show(finder);
         if (!string.IsNullOrEmpty(q)) finder.Search(q);
@@ -358,6 +406,7 @@ static class Screens
 
     public static void Ask()
     {
+        Guard.Screen("ask");
         if (ask == null || ask.IsDisposed) ask = new AskForm();
         Show(ask);
         ask.FocusQuestion();
@@ -372,6 +421,7 @@ static class Screens
 
     public static void Brief()
     {
+        Guard.Screen("brief");
         if (brief == null || brief.IsDisposed) brief = new BriefForm();
         Show(brief);
         brief.Reload();

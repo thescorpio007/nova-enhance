@@ -141,6 +141,7 @@ static class Updater
         if (r == null) return "Nothing to install";
         try
         {
+            Guard.CleanExit();   // 🛡 an update is a normal exit: the Guardian must not restart the old version
             Process.Start(new ProcessStartInfo(r.File, "/VERYSILENT /SP- /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS") { UseShellExecute = true });
         }
         catch (Exception e) { return "Could not start the update: " + e.Message; }

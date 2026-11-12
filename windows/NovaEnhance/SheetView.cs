@@ -29,7 +29,7 @@ static class SheetReader
             if (!File.Exists(x))
             {
                 bool ok = false;
-                var t = new Thread(() => ok = OfficeConvert.Convert(path, x, "excel"));
+                var t = new Thread(Guard.Safe("excel convert", () => ok = OfficeConvert.Convert(path, x, "excel")));
                 t.SetApartmentState(ApartmentState.STA); t.Start(); t.Join(TimeSpan.FromMinutes(2));
                 if (!ok) throw new InvalidOperationException("Excel is needed to show old .xls / .xlsb files");
             }

@@ -408,7 +408,7 @@ static class MailIndex
     {
         if (th != null) return;
         stop = false;
-        th = new Thread(Loop) { IsBackground = true, Priority = ThreadPriority.BelowNormal, Name = "Nova mail index" };
+        th = new Thread(() => Guard.Run("email index", Loop)) { IsBackground = true, Priority = ThreadPriority.BelowNormal, Name = "Nova mail index" };
         th.SetApartmentState(ApartmentState.STA);
         th.Start();
     }

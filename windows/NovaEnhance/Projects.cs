@@ -588,7 +588,7 @@ static class Projects
         public static void Start()
         {
             if (thread != null) return;
-            thread = new Thread(Loop) { IsBackground = true, Name = "Nova projects", Priority = ThreadPriority.BelowNormal };
+            thread = new Thread(() => Guard.Run("project folders", Loop)) { IsBackground = true, Name = "Nova projects", Priority = ThreadPriority.BelowNormal };
             thread.Start();
         }
 
@@ -737,7 +737,7 @@ static class Projects
         public static void Start()
         {
             if (thread != null) return;
-            thread = new Thread(Loop) { IsBackground = true, Name = "Nova read all", Priority = ThreadPriority.Lowest };
+            thread = new Thread(() => Guard.Run("reading project files", Loop)) { IsBackground = true, Name = "Nova read all", Priority = ThreadPriority.Lowest };
             thread.SetApartmentState(ApartmentState.STA);
             thread.Start();
         }

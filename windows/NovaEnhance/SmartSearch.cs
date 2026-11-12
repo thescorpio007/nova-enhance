@@ -339,7 +339,7 @@ static class Semantic
     public static void Start()
     {
         if (thread != null) return;
-        thread = new Thread(Loop) { IsBackground = true, Name = "Nova meaning", Priority = ThreadPriority.Lowest };
+        thread = new Thread(() => Guard.Run("meaning search", Loop)) { IsBackground = true, Name = "Nova meaning", Priority = ThreadPriority.Lowest };
         thread.Start();
     }
 

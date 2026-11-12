@@ -704,7 +704,7 @@ class FolderSearchForm : NovaForm
         searchBtn.Text = "🔍 Search";
         stopBtn.Enabled = pauseBtn.Enabled = true; pauseBtn.Text = "⏸ Pause";
         status.Text = named.Count > 0 ? $"📛 {named.Count} found by name · now searching inside the files…" : "Searching…";
-        worker = new Thread(() => FolderIndex.Search(root, m, k, h => inbox.Enqueue((h, null)), path => inbox.Enqueue((null, path)), p, my.Token, opt))
+        worker = new Thread(Guard.Safe("folder search", () => FolderIndex.Search(root, m, k, h => inbox.Enqueue((h, null)), path => inbox.Enqueue((null, path)), p, my.Token, opt)))
         { IsBackground = true, Name = "Nova folder search", Priority = ThreadPriority.BelowNormal };
         worker.SetApartmentState(ApartmentState.STA);
         worker.Start();
