@@ -37,7 +37,7 @@ static class Pst
 
     // ------------------------------------------------------------------ opening a file
 
-    public class Opened { public X.XstFile File; public X.Folder Root; public string Fp = "", Path = "", Relinked = ""; }
+    public class Opened { public X.XstFile File; public X.Folder Root; public string Fp = "", Path = "", Relinked = "", Span = ""; }
 
     static readonly Dictionary<string, Opened> open = new(StringComparer.OrdinalIgnoreCase);
 
@@ -47,7 +47,9 @@ static class Pst
         if (shared) lock (open) if (open.TryGetValue(path, out var o0) && File.Exists(path)) return o0;
         var x = new X.XstFile(path);
         var root = x.ReadFolderTree();
-        var o = new Opened { File = x, Root = root, Path = path, Fp = Fingerprint(x, root) };
+        var o = new Opened { File = x, Root = root, Path = path };
+        o.Fp = Fingerprint(x, root, out var span);
+        o.Span = span;
         var known = All.TryGetValue(o.Fp, out var i) ? i : null;
         if (known != null && !known.Path.Equals(path, StringComparison.OrdinalIgnoreCase))
         {
@@ -60,12 +62,20 @@ static class Pst
     }
 
     /// <summary>The archive's fingerprint: its oldest emails (time + subject) — the same after a rename, a move or a copy.</summary>
-    static string Fingerprint(X.XstFile x, X.Folder root)
+    static string Fingerprint(X.XstFile x, X.Folder root, out string span)
     {
         var sample = new List<string>();
+        DateTime lo = DateTime.MaxValue, hi = DateTime.MinValue;
         foreach (var f in Walk(root).Where(f => f.ContentCount > 0).OrderByDescending(f => f.ContentCount).Take(3))
-            try { sample.AddRange(x.ReadMessages(f).OrderBy(m => m.Date ?? DateTime.MaxValue).Take(25).Select(m => $"{m.Date:O}|{m.Subject}")); f.Messages.Clear(); }
+            try
+            {
+                var ms = x.ReadMessages(f);
+                foreach (var m in ms) if (m.Date is { } d && d.Year > 1990) { if (d < lo) lo = d; if (d > hi) hi = d; }
+                sample.AddRange(ms.OrderBy(m => m.Date ?? DateTime.MaxValue).Take(25).Select(m => $"{m.Date:O}|{m.Subject}"));
+                f.Messages.Clear();
+            }
             catch { }
+        span = lo == DateTime.MaxValue ? "" : $"{lo:MMM yyyy} → {hi:MMM yyyy}";
         if (sample.Count == 0) sample.Add(root.Name + "|" + string.Join(",", Walk(root).Select(f => f.Name)));
         return Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes(string.Join("\n", sample))))[..16].ToLowerInvariant();
     }
@@ -204,6 +214,15 @@ static class Pst
         {
             var next = All.Values.FirstOrDefault(i => i.Queued && !i.Done && File.Exists(i.Path));
             if (next == null) { Current = ""; wake.WaitOne(TimeSpan.FromMinutes(5)); continue; }
+            // Option A: a file open in Outlook is indexed by Outlook — no double work.
+            var viaOutlook = Archives.StoreFiles().FirstOrDefault(x => x.Value.Equals(next.Path, StringComparison.OrdinalIgnoreCase)).Key;
+            if (viaOutlook != null)
+            {
+                next.Queued = false;
+                next.Status = $"✓ open in Outlook as “{viaOutlook}” — indexed via Outlook";
+                Save(next);
+                continue;
+            }
             stopNow = false;
             try { IndexOne(next); }
             catch (Exception e) { next.Status = "⚠ " + e.Message; next.Queued = false; Save(next); Log.Error("archive reader · " + next.Name, e); }

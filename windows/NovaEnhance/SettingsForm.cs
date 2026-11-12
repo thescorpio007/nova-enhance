@@ -493,16 +493,18 @@ class SettingsForm : NovaForm
         });
         void StatRows2()
         {
-            foreach (var sst0 in stats)
+            var files = Archives.StoreFiles();
+            foreach (var sst0 in stats.Where(x => x.Total > 0 || x.Indexed > 0))   // old names whose file is gone (0 of 0) are hidden
             {
                 var stName = sst0.Store;
+                var stFile = files.TryGetValue(stName, out var sf) ? sf : "";
                 statsBox.Controls.Add(new ProgressRow(() =>
                 {
-                    if (DateTime.Now - statsAt > TimeSpan.FromSeconds(5)) { stats = MailIndex.StoreStats(); statsAt = DateTime.Now; }
+                    if (DateTime.Now - statsAt > TimeSpan.FromSeconds(10)) { stats = MailIndex.StoreStats(); statsAt = DateTime.Now; }
                     var stX = stats.FirstOrDefault(y => y.Store == stName);
                     var stPc = stX.Total > 0 ? (int)Math.Min(100, 100L * stX.Indexed / stX.Total) : 100;
                     var stSpan = (stX.Oldest is { } o1 ? o1.ToString("dd MMM yyyy") : "—") + " → " + (stX.Newest is { } n1 ? n1.ToString("dd MMM yyyy") : "—");
-                    return ("✉ " + stName, stPc, $"{stX.Indexed:N0} of {stX.Total:N0} emails · {stSpan}", !IndexProgress.Now.Complete);
+                    return ("✉ " + stName, stPc, $"{stX.Indexed:N0} of {stX.Total:N0} emails · {stSpan}" + (stFile.Length > 0 && stFile.EndsWith(".pst", StringComparison.OrdinalIgnoreCase) ? $" · via Outlook · {stFile}" : ""), !IndexProgress.Now.Complete && stPc < 100);
                 }) { Width = Math.Max(500, statsBox.Parent?.ClientSize.Width - 70 ?? 900) });
             }
         }
@@ -518,10 +520,15 @@ class SettingsForm : NovaForm
             foreach (var a0 in found)
             {
                 var a1 = a0;
+                var viaOutlook = Archives.StoreFiles().Values.Contains(a1.Path, StringComparer.OrdinalIgnoreCase);
                 var arow2 = new FlowLayoutPanel { AutoSize = true, WrapContents = false, BackColor = Color.FromArgb(0x18, 0x1C, 0x24), Padding = new Padding(6, 3, 6, 3), Margin = new Padding(0, 2, 0, 2) };
-                arow2.Controls.Add(Th.L($"{(a1.Indexed ? "✓" : a1.Added ? "⏳" : "＋")} {a1.Path}   ·   {a1.Size / 1048576.0:N0} MB   ·   {(a1.Indexed ? "indexed" : a1.Added ? "waiting to be indexed" : "not in Nova yet")}", 9.5f, a1.Indexed ? Th.Good : Th.Text));
+                var spanLbl = Th.L("", 9.5f, Th.Muted);
+                arow2.Controls.Add(Th.L($"{(viaOutlook ? "✉" : a1.Indexed ? "✓" : a1.Added ? "⏳" : "＋")} {a1.Path}   ·   {a1.Size / 1048576.0:N0} MB   ·   {(viaOutlook ? "open in Outlook — indexed via Outlook (see above)" : a1.Indexed ? "indexed" : a1.Added ? "waiting to be indexed" : "not in Nova yet")}", 9.5f, viaOutlook || a1.Indexed ? Th.Good : Th.Text));
+                arow2.Controls.Add(spanLbl);
+                // Which years this file holds (read directly, in the background).
+                _ = Task.Run(() => { try { var oo = Pst.Open(a1.Path, false); return oo.Span; } catch { return ""; } }).ContinueWith(t => { try { if (!spanLbl.IsDisposed) spanLbl.BeginInvoke(() => spanLbl.Text = t.Result.Length > 0 ? "   ·   " + t.Result : ""); } catch { } });
                 // ⚡ Read directly (no Outlook, much faster) — replaces the slow Outlook way for this file.
-                arow2.Controls.Add(Th.B("⚡ Add directly", () => AddDirect(a1.Path)));
+                if (!viaOutlook) arow2.Controls.Add(Th.B("⚡ Add directly", () => AddDirect(a1.Path)));
                 arow2.Controls.Add(Th.B("📂 Open in reader", () => Screens.PstReader(a1.Path)));
                 if (a1.Added) arow2.Controls.Add(Th.B("Remove", () => { Archives.Remove(a1.Path); ShowArchives(Archives.Find()); }));
                 alist.Controls.Add(arow2);
@@ -541,7 +548,7 @@ class SettingsForm : NovaForm
             catch (Exception ex) { MessageBox.Show(this, "This file could not be read directly:\n" + ex.Message, "Nova Enhance"); }
         }
         // 📂 Archives read directly: one progress row each.
-        foreach (var px in Pst.All.Values.Where(x => x.Queued || x.Done || x.Indexed > 0))
+        foreach (var px in Pst.All.Values.Where(x => (x.Queued || x.Done || x.Indexed > 0) && !x.Status.Contains("via Outlook")))
         {
             var fpx = px.Fp;
             page.Add(new ProgressRow(() =>
@@ -578,19 +585,19 @@ class SettingsForm : NovaForm
         Note("A big archive takes several hours the first time (Outlook reads it email by email). Gentle indexing: older mail is read after working hours or when the PC is idle — ⚡ Index now reads at full speed.", Th.Muted);
         page.Add(Th.Section("Folders"));
         var left = MailIndex.LeftOut();
-        foreach (var g in folders.GroupBy(f => f.StoreName))
+        // One list with tick boxes (not hundreds of separate controls): the page scrolls smoothly.
+        var fl = page.Add(new ListView { View = View.Details, CheckBoxes = true, FullRowSelect = true, HeaderStyle = ColumnHeaderStyle.Nonclickable, Height = 360, BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.None, Font = Th.F(9.5f), ShowGroups = true }, true);
+        fl.Columns.Add("Folder", 520); fl.Columns.Add("Indexed", 110, HorizontalAlignment.Right); fl.Columns.Add("In Outlook", 110, HorizontalAlignment.Right);
+        var filling = true;
+        foreach (var g in folders.Where(f => f.Total > 0 || f.Indexed > 0).GroupBy(f => f.StoreName))
         {
-            var t = Th.L(g.Key.Length > 0 ? g.Key : "Mailbox", 10, Th.AccentText, true);
-            t.Margin = new Padding(0, 8, 0, 2);
-            page.Add(t);
-            foreach (var f in g)
-            {
-                var fid = f.Fid;
-                var cb = Th.Check($"{f.Path}    {f.Indexed:N0} / {f.Total:N0}", !left.Contains(fid), v => { MailIndex.SetLeftOut(fid, !v); });
-                cb.Margin = new Padding(16, 1, 0, 1);
-                page.Add(cb);
-            }
+            var grp = new ListViewGroup(g.Key.Length > 0 ? g.Key : "Mailbox");
+            fl.Groups.Add(grp);
+            foreach (var f in g) fl.Items.Add(new ListViewItem(new[] { f.Path, f.Indexed.ToString("N0"), f.Total.ToString("N0") }, grp) { Checked = !left.Contains(f.Fid), Tag = f.Fid });
         }
+        filling = false;
+        fl.ItemChecked += (_, e) => { if (!filling && e.Item.Tag is string fid) MailIndex.SetLeftOut(fid, !e.Item.Checked); };
+        Note("Untick a folder to leave it out of the index and of the answers.", Th.Muted);
     }
 
     // Options on one page share one parent, and Windows would treat them all as ONE group (picking an email source

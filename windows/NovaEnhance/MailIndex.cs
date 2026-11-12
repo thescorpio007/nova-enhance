@@ -624,7 +624,22 @@ static class MailIndex
 
     /// <summary>Every mail folder Nova has seen, with Outlook's count and how many are in the index.</summary>
     /// <summary>Per mailbox / archive: emails indexed, emails in Outlook, oldest and newest date.</summary>
+    static (DateTime At, List<(string, int, int, DateTime?, DateTime?)> V) statsCache;
+    static readonly object statsLock = new();
+
+    /// <summary>Shared by every progress row: counted at most every 10 s, by one reader at a time.</summary>
     public static List<(string Store, int Indexed, int Total, DateTime? Oldest, DateTime? Newest)> StoreStats()
+    {
+        lock (statsLock)
+        {
+            if (statsCache.V != null && DateTime.Now - statsCache.At < TimeSpan.FromSeconds(10)) return statsCache.V;
+            var v = StoreStatsNow();
+            statsCache = (DateTime.Now, v);
+            return v;
+        }
+    }
+
+    static List<(string Store, int Indexed, int Total, DateTime? Oldest, DateTime? Newest)> StoreStatsNow()
     {
         var res = new List<(string, int, int, DateTime?, DateTime?)>();
         try

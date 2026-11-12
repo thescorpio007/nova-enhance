@@ -19,6 +19,29 @@ static class Archives
     /// <summary>Outlook store id → file (to re-open it for "Open in Outlook").</summary>
     static Dictionary<string, string> Ids { get => Map("win_pst_ids"); set => Store.Set("win_pst_ids", JsonSerializer.Serialize(value)); }
 
+    /// <summary>Which file each mailbox / archive in Outlook is (name → .pst / .ost path), remembered at every index pass.</summary>
+    public static Dictionary<string, string> StoreFiles() => Map("win_store_files");
+
+    static void RememberStores(dynamic ns)
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        dynamic stores = ns.Stores;
+        try
+        {
+            for (int i = 1; i <= (int)stores.Count; i++)
+            {
+                dynamic st = stores.Item(i);
+                try { var p = Outlook.S(() => st.FilePath); var n = Outlook.S(() => st.DisplayName); if (p.Length > 0 && n.Length > 0) map[n] = p; } catch { }
+                finally { Outlook.Release(st); }
+            }
+        }
+        finally { Outlook.Release(stores); }
+        Store.Set("win_store_files", JsonSerializer.Serialize(map));
+    }
+
+    /// <summary>Files Nova opened in Outlook itself (only those are closed again — never one you opened).</summary>
+    static List<string> NovaOpened { get => Load("win_pst_nova_opened"); set => Store.Set("win_pst_nova_opened", JsonSerializer.Serialize(value ?? new())); }
+
     static string Stamp(string path) { try { var f = new FileInfo(path); return f.Length + "|" + f.LastWriteTimeUtc.Ticks; } catch { return ""; } }
 
     public static void Add(IEnumerable<string> paths)
@@ -95,14 +118,21 @@ static class Archives
         var added = new List<string>();
         try
         {
+            try { RememberStores(ns); } catch { }
             var extra = Extra;
             if (extra.Count == 0) return added;
             var open = OpenNow(ns);
+            var mine = NovaOpened;
             foreach (var p in extra)
             {
                 if (!File.Exists(p) || IsDone(p)) continue;
-                if (open.Contains(p, StringComparer.OrdinalIgnoreCase)) { added.Add(p); continue; }   // left open by a stopped pass: close it after this one
-                try { ns.AddStore(p); added.Add(p); Log.Warn("archives", "opened for indexing: " + p); }
+                if (open.Contains(p, StringComparer.OrdinalIgnoreCase))
+                {
+                    // Opened by Nova in a pass that stopped: close it after this one. Opened by YOU: leave it, it is indexed as a normal Outlook archive.
+                    if (mine.Contains(p, StringComparer.OrdinalIgnoreCase)) added.Add(p); else Remove(p);
+                    continue;
+                }
+                try { ns.AddStore(p); added.Add(p); mine.Add(p); NovaOpened = mine; Log.Warn("archives", "opened for indexing: " + p); }
                 catch (Exception e) { Log.Warn("archives", "could not open " + p + ": " + e.Message); }
             }
         }
@@ -137,6 +167,7 @@ static class Archives
         }
         finally { Outlook.Release(stores); }
         Ids = ids; Done = done;
+        NovaOpened = NovaOpened.Where(x => !added.Contains(x, StringComparer.OrdinalIgnoreCase)).ToList();
     }
 
     /// <summary>"Open in Outlook" on an email of a closed archive: opens the archive again.</summary>

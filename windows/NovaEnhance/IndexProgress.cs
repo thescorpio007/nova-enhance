@@ -263,7 +263,7 @@ class ProgressRow : Panel
         back.Controls.Add(fill);
         detail = new Label { AutoSize = true, Font = Th.F(9), ForeColor = Th.Muted, Location = new Point(12, 43), UseMnemonic = false };
         Controls.AddRange(new Control[] { title, dots, pct, back, detail });
-        t = new System.Windows.Forms.Timer { Interval = everyMs };
+        t = new System.Windows.Forms.Timer { Interval = Math.Max(everyMs, 5000) };
         t.Tick += (_, _) => Update2();
         t.Start();
         Disposed += (_, _) => t.Dispose();
@@ -282,9 +282,22 @@ class ProgressRow : Panel
     bool reading;
 
     /// <summary>The numbers are read in the background (a busy index or Outlook never freezes the window).</summary>
+    /// <summary>Only rows you can see are refreshed (a long page scrolls smoothly).</summary>
+    bool OnScreen()
+    {
+        try
+        {
+            var f = FindForm();
+            if (f == null || !f.Visible || f.WindowState == FormWindowState.Minimized || !Visible) return false;
+            return f.RectangleToScreen(f.ClientRectangle).IntersectsWith(RectangleToScreen(ClientRectangle));
+        }
+        catch { return false; }
+    }
+
     void Update2()
     {
         if (IsDisposed || reading) return;
+        if (IsHandleCreated && title.Text != "loading…" && !OnScreen()) return;
         reading = true;
         Task.Run(() => { try { return ((string, int, string, bool)?)read(); } catch { return null; } })
             .ContinueWith(t =>
