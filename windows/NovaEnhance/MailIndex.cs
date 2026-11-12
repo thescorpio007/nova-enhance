@@ -64,9 +64,15 @@ static class Outlook
     /// archives open in Outlook — inside a .pst every email keeps its identity — and moves the whole archive in the index to the new file.</summary>
     public static dynamic Item(dynamic ns, string entry, string store)
     {
+        // 📦 Moved by AutoArchive (found before): straight to its new place.
+        var mv = MailIndex.MovedTo(entry);
+        if (mv.Entry.Length > 0) try { return ns.GetItemFromID(mv.Entry, mv.Store); } catch { }
         try { return ns.GetItemFromID(entry, store); }
         catch (Exception first)
         {
+            // The same email kept in another file of the index (AutoArchive moved it: Outlook gave it a new address).
+            foreach (var (e2, s2) in MailIndex.CopiesOf(entry))
+                try { var it = ns.GetItemFromID(e2, s2); MailIndex.SetMoved(entry, e2, s2); return it; } catch { }
             if (string.IsNullOrEmpty(store)) throw;
             var moved = MailIndex.MovedStore(store);
             if (moved.Length > 0) try { return ns.GetItemFromID(entry, moved); } catch { }
@@ -93,6 +99,8 @@ static class Outlook
             }
             catch { }
             finally { Release(stores); }
+            if (first.Message.Contains("cannot be found", StringComparison.OrdinalIgnoreCase) || first.Message.Contains("could not be found", StringComparison.OrdinalIgnoreCase))
+                throw new MovedException();
             var m = Regex.Match(first.Message, @"[A-Za-z]:\\[^""]+?\.(pst|ost)", RegexOptions.IgnoreCase);
             if (m.Success)
                 throw new InvalidOperationException($"This email was in “{Path.GetFileName(m.Value)}”, which was renamed or moved. Open the renamed archive in Outlook (File → Open & Export → Open Outlook Data File) or in Nova's 📂 Archive reader, then try again — Nova will link it by itself.", first);
@@ -354,6 +362,110 @@ static class MailIndex
     /// <summary>The same email kept in two places (archive1 and archive2, or an archive and the mailbox): same subject, minute and sender.</summary>
     public static string SameKey(MailHit h) =>
         System.Text.RegularExpressions.Regex.Replace((h.Subject ?? "").ToLowerInvariant(), @"\s+", " ").Trim() + "|" + h.Date.ToString("yyyyMMddHHmm") + "|" + (h.FromAddr ?? h.FromName ?? "").ToLowerInvariant() + "|" + (h.Sent ? "s" : "r");
+
+    // ------------------------------------------------------------------ 📦 emails moved by AutoArchive (new address in Outlook)
+
+    static bool movedTable;
+    static void EnsureMoved(SqliteConnection c)
+    {
+        if (movedTable) return;
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "CREATE TABLE IF NOT EXISTS moved(entry TEXT PRIMARY KEY, new_entry TEXT, new_store TEXT, at INTEGER)";
+        cmd.ExecuteNonQuery();
+        movedTable = true;
+    }
+
+    public static (string Entry, string Store) MovedTo(string entry)
+    {
+        try
+        {
+            using var c = Open(); EnsureMoved(c);
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "SELECT new_entry, new_store FROM moved WHERE entry=$e";
+            cmd.Parameters.AddWithValue("$e", entry ?? "");
+            using var r = cmd.ExecuteReader();
+            if (r.Read()) return (r.IsDBNull(0) ? "" : r.GetString(0), r.IsDBNull(1) ? "" : r.GetString(1));
+        }
+        catch { }
+        return ("", "");
+    }
+
+    /// <summary>new_entry "" = not found anywhere in Outlook (moved to a file that is not open, or deleted).</summary>
+    public static void SetMoved(string entry, string newEntry, string newStore)
+    {
+        try
+        {
+            using var c = Open(); EnsureMoved(c);
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "INSERT OR REPLACE INTO moved(entry,new_entry,new_store,at) VALUES($e,$n,$s,$t)";
+            cmd.Parameters.AddWithValue("$e", entry); cmd.Parameters.AddWithValue("$n", newEntry ?? ""); cmd.Parameters.AddWithValue("$s", newStore ?? "");
+            cmd.Parameters.AddWithValue("$t", DateTimeOffset.Now.ToUnixTimeMilliseconds());
+            cmd.ExecuteNonQuery();
+        }
+        catch (Exception e) { Log.Warn("moved emails", e.Message); }
+    }
+
+    /// <summary>The other copies of this email in the index (same subject, minute, sender and direction).</summary>
+    public static List<(string Entry, string Store)> CopiesOf(string entry)
+    {
+        var res = new List<(string, string)>();
+        try
+        {
+            using var c = Open();
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = @"SELECT b.entry, b.store FROM mail a JOIN mail b ON b.subject=a.subject AND b.sent=a.sent AND lower(ifnull(b.from_addr,''))=lower(ifnull(a.from_addr,''))
+                                AND abs(b.date-a.date) < 60000 AND b.entry<>a.entry WHERE a.entry=$e LIMIT 5";
+            cmd.Parameters.AddWithValue("$e", entry ?? "");
+            using var r = cmd.ExecuteReader();
+            while (r.Read()) res.Add((r.GetString(0), r.IsDBNull(1) ? "" : r.GetString(1)));
+        }
+        catch { }
+        return res;
+    }
+
+    /// <summary>📦 Once a night (outside working hours): the last 90 days of the mailbox are checked in Outlook; emails AutoArchive moved
+    /// get their new address (from their copy in the index), so they open at once.</summary>
+    public static void CheckMovedNightly()
+    {
+        var day = DateTime.Today.ToString("yyyy-MM-dd");
+        if (Store.Str("win_moved_check", "") == day || Gentle.WorkingNow) return;
+        Store.Set("win_moved_check", day);
+        using var act = Activity.Begin("📦 moved emails check", "last 90 days");
+        var rows = new List<(string Entry, string Store)>();
+        using (var c = Open())
+        {
+            EnsureMoved(c);
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "SELECT entry, store FROM mail WHERE date > $d AND entry NOT LIKE 'pst:%' AND entry NOT IN (SELECT entry FROM moved)";
+            cmd.Parameters.AddWithValue("$d", DateTimeOffset.Now.AddDays(-90).ToUnixTimeMilliseconds());
+            using var r = cmd.ExecuteReader();
+            while (r.Read()) rows.Add((r.GetString(0), r.IsDBNull(1) ? "" : r.GetString(1)));
+        }
+        int moved = 0, gone = 0, checkedN = 0;
+        dynamic app = Outlook.Get();
+        dynamic ns = app.GetNamespace("MAPI");
+        try
+        {
+            foreach (var (e, s) in rows)
+            {
+                if (Gentle.WorkingNow) break;
+                checkedN++;
+                dynamic it = null;
+                try { it = ns.GetItemFromID(e, s); continue; }
+                catch
+                {
+                    var found = false;
+                    foreach (var (e2, s2) in CopiesOf(e))
+                        try { var x = ns.GetItemFromID(e2, s2); Outlook.Release(x); SetMoved(e, e2, s2); moved++; found = true; break; } catch { }
+                    if (!found) { SetMoved(e, "", ""); gone++; }
+                }
+                finally { Outlook.Release(it); }
+                Thread.Sleep(40);
+            }
+        }
+        finally { Outlook.Release(ns); }
+        act.Result = $"{checkedN:N0} checked · {moved} moved (linked to their new place) · {gone} not in Outlook any more";
+    }
 
     /// <summary>Renamed / moved archives: old Outlook store address → new one.</summary>
     public static string MovedStore(string oldId)
@@ -1385,4 +1497,11 @@ static class DocText
         xml = Regex.Replace(xml, "<[^>]+>", "");
         return System.Net.WebUtility.HtmlDecode(xml);
     }
+}
+
+
+/// <summary>The email is not in Outlook where Nova indexed it (AutoArchive moved it to a file that is not open, or it was deleted).</summary>
+class MovedException : Exception
+{
+    public MovedException() : base("📦 This email was moved or deleted in Outlook (e.g. by AutoArchive) — showing the copy kept by Nova. Open the archive file it went to in Outlook to open it there.") { }
 }

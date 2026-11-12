@@ -157,6 +157,7 @@ static class Ai
     static async Task<string> ChatOne(string system, string user, bool fast, bool json, Provider p, CancellationToken ct)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
+        Dots.Enter();   // ● ○ ○ on the tray icon while an AI job runs
         try
         {
             var r = await ChatOneCore(system, user, fast, json, p, ct);
@@ -168,6 +169,7 @@ static class Ai
             Activity.AiCall(LabelOf(p), system, user, null, sw.ElapsedMilliseconds, e is OperationCanceledException ? "stopped / time limit" : e.Message);
             throw;
         }
+        finally { Dots.Leave(); }
     }
 
     static async Task<string> ChatOneCore(string system, string user, bool fast, bool json, Provider p, CancellationToken ct)

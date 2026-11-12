@@ -106,6 +106,7 @@ class NovaContext : ApplicationContext
 
         tray = new NotifyIcon { Icon = Th.AppIcon, Text = "Nova Enhance", Visible = true };
         Program.Tray = tray;
+        Dots.Start();   // ● ○ ○ Nova is thinking — every "…" status in every window, and the tray icon
         // ⏳ Pointing at the tray icon shows the email index progress.
         if (!Guard.SafeMode) StartJobs();
         Guard.StartGuardian();
@@ -254,6 +255,15 @@ class NovaContext : ApplicationContext
         Guard.Stage("archive reader"); Pst.Start();
         Guard.Stage("activity auto-save"); Activity.StartAuto();
         Guard.Stage("test connector"); TestConnector.Start();
+        Guard.Stage("moved emails check");
+        new Thread(() => Guard.Run("moved emails check", () =>
+        {
+            while (true)
+            {
+                Thread.Sleep(TimeSpan.FromMinutes(20));
+                try { MailIndex.CheckMovedNightly(); } catch (Exception e) { Log.Warn("moved emails", e.Message); }
+            }
+        })) { IsBackground = true, Name = "Nova moved emails", Priority = ThreadPriority.Lowest }.Start();
         Guard.Stage("started");
     }
 

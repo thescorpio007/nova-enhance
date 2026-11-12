@@ -464,6 +464,8 @@ class ReadPane : Panel
         if (!preview || h == null) { if (web != null) web.Visible = false; textView.Visible = true; return; }
         try
         {
+            if (web != null) web.Visible = false;   // never an old email under the new one
+            textView.Visible = true;
             previewNote.Text = "Opening the formatted email…";
             var file = await MailPreview.Render(h);
             if (h != Mail || !preview) return;
@@ -474,7 +476,8 @@ class ReadPane : Panel
             web.CoreWebView2.Navigate(new Uri(file).AbsoluteUri);
             previewNote.Text = "";
         }
-        catch (Exception e) { previewNote.Text = "⚠ " + e.Message; textView.Visible = true; Log.Error("mail preview", e); }
+        catch (MovedException e) { if (web != null) web.Visible = false; previewNote.Text = e.Message; textView.Visible = true; preview = false; Th.SetChip(tabText, true); Th.SetChip(tabPreview, false); }
+        catch (Exception e) { if (web != null) web.Visible = false; previewNote.Text = "⚠ " + e.Message; textView.Visible = true; Log.Error("mail preview", e); }
     }
 
     async Task EnsureWeb()
@@ -1078,6 +1081,8 @@ class AskForm : NovaForm
         examples.Visible = false;
         message.Visible = false;
         understood.Text = "🔍 " + q;
+        // A new search: the previous results leave at once (they could belong to another project).
+        if (!followUp) { hits = new(); rawHits = new(); list.Nova = null; filterVal = ""; ShowList(); }
         info.Text = Ai.Active() != null ? "Understanding your question…" : "Searching (no AI key — simple word search)…";
         // ✦ Prompts: the question goes to the search; "exclude … / only … / group … / export …" become your instructions.
         var (mainQ, extraQ) = SearchSyntax.Parse(q).Any ? (q, "") : Prompts.Split(q);
