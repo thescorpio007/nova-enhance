@@ -17,7 +17,7 @@ static class MailProjects
     public static readonly string[] RuleNames =
     {
         "", "🏷 Project tag in the subject", "📐 Document numbers", "📛 Project names & email codes", "🗂 Outlook folder",
-        "🧵 Same conversation", "👤 Learned senders", "✦ AI for the unclear ones", "✋ Sender set by you", "✋ Moved by you"
+        "🧵 Same conversation", "👤 Learned senders", "✦ AI for the unclear ones", "✋ Sender set by you", "✋ Moved by you", "📏 Your own rules"
     };
     public static readonly string[] RuleHelp =
     {
@@ -74,7 +74,7 @@ static class MailProjects
     public static volatile int Done, Total, Sorted;
     public static volatile string Phase = "starting…";
     public static Dictionary<string, int> Counts = new();
-    public static int[] RuleCounts = new int[10];
+    public static int[] RuleCounts = new int[11];
     public static Dictionary<string, string> Learned = new(StringComparer.OrdinalIgnoreCase);
     static Dictionary<long, string> map = new();
     static readonly object L = new();
@@ -193,11 +193,12 @@ static class MailProjects
         public Dictionary<string, string> Senders = new(StringComparer.OrdinalIgnoreCase), Fixes = new();
         public List<int> Order;
         public HashSet<int> On;
+        public RuleBook User = new();
     }
 
     static Rules Load(SqliteConnection c)
     {
-        var r = new Rules { Order = Order, On = Enumerable.Range(1, 7).Where(RuleOn).ToHashSet() };
+        var r = new Rules { Order = Order, On = Enumerable.Range(1, 7).Where(RuleOn).ToHashSet(), User = RuleBooks.Load("projects") };
         var cfg = Config;
         foreach (var p in Projects.All().Where(p => p.Code.Length > 0))
         {
@@ -235,6 +236,14 @@ static class MailProjects
             if (R.Senders.TryGetValue(from, out var sp)) return (sp, 8);
             var at = from.IndexOf('@');
             if (at > 0 && R.Senders.TryGetValue(from[at..], out var dp)) return (dp, 8);
+        }
+        // 📏 Your own rules (Rules window → 📁 Email projects) come before Nova's.
+        if (R.User.Rules.Count > 0)
+        {
+            var hit = new MailHit { Id = m.Id, Subject = m.Subject, AttNames = m.Att, Body = m.Body, FromAddr = m.From, FromName = "" };
+            foreach (var u in R.User.Rules)
+                if (u.On && RuleBooks.Matches(u, hit, true, ""))
+                    return (u.Then == "unsorted" ? "" : u.Then, 10);
         }
         var subj = Re.Replace(m.Subject ?? "", "");
         // Document numbers of a project that is not in your list (RS5-C7-…): no weak rule may claim it.
@@ -375,7 +384,7 @@ static class MailProjects
         // 🧵 Same conversation: one project among the sorted emails of the thread → the others take it.
         if (RuleOn(5))
         {
-            var conv = all.Where(x => x.Conv.Length > 0 && x.Proj.Length > 0 && x.Rule is >= 1 and <= 4 or 8 or 9)
+            var conv = all.Where(x => x.Conv.Length > 0 && x.Proj.Length > 0 && x.Rule is >= 1 and <= 4 or 8 or 9 or 10)
                 .GroupBy(x => x.Conv).Select(g => (g.Key, P: g.Select(x => x.Proj).Distinct().ToList())).Where(x => x.P.Count == 1).ToDictionary(x => x.Key, x => x.P[0]);
             foreach (var x in all.Where(x => x.Rule is 0 or 7 or -2 && x.Proj.Length == 0 && x.Conv.Length > 0))
                 if (conv.TryGetValue(x.Conv, out var p)) upd.Add((x.Id, p, 5));
@@ -387,7 +396,7 @@ static class MailProjects
             var mine = new HashSet<string>(Me.Addrs.Select(a => a.ToLowerInvariant()));
             var myDomains = new HashSet<string>(mine.Select(a => a.Contains('@') ? a[a.IndexOf('@')..] : a));
             var publicDomains = new HashSet<string> { "@gmail.com", "@outlook.com", "@hotmail.com", "@yahoo.com", "@yahoo.fr", "@live.com", "@icloud.com" };
-            var recv = all.Where(x => !x.Sent && x.From.Length > 0 && !mine.Contains(x.From) && x.Proj.Length > 0 && x.Rule is >= 1 and <= 5 or 9).ToList();
+            var recv = all.Where(x => !x.Sent && x.From.Length > 0 && !mine.Contains(x.From) && x.Proj.Length > 0 && x.Rule is >= 1 and <= 5 or 9 or 10).ToList();
             void Learn(IEnumerable<IGrouping<string, (long Id, string Proj, int Rule, string Conv, string From, bool Sent)>> groups, int min)
             {
                 foreach (var g in groups)
@@ -497,9 +506,9 @@ static class MailProjects
             var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             cmd.CommandText = "SELECT proj, COUNT(*) FROM mproj GROUP BY proj";
             using (var r = cmd.ExecuteReader()) while (r.Read()) counts[r.GetString(0)] = r.GetInt32(1);
-            var rules = new int[10];
+            var rules = new int[11];
             cmd.CommandText = "SELECT rule, COUNT(*) FROM mproj WHERE proj<>'' GROUP BY rule";
-            using (var r = cmd.ExecuteReader()) while (r.Read()) { var k = r.GetInt32(0); if (k is >= 0 and < 10) rules[k] = r.GetInt32(1); }
+            using (var r = cmd.ExecuteReader()) while (r.Read()) { var k = r.GetInt32(0); if (k is >= 0 and < 11) rules[k] = r.GetInt32(1); }
             Counts = counts; RuleCounts = rules;
             if (map.Count == 0 && Sorted > 0) Reload(c);
         }

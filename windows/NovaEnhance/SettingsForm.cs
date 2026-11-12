@@ -417,7 +417,8 @@ class SettingsForm : NovaForm
         var bri = page.Add(Th.Row(false));
         bri.Controls.Add(Th.B("☀ Open the brief now", Screens.Brief));
         bri.Controls.Add(Th.B("✦ My brief instructions…", () => BriefRules.Edit(this, () => Draw("Email & AI")), true));
-        if (BriefRules.Any) Note("✦ Your instructions are in use:\n" + BriefRules.Describe(BriefRules.Current), Th.Muted);
+        bri.Controls.Add(Th.B("📏 Rules…", () => RulesForm.Open(this, "brief", () => Draw("Email & AI"))));
+        if (BriefRules.Any) Note("📏 Your brief rules are in use:\n" + RuleBooks.Describe("brief", BriefRules.Current), Th.Muted);
 
         page.Add(Th.Section("Calendar"));
         Note("Read from Outlook on this PC only — nothing from your calendar goes to the AI.");
@@ -991,6 +992,10 @@ class SettingsForm : NovaForm
             if (MessageBox.Show(this, "Sort all emails again with the current codes, names, folders and rules? (Your own corrections are kept.)", "Nova Enhance", MessageBoxButtons.YesNo) == DialogResult.Yes) MailProjects.SortAgain();
         }));
 
+        page.Add(Th.Section("📏 Your own project rules (they come before Nova's)"));
+        var ur = RuleBooks.Load("projects");
+        Note(ur.Rules.Count == 0 ? "None yet — e.g. “emails from @omniumint.com about Tower C → RS5”. Write them in your words or add them one by one." : RuleBooks.Describe("projects", ur), Th.Muted);
+        page.Add(Th.Row(false)).Controls.Add(Th.B("📏 Open the rules window", () => RulesForm.Open(this, "projects", () => Draw("📁 Email projects")), true));
         page.Add(Th.Section("Sorting rules · first strong match wins (▲ ▼ change the order, untick to switch a rule off)"));
         var order = MailProjects.Order;
         for (int k = 0; k < order.Count; k++)

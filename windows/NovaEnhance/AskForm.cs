@@ -1560,9 +1560,9 @@ class BriefForm : NovaForm
         row.Controls.Add(Th.B("⇩ Export", Export));
         row.Controls.Add(Th.B("📁 Briefs folder", () => Shell.Open(Paths.Briefs)));
         row.Controls.Add(Th.B("🔍 Search for email", Screens.Ask));
-        row.Controls.Add(Th.B("✦ My instructions", () => BriefRules.Edit(this, Reload), true));
+        row.Controls.Add(Th.B("📏 Rules & instructions", () => BriefRules.Edit(this, Reload), true));
         row.Controls.Add(Th.B("💬 Talk with Nova", () => talk.FocusInput()));
-        row.Controls.Add(Th.B("⚙ Rules", () => Screens.Settings("Email & AI")));
+        row.Controls.Add(Th.B("⚙ Settings", () => Screens.Settings("Email & AI")));
         message = top.Add(Th.Wrap("", 10, Th.Text), true);
         message.BackColor = Th.Card; message.Padding = new Padding(8); message.Visible = false;
         top.Add(talk.ChipBar);
@@ -1683,7 +1683,7 @@ class BriefForm : NovaForm
         info.Text = $"⏳ {n.Count} still waiting · 🔴 {red} overdue · 🟠 {orange} this week · ⚪ {fy} FYI · ↩ {lastFollow.Count} follow-ups · ✓ {Outstanding.HandledToday()} handled today · ↻ checked {lastCheck:HH:mm}\n" +
                     (wDue + wOver + wWait > 0 ? $"📌 My Work: {wDue} due today · {wOver} overdue · {wWait} waiting for others · " : "") +
                     $"{DateTime.Now:dddd dd MMMM} · last {Store.BriefDays} days · Index: {MailIndex.Status}" +
-                    (BriefRules.Any ? $"\n✦ Your instructions: {BriefRules.Current.Rules.Count} rule(s){(BriefRules.Current.AiCheck.Length > 0 ? " + the AI for the rest" : "")} — ✦ My instructions to change them" : "");
+                    (BriefRules.Any ? $"\n✦ Your instructions: {BriefRules.Current.Rules.Count} rule(s){(BriefRules.Current.AiCheck.Length > 0 ? " + the AI for the rest" : "")} — 📏 Rules & instructions to change them" : "");
         info.Font = Th.F(10, true);
         top.FitAll();
     }
