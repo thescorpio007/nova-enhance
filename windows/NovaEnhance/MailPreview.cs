@@ -82,7 +82,9 @@ static class MailPreview
     });
 
     /// <summary>Saves one attachment (by its file name) into a folder and returns the full path.</summary>
-    public static Task<string> SaveAttachment(MailHit h, string fileName, string dir) => Sta(() =>
+    public static Task<string> SaveAttachment(MailHit h, string fileName, string dir) => (h.Entry ?? "").StartsWith("pst:")
+        ? Task.Run(() => Pst.SaveAttachment(h.Entry, fileName, dir))   // 📂 from a .pst read directly
+        : Sta(() =>
     {
         dynamic app = Outlook.Get();
         dynamic ns = app.GetNamespace("MAPI");

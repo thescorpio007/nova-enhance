@@ -95,6 +95,8 @@ static class Outlook
 
     public static void Open(string entry, string store)
     {
+        // 📂 An email read directly from a .pst file: it opens in Nova's archive reader.
+        if (entry != null && entry.StartsWith("pst:")) { Program.UiContext?.Post(_ => Screens.PstReader(entry), null); return; }
         dynamic app = Get();
         dynamic ns = app.GetNamespace("MAPI");
         dynamic item;
@@ -275,6 +277,8 @@ class MailQuery
     public int Limit = 50;
     /// <summary>📁 Project: "" = all, "?" = unsorted, else the project code (emails not sorted yet are kept while Nova sorts).</summary>
     public string Project = "";
+    /// <summary>Only the emails of one mailbox / archive (e.g. "pst:…" for an archive read directly).</summary>
+    public string Store = "";
 }
 
 /// <summary>
@@ -931,6 +935,37 @@ static class MailIndex
         }
     }
 
+    // ================================================================== 📂 emails read directly from .pst files (no Outlook)
+
+    public static bool HasEntry(SqliteConnection c, string entry) => Scalar(c, "SELECT 1 FROM mail WHERE entry=$e", ("$e", entry)) != null;
+
+    /// <summary>The same email is already in Nova (same time and subject — e.g. from Outlook or another copy of the archive).</summary>
+    public static bool HasSame(SqliteConnection c, DateTime date, string subject)
+    {
+        var ms = Ms(date);
+        return Scalar(c, "SELECT 1 FROM mail WHERE date BETWEEN $a AND $b AND subject=$s LIMIT 1", ("$a", ms - 1000), ("$b", ms + 1000), ("$s", subject ?? "")) != null;
+    }
+
+    public static void UpsertFolder(SqliteConnection c, string fid, string store, string storeName, string path, int total, int seen) =>
+        Exec(c, "INSERT INTO folders(fid,store,store_name,path,total,seen) VALUES($fid,$s,$sn,$p,$t,$o) ON CONFLICT(fid) DO UPDATE SET store_name=$sn, path=$p, total=$t, seen=$o",
+            ("$fid", fid), ("$s", store), ("$sn", storeName), ("$p", path), ("$t", total), ("$o", seen));
+
+    public static void InsertExternal(SqliteConnection c, string entry, string store, string conv, string folder, bool sent, DateTime date, string fromName, string fromAddr,
+        string to, string cc, string toA, string ccA, string subject, string body, string attNames, string attText, string fid)
+    {
+        Exec(c, @"INSERT OR IGNORE INTO mail(entry,store,conv,folder,sent,date,from_name,from_addr,to_list,cc_list,to_addr,cc_addr,subject,body,att_names,att_text,unread,importance,flagged,fid)
+                  VALUES($e,$s,$cv,$f,$sent,$d,$fn,$fa,$to,$cc,$toa,$cca,$sub,$body,$an,$at,0,1,0,$fid)",
+            ("$e", entry), ("$s", store), ("$cv", conv), ("$f", folder), ("$sent", sent ? 1 : 0), ("$d", Ms(date)), ("$fid", fid),
+            ("$fn", fromName), ("$fa", fromAddr), ("$to", to), ("$cc", cc), ("$toa", toA), ("$cca", ccA), ("$sub", subject), ("$body", body), ("$an", attNames), ("$at", attText));
+        if (Fts)
+        {
+            var id = Scalar(c, "SELECT id FROM mail WHERE entry=$e", ("$e", entry));
+            if (id != null)
+                Exec(c, "INSERT INTO mail_fts(rowid,subject,body,from_name,to_list,cc_list,att_names,att_text) VALUES($id,$sub,$body,$fn,$to,$cc,$an,$at)",
+                    ("$id", id), ("$sub", subject), ("$body", body), ("$fn", fromName), ("$to", to), ("$cc", cc), ("$an", attNames), ("$at", attText));
+        }
+    }
+
     /// <summary>For the start-up test: adds one email without Outlook.</summary>
     public static void InsertTest(string entry, string from, string to, string cc, string subject, string body, DateTime date, bool sent, string conv)
     {
@@ -1002,6 +1037,7 @@ static class MailIndex
         if (q.HasAttach == true) where.Add("m.att_names <> ''");
         if (q.HasAttach == false) where.Add("m.att_names = ''");
         if (q.Unread == true) where.Add("m.unread=1");
+        if (!string.IsNullOrEmpty(q.Store)) where.Add($"m.store={P(q.Store)}");
         if (!string.IsNullOrEmpty(q.Project))
         {
             try { MailProjects.Ensure(); } catch { }

@@ -27,6 +27,7 @@
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <NoWarn>$(NoWarn);CA1416;CS8632;WFO1000;WFAC010;CS0162;CS0168;CS0219</NoWarn>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
@@ -37,6 +38,7 @@
     <PackageReference Include="NAudio.WinMM" Version="2.2.1" />
     <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
     <PackageReference Include="MimeKit" Version="4.8.0" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="8.0.1" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2792.45" />
   </ItemGroup>
 

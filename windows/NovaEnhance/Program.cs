@@ -115,6 +115,7 @@ class NovaContext : ApplicationContext
         m.Items.Add("📌  My Work", null, (_, _) => Screens.Work(null));
         m.Items.Add("📂  Find a project file…", null, (_, _) => Screens.FindFile(null));
         m.Items.Add("📄  Nova for this PDF                Ctrl+Shift+D", null, (_, _) => PdfCompanion.Open());
+        m.Items.Add("📂  Archive reader (.pst)…", null, (_, _) => Screens.PstReader(null));
         m.Items.Add(new ToolStripSeparator());
         m.Items.Add("📁  Search inside a folder…", null, (_, _) => Screens.FolderSearch(null));
         m.Items.Add("🔍  Search for email                Ctrl+Shift+F", null, (_, _) => Screens.Ask());
@@ -178,6 +179,7 @@ class NovaContext : ApplicationContext
                     case "brief": Screens.Brief(); break;
                     case "hub": Screens.Hub(null); break;
                     case "work": Screens.Work(null); break;
+                    case "pst": Screens.PstReader(null); break;
                 }
             }
             if (Guard.SafeMode)
@@ -226,6 +228,7 @@ class NovaContext : ApplicationContext
         Guard.Stage("reading project files"); Projects.ReadAll.Start();
         Guard.Stage("meaning search"); Semantic.Start();
         Guard.Stage("email projects"); MailProjects.Start();
+        Guard.Stage("archive reader"); Pst.Start();
         Guard.Stage("started");
     }
 
@@ -387,6 +390,18 @@ static class Screens
         if (finder == null || finder.IsDisposed) finder = new FileFinderForm();
         Show(finder);
         if (!string.IsNullOrEmpty(q)) finder.Search(q);
+    }
+
+    static PstReaderForm pstReader;
+
+    /// <summary>📂 Archive reader: a .pst read directly (a path), or an email of one ("pst:…").</summary>
+    public static void PstReader(string what)
+    {
+        Guard.Screen("pst");
+        if (pstReader == null || pstReader.IsDisposed) pstReader = new PstReaderForm();
+        Show(pstReader);
+        if (string.IsNullOrEmpty(what)) return;
+        if (what.StartsWith("pst:")) pstReader.ShowEntry(what); else pstReader.OpenFile(what);
     }
 
     /// <summary>🕘 Chat history: every conversation, newest first, with search.</summary>

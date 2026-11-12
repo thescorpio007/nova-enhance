@@ -493,20 +493,48 @@ class SettingsForm : NovaForm
                 var a1 = a0;
                 var arow2 = new FlowLayoutPanel { AutoSize = true, WrapContents = false, BackColor = Color.FromArgb(0x18, 0x1C, 0x24), Padding = new Padding(6, 3, 6, 3), Margin = new Padding(0, 2, 0, 2) };
                 arow2.Controls.Add(Th.L($"{(a1.Indexed ? "✓" : a1.Added ? "⏳" : "＋")} {a1.Path}   ·   {a1.Size / 1048576.0:N0} MB   ·   {(a1.Indexed ? "indexed" : a1.Added ? "waiting to be indexed" : "not in Nova yet")}", 9.5f, a1.Indexed ? Th.Good : Th.Text));
-                if (!a1.Added) arow2.Controls.Add(Th.B("Add", () => { Archives.Add(new[] { a1.Path }); ShowArchives(Archives.Find()); }));
-                else arow2.Controls.Add(Th.B("Remove", () => { Archives.Remove(a1.Path); ShowArchives(Archives.Find()); }));
+                // ⚡ Read directly (no Outlook, much faster) — replaces the slow Outlook way for this file.
+                arow2.Controls.Add(Th.B("⚡ Add directly", () => AddDirect(a1.Path)));
+                arow2.Controls.Add(Th.B("📂 Open in reader", () => Screens.PstReader(a1.Path)));
+                if (a1.Added) arow2.Controls.Add(Th.B("Remove", () => { Archives.Remove(a1.Path); ShowArchives(Archives.Find()); }));
                 alist.Controls.Add(arow2);
             }
         }
+        async void AddDirect(string path)
+        {
+            Archives.Remove(path);   // no more through Outlook
+            try
+            {
+                var o = await Task.Run(() => Pst.Open(path, false));
+                var already = await Task.Run(() => Pst.AlreadyInNova(o));
+                if (already >= 80 && MessageBox.Show(this, $"About {already} % of the emails of {Path.GetFileName(path)} are already in Nova — it looks like a copy of an archive indexed before.\n\nAdd it anyway? (Emails already in Nova are skipped, only the missing ones are added.)", "⚡ Add directly", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
+                Pst.Add(o, null);
+                Draw("Email & AI");
+            }
+            catch (Exception ex) { MessageBox.Show(this, "This file could not be read directly:\n" + ex.Message, "Nova Enhance"); }
+        }
+        // 📂 Archives read directly: one progress row each.
+        foreach (var px in Pst.All.Values.Where(x => x.Queued || x.Done || x.Indexed > 0))
+        {
+            var fpx = px.Fp;
+            page.Add(new ProgressRow(() =>
+            {
+                var i = Pst.All.TryGetValue(fpx, out var v) ? v : px;
+                var pc = i.Done ? 100 : i.Total > 0 ? (int)Math.Min(99, 100L * (i.Indexed + i.Skipped) / i.Total) : 0;
+                var rate = Pst.Current == fpx && Pst.Rate > 0 ? $" · {Pst.Rate:N0} emails/min" : "";
+                return ($"📂 {i.Name} (read directly)", pc, $"{i.Indexed:N0} added · {i.Skipped:N0} already in Nova · of {i.Total:N0}{rate} · {i.Status}", Pst.Current == fpx);
+            }), true);
+        }
         arow.Controls.Add(Th.B("🔍 Find archive files", () => ShowArchives(Archives.Find()), true));
+        arow.Controls.Add(Th.B("📂 Archive reader…", () => Screens.PstReader(null)));
         arow.Controls.Add(Th.B("📂 Add an archive file…", () =>
         {
             using var pstDlg = new OpenFileDialog { Filter = "Outlook archive (*.pst)|*.pst", Multiselect = true, Title = "Add Outlook archive files" };
             if (pstDlg.ShowDialog(this) != DialogResult.OK) return;
-            Archives.Add(pstDlg.FileNames);
+            foreach (var fn in pstDlg.FileNames) AddDirect(fn);
             ShowArchives(Archives.Find());
         }));
-        arow.Controls.Add(Th.B("➕ Add all found", () => { var allF = Archives.Find(); Archives.Add(allF.Where(x => !x.Added).Select(x => x.Path)); ShowArchives(Archives.Find()); }));
+        arow.Controls.Add(Th.B("➕ Add all found (directly)", () => { foreach (var x in Archives.Find().Where(x => !x.Indexed)) AddDirect(x.Path); ShowArchives(Archives.Find()); }));
         if (Archives.Extra.Count > 0) ShowArchives(Archives.Find());
         Note("A big archive takes several hours the first time (Outlook reads it email by email). Gentle indexing: older mail is read after working hours or when the PC is idle — ⚡ Index now reads at full speed.", Th.Muted);
         page.Add(Th.Section("Folders"));
