@@ -193,13 +193,15 @@ class Stack : FlowLayoutPanel
 
     public TC Add<TC>(TC c, bool stretch = false) where TC : Control
     {
+        if (UiWatch.Doing.StartsWith("Settings")) UiWatch.Step(UiWatch.Doing.Split(" · adding")[0] + " · adding “" + (c.Text.Length > 40 ? c.Text[..40] : c.Text) + "”");
         if (stretch) c.Tag = "s";
         Controls.Add(c);
         Fit(c);
         return c;
     }
 
-    int Avail => ClientSize.Width - Padding.Horizontal - (VerticalScroll.Visible ? SystemInformation.VerticalScrollBarWidth : 0) - 2;
+    // Always leave room for the scroll bar: a width that changes when the bar appears could make the layout loop.
+    int Avail => ClientSize.Width - Padding.Horizontal - SystemInformation.VerticalScrollBarWidth - 2;
 
     protected override void OnResize(EventArgs e) { base.OnResize(e); FitAll(); }
     protected override void OnControlAdded(ControlEventArgs e) { base.OnControlAdded(e); Fit(e.Control); }

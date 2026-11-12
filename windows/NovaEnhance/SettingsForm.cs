@@ -65,6 +65,7 @@ class SettingsForm : NovaForm
         page.Add(Th.L(section, 15, Th.Text, true));
         liveIndex = null; liveUpdate = null;
         Store.Set("win_set_drawing", section);
+        UiWatch.Step("Settings · " + section);
         using var act = Activity.Begin("settings page", section);
         try
         {

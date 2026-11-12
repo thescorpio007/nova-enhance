@@ -92,8 +92,21 @@ static class Guard
     /// <summary>A normal exit (Exit, update, Windows shutting down): the Guardian must not restart Nova.</summary>
     public static void CleanExit() { try { File.WriteAllText(CleanFile, DateTime.UtcNow.Ticks.ToString()); } catch { } }
 
-    public static void Screen(string name) { try { File.WriteAllText(LastScreen, name); } catch { } }
-    public static string LastScreenName() { try { return File.Exists(LastScreen) ? File.ReadAllText(LastScreen).Trim() : ""; } catch { return ""; } }
+    public static void Screen(string name) { UiWatch.Step("opening " + name); try { File.WriteAllText(LastScreen, name + "|" + DateTime.UtcNow.Ticks); } catch { } }
+
+    /// <summary>The window to reopen after a restart — not one opened just before the crash (it may be what crashed).</summary>
+    public static string LastScreenName()
+    {
+        try
+        {
+            if (!File.Exists(LastScreen)) return "";
+            var p = File.ReadAllText(LastScreen).Trim().Split('|');
+            File.Delete(LastScreen);
+            if (p.Length > 1 && long.TryParse(p[1], out var t) && DateTime.UtcNow - new DateTime(t, DateTimeKind.Utc) < TimeSpan.FromSeconds(120)) return "";
+            return p[0];
+        }
+        catch { return ""; }
+    }
 
     /// <summary>Starts the Guardian (once) for this Nova.</summary>
     public static void StartGuardian()
@@ -193,4 +206,47 @@ static class Guard
         try { File.WriteAllText(Path.Combine(Paths.Logs, "last-crash.txt"), $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}\r\n{ex}"); } catch { }
         try { File.AppendAllText(CrashFile, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}  error: {(ex as Exception)?.Message ?? ex?.ToString()}\r\n"); } catch { }
     }
+}
+
+/// <summary>
+/// 🧊 Freeze recorder: notes what Nova's window thread was doing whenever it stops responding for more than 5 seconds
+/// (Documents\Nova Enhance\Logs\ui-freeze.txt — plain text, to send to Claude even when Settings can't open).
+/// </summary>
+static class UiWatch
+{
+    public static volatile string Doing = "";
+    static long beat = DateTime.UtcNow.Ticks;
+    static string FilePath => Path.Combine(Paths.Logs, "ui-freeze.txt");
+
+    public static void Step(string what) => Doing = what;
+
+    public static void Start()
+    {
+        var t = new System.Windows.Forms.Timer { Interval = 500 };
+        t.Tick += (_, _) => Interlocked.Exchange(ref beat, DateTime.UtcNow.Ticks);
+        t.Start();
+        new Thread(() =>
+        {
+            DateTime? since = null; string what = ""; bool wrote30 = false;
+            while (true)
+            {
+                Thread.Sleep(1000);
+                var silent = DateTime.UtcNow - new DateTime(Interlocked.Read(ref beat), DateTimeKind.Utc);
+                if (silent > TimeSpan.FromSeconds(5))
+                {
+                    if (since == null) { since = DateTime.Now - silent; what = Doing; wrote30 = false; }
+                    if (!wrote30 && silent > TimeSpan.FromSeconds(30)) { wrote30 = true; Write($"{since:yyyy-MM-dd HH:mm:ss}  STILL FROZEN after {(int)silent.TotalSeconds} s · while: {what}"); }
+                }
+                else if (since != null)
+                {
+                    var s = (int)(DateTime.Now - since.Value).TotalSeconds;
+                    Write($"{since:yyyy-MM-dd HH:mm:ss}  frozen {s} s · while: {what}");
+                    Log.Warn("🧊 window froze", $"{s} s while: {what}");
+                    since = null;
+                }
+            }
+        }) { IsBackground = true, Name = "Nova freeze recorder" }.Start();
+    }
+
+    static void Write(string line) { try { File.AppendAllText(FilePath, line + " · build " + Program.Build + "\r\n"); } catch { } }
 }

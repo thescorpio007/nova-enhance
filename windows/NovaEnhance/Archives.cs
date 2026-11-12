@@ -121,7 +121,7 @@ static class Archives
             try { RememberStores(ns); } catch { }
             var extra = Extra;
             if (extra.Count == 0) return added;
-            var open = OpenNow(ns);
+            List<string> open = OpenNow(ns);   // typed: a "dynamic" list can't use Contains(…, comparer)
             var mine = NovaOpened;
             foreach (var p in extra)
             {

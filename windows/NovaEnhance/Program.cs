@@ -9,6 +9,17 @@ static class Program
     public const string Sign = "Designed by A.HAMROUNI";
     public static int Build => Assembly.GetExecutingAssembly().GetName().Version?.Build ?? 0;
     public static SynchronizationContext UiContext;
+    /// <summary>A hidden control on Nova's window thread (to bring work back to it).</summary>
+    public static Control Marshal;
+
+    /// <summary>Called from another thread: runs <paramref name="a"/> on Nova's window thread instead and returns true.</summary>
+    public static bool OffUi(Action a)
+    {
+        var m = Marshal;
+        if (m == null || !m.IsHandleCreated || !m.InvokeRequired) return false;
+        try { m.BeginInvoke(a); } catch { }
+        return true;
+    }
     public static NotifyIcon Tray;
     public static string StartSearch;
 
@@ -74,7 +85,16 @@ class NovaContext : ApplicationContext
 
     public NovaContext(bool startedWithWindows)
     {
-        Program.UiContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
+        // Nova's window thread: every window must be created here. A WinForms context is installed explicitly — before, a plain
+        // context could slip in, and windows Nova opened by itself (Settings at start, a window after a restart) were created on a
+        // background thread and never responded.
+        var wfc = new WindowsFormsSynchronizationContext();
+        SynchronizationContext.SetSynchronizationContext(wfc);
+        Program.UiContext = wfc;
+        Program.Marshal = new Control();
+        Program.Marshal.CreateControl();
+        _ = Program.Marshal.Handle;
+        UiWatch.Start();
         Paths.Ensure();
         Store.Load();
         // 🛡 Two starts that never finished → safe mode (background jobs off, you switch them on one by one).
@@ -209,11 +229,12 @@ class NovaContext : ApplicationContext
     {
         try
         {
-            AutoBackup.MaybeRun();
-            BriefLogic.MaybeShow();
-            Calendar.Tick();
-            Work.Tick();
-            Prompts.Tick();
+            UiWatch.Step("minute check: backup"); AutoBackup.MaybeRun();
+            UiWatch.Step("minute check: morning brief"); BriefLogic.MaybeShow();
+            UiWatch.Step("minute check: calendar"); Calendar.Tick();
+            UiWatch.Step("minute check: my work"); Work.Tick();
+            UiWatch.Step("minute check: prompts"); Prompts.Tick();
+            UiWatch.Step("idle");
             if (ticks++ % 60 == 0 && Updater.Due) { await Updater.Check(); Updater.Offer(false); }
         }
         catch (Exception e) { Log.Error("tick", e); }
@@ -284,6 +305,7 @@ static class Screens
 
     public static void Work(string id)
     {
+        if (Program.OffUi(() => Work(id))) return;
         Guard.Screen("work");
         try
         {
@@ -303,6 +325,7 @@ static class Screens
 
     public static void HubAttach(string path)
     {
+        if (Program.OffUi(() => HubAttach(path))) return;
         try
         {
             if (hub == null || hub.IsDisposed) hub = new HubForm();
@@ -314,6 +337,7 @@ static class Screens
 
     public static void Hub(string text)
     {
+        if (Program.OffUi(() => Hub(text))) return;
         Guard.Screen("hub");
         try
         {
@@ -337,6 +361,7 @@ static class Screens
 
     public static void FolderSearch(string path)
     {
+        if (Program.OffUi(() => FolderSearch(path))) return;
         Guard.Screen("folder");
         if (folder == null || folder.IsDisposed) folder = new FolderSearchForm();
         Show(folder);
@@ -359,6 +384,7 @@ static class Screens
     /// <summary>✦ Ask Nova about this email (h = an email from a Nova list; null = the email selected in Outlook).</summary>
     public static void MailAsk(MailHit h, string subjectHint = "")
     {
+        if (Program.OffUi(() => MailAsk(h, subjectHint))) return;
         if (mailAsk == null || mailAsk.IsDisposed) mailAsk = new MailAskForm();
         Show(mailAsk);
         if (h != null) mailAsk.ShowMail(h); else mailAsk.LoadCurrent(subjectHint ?? "");
@@ -386,6 +412,7 @@ static class Screens
     /// <summary>📂 Find a project file by name (optionally with a search already typed).</summary>
     public static void FindFile(string q)
     {
+        if (Program.OffUi(() => FindFile(q))) return;
         Guard.Screen("find");
         if (finder == null || finder.IsDisposed) finder = new FileFinderForm();
         Show(finder);
@@ -397,6 +424,7 @@ static class Screens
     /// <summary>📂 Archive reader: a .pst read directly (a path), or an email of one ("pst:…").</summary>
     public static void PstReader(string what)
     {
+        if (Program.OffUi(() => PstReader(what))) return;
         Guard.Screen("pst");
         if (pstReader == null || pstReader.IsDisposed) pstReader = new PstReaderForm();
         Show(pstReader);
@@ -407,6 +435,7 @@ static class Screens
     /// <summary>🕘 Chat history: every conversation, newest first, with search.</summary>
     public static void ChatHistory()
     {
+        if (Program.OffUi(ChatHistory)) return;
         if (history == null || history.IsDisposed) history = new ChatHistoryForm();
         else history.Reload();
         Show(history);
@@ -414,6 +443,7 @@ static class Screens
 
     public static void AskFor(string q)
     {
+        if (Program.OffUi(() => AskFor(q))) return;
         if (ask == null || ask.IsDisposed) ask = new AskForm();
         Show(ask);
         ask.AskNow(q);
@@ -421,6 +451,7 @@ static class Screens
 
     public static void Ask()
     {
+        if (Program.OffUi(Ask)) return;
         Guard.Screen("ask");
         if (ask == null || ask.IsDisposed) ask = new AskForm();
         Show(ask);
@@ -429,6 +460,7 @@ static class Screens
 
     public static void Settings(string section = null)
     {
+        if (Program.OffUi(() => Settings(section))) return;
         if (set == null || set.IsDisposed) set = new SettingsForm();
         Show(set);
         if (section != null) set.Go(section);
@@ -436,6 +468,7 @@ static class Screens
 
     public static void Brief()
     {
+        if (Program.OffUi(Brief)) return;
         Guard.Screen("brief");
         if (brief == null || brief.IsDisposed) brief = new BriefForm();
         Show(brief);
