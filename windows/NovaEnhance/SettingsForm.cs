@@ -3,7 +3,7 @@ namespace NovaEnhance;
 /// <summary>Settings, split into sections like the phone app.</summary>
 class SettingsForm : NovaForm
 {
-    static readonly string[] Sections = { "AI & API keys", "About me", "Enhancement", "Email & AI", "Folder search", "📁 Projects", "✦ Prompts", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "🧪 Activity history", "About" };
+    static readonly string[] Sections = { "AI & API keys", "About me", "Enhancement", "Email & AI", "📥 Email index", "🗂 Mailboxes & archives", "📂 Folders in the index", "📁 Email projects", "Folder search", "📁 Projects", "✦ Prompts", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "🧪 Activity history", "About" };
     readonly ListBox nav;
     readonly Panel host;
     Stack page;
@@ -27,7 +27,9 @@ class SettingsForm : NovaForm
             var sel = (e.State & DrawItemState.Selected) != 0;
             using var bg = new SolidBrush(sel ? Th.Card2 : nav.BackColor);
             e.Graphics.FillRectangle(bg, e.Bounds);
-            TextRenderer.DrawText(e.Graphics, Sections[e.Index], Th.F(10.5f, sel), new Rectangle(e.Bounds.X + 16, e.Bounds.Y, e.Bounds.Width - 16, e.Bounds.Height),
+            var subPage = e.Index > 0 && Array.IndexOf(Sections, "Email & AI") is var ea && e.Index > ea && e.Index <= ea + 4;
+            var ind = subPage ? 34 : 16;
+            TextRenderer.DrawText(e.Graphics, Sections[e.Index], Th.F(subPage ? 9.8f : 10.5f, sel), new Rectangle(e.Bounds.X + ind, e.Bounds.Y, e.Bounds.Width - ind, e.Bounds.Height),
                 sel ? Color.White : Color.FromArgb(0xC9, 0xCE, 0xD8), TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix);
         };
         nav.SelectedIndexChanged += (_, _) => Draw(Sections[Math.Max(0, nav.SelectedIndex)]);
@@ -63,6 +65,7 @@ class SettingsForm : NovaForm
         page.Add(Th.L(section, 15, Th.Text, true));
         liveIndex = null; liveUpdate = null;
         Store.Set("win_set_drawing", section);
+        using var act = Activity.Begin("settings page", section);
         try
         {
             switch (section)
@@ -71,6 +74,10 @@ class SettingsForm : NovaForm
                 case "About me": AboutMe(); break;
                 case "Enhancement": Enhancement(); break;
                 case "Email & AI": EmailAi(); break;
+                case "📥 Email index": EmailIndexPage(); break;
+                case "🗂 Mailboxes & archives": MailboxesPage(); break;
+                case "📂 Folders in the index": FoldersPage(); break;
+                case "📁 Email projects": EmailProjectsSection(); break;
                 case "Folder search": FolderSearch(); break;
                 case "📁 Projects": ProjectsPage(); break;
                 case "Google Drive": GoogleDrive(); break;
@@ -90,6 +97,7 @@ class SettingsForm : NovaForm
         }
         catch (Exception e) { page.Add(Th.Wrap("⚠ " + e.Message, 10, Th.Bad)); Log.Error("settings " + section, e); }
         Store.Set("win_set_drawing", "");
+        act.Mark("page drawn");
         page.Add(Th.Signature());
         host.ResumeLayout();
         page.FitAll();
@@ -407,6 +415,28 @@ class SettingsForm : NovaForm
         br.Controls.Add(Th.L(":00", 10, Th.Text));
         page.Add(Th.Row(false)).Controls.Add(Th.B("☀ Open the brief now", Screens.Brief));
 
+        page.Add(Th.Section("Calendar"));
+        Note("Read from Outlook on this PC only — nothing from your calendar goes to the AI.");
+        page.Add(Th.Check("Today and tomorrow in the morning brief: meetings, clashes, invitations waiting, your reminders, what is still open for each meeting", Calendar.InBrief, v => Calendar.InBrief = v));
+        var pp = page.Add(Th.Row(false));
+        pp.Controls.Add(Th.Check("Pop-up before each meeting:", Calendar.Popup, v => Calendar.Popup = v));
+        var lead = new NumericUpDown { Minimum = 5, Maximum = 60, Increment = 5, Value = Calendar.Lead, Width = 56, BackColor = Th.Card, ForeColor = Th.Text, Font = Th.F(10) };
+        lead.ValueChanged += (_, _) => Calendar.Lead = (int)lead.Value;
+        pp.Controls.Add(lead);
+        pp.Controls.Add(Th.L("minutes before", 10, Th.Text));
+
+        page.Add(Th.Section("📌 My Work"));
+        Note("Saved searches and answers become live tasks (Documents\\Nova Enhance\\My Work), included in your backup.");
+        page.Add(Th.Check("Also create an Outlook task for each (shows in Outlook To-Do and Microsoft To Do on your phone; done there = done in Nova)", Work.OutlookSync, v => Work.OutlookSync = v));
+        page.Add(Th.Check("Write the 📊 weekly report every Thursday from 17:00", Work.WeeklyAuto, v => Work.WeeklyAuto = v));
+        page.Add(Th.Row(false)).Controls.Add(Th.B("📌 Open My Work", () => Screens.Work(null)));
+
+    }
+
+    // ------------------------------------------------------------------ 📥 Email index · 🗂 Mailboxes & archives · 📂 Folders (own pages: Settings always opens at once)
+
+    void EmailIndexPage()
+    {
         page.Add(Th.Section("Email index"));
         var line = page.Add(new IndexLine(true), true);
         line.Height = 32;
@@ -449,26 +479,12 @@ class SettingsForm : NovaForm
             }));
         }
 
-        page.Add(Th.Section("Calendar"));
-        Note("Read from Outlook on this PC only — nothing from your calendar goes to the AI.");
-        page.Add(Th.Check("Today and tomorrow in the morning brief: meetings, clashes, invitations waiting, your reminders, what is still open for each meeting", Calendar.InBrief, v => Calendar.InBrief = v));
-        var pp = page.Add(Th.Row(false));
-        pp.Controls.Add(Th.Check("Pop-up before each meeting:", Calendar.Popup, v => Calendar.Popup = v));
-        var lead = new NumericUpDown { Minimum = 5, Maximum = 60, Increment = 5, Value = Calendar.Lead, Width = 56, BackColor = Th.Card, ForeColor = Th.Text, Font = Th.F(10) };
-        lead.ValueChanged += (_, _) => Calendar.Lead = (int)lead.Value;
-        pp.Controls.Add(lead);
-        pp.Controls.Add(Th.L("minutes before", 10, Th.Text));
+    }
 
-        page.Add(Th.Section("📌 My Work"));
-        Note("Saved searches and answers become live tasks (Documents\\Nova Enhance\\My Work), included in your backup.");
-        page.Add(Th.Check("Also create an Outlook task for each (shows in Outlook To-Do and Microsoft To Do on your phone; done there = done in Nova)", Work.OutlookSync, v => Work.OutlookSync = v));
-        page.Add(Th.Check("Write the 📊 weekly report every Thursday from 17:00", Work.WeeklyAuto, v => Work.WeeklyAuto = v));
-        page.Add(Th.Row(false)).Controls.Add(Th.B("📌 Open My Work", () => Screens.Work(null)));
-
+    void MailboxesPage()
+    {
         page.Add(Th.Section("Mailboxes and folders"));
         Note("Everything is indexed: your mailbox, shared mailboxes, Online Archive, Groups and .pst archives (public folders and Search Folders are skipped). Untick a folder to leave it out of the index and of the answers.");
-        var folders = MailIndex.Folders();
-        if (folders.Count == 0) Note("The list fills in while Nova reads Outlook — open this page again in a few minutes.", Th.Muted);
         // How far back each mailbox / archive is searchable.
         // Counted in the background: the page opens at once.
         var statsBox = page.Add(new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, BackColor = Color.Transparent }, true);
@@ -543,7 +559,7 @@ class SettingsForm : NovaForm
                 var already = await Task.Run(() => Pst.AlreadyInNova(o));
                 if (already >= 80 && MessageBox.Show(this, $"About {already} % of the emails of {Path.GetFileName(path)} are already in Nova — it looks like a copy of an archive indexed before.\n\nAdd it anyway? (Emails already in Nova are skipped, only the missing ones are added.)", "⚡ Add directly", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
                 Pst.Add(o, null);
-                Draw("Email & AI");
+                Draw("🗂 Mailboxes & archives");
             }
             catch (Exception ex) { MessageBox.Show(this, "This file could not be read directly:\n" + ex.Message, "Nova Enhance"); }
         }
@@ -583,10 +599,25 @@ class SettingsForm : NovaForm
         }
         if (Archives.Extra.Count > 0 || Pst.All.Count > 0) FindArchivesLater();
         Note("A big archive takes several hours the first time (Outlook reads it email by email). Gentle indexing: older mail is read after working hours or when the PC is idle — ⚡ Index now reads at full speed.", Th.Muted);
+    }
+
+    void FoldersPage()
+    {
         page.Add(Th.Section("Folders"));
-        var left = MailIndex.LeftOut();
+        Note("Every Outlook folder in the index. Untick a folder to leave it out of the index and of the answers.");
+        var box = page.Add(new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, BackColor = Color.Transparent }, true);
+        box.Controls.Add(Th.L("Reading the folder list… ● ● ●", 9.5f, Th.Muted));
+        Task.Run(() => (MailIndex.Folders(), MailIndex.LeftOut())).ContinueWith(t =>
+        {
+            try { if (!box.IsDisposed) BeginInvoke(() => { if (box.IsDisposed) return; box.Controls.Clear(); FolderList(box, t.Result.Item1, t.Result.Item2); page?.FitAll(); }); } catch { }
+        });
+    }
+
+    void FolderList(FlowLayoutPanel box, List<(string Fid, string StoreName, string Path, int Total, int Indexed)> folders, HashSet<string> left)
+    {
         // One list with tick boxes (not hundreds of separate controls): the page scrolls smoothly.
-        var fl = page.Add(new ListView { View = View.Details, CheckBoxes = true, FullRowSelect = true, HeaderStyle = ColumnHeaderStyle.Nonclickable, Height = 360, BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.None, Font = Th.F(9.5f), ShowGroups = true }, true);
+        var fl = new ListView { View = View.Details, CheckBoxes = true, FullRowSelect = true, HeaderStyle = ColumnHeaderStyle.Nonclickable, Height = 360, BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.None, Font = Th.F(9.5f), ShowGroups = true, Width = Math.Max(700, page.ClientSize.Width - 70) };
+        box.Controls.Add(fl);
         fl.Columns.Add("Folder", 520); fl.Columns.Add("Indexed", 110, HorizontalAlignment.Right); fl.Columns.Add("In Outlook", 110, HorizontalAlignment.Right);
         var filling = true;
         foreach (var g in folders.Where(f => f.Total > 0 || f.Indexed > 0).GroupBy(f => f.StoreName))
@@ -597,7 +628,6 @@ class SettingsForm : NovaForm
         }
         filling = false;
         fl.ItemChecked += (_, e) => { if (!filling && e.Item.Tag is string fid) MailIndex.SetLeftOut(fid, !e.Item.Checked); };
-        Note("Untick a folder to leave it out of the index and of the answers.", Th.Muted);
     }
 
     // Options on one page share one parent, and Windows would treat them all as ONE group (picking an email source
@@ -909,7 +939,7 @@ class SettingsForm : NovaForm
             Note("Reading takes many hours for big projects (OCR on scanned drawings). Newest files are read first, so what you work on now is ready soonest. Nova pauses while you work and continues after working hours or when the PC is idle (Settings → Email & AI → Gentle indexing); ⚡ reads at full speed until complete.");
         }
 
-        EmailProjectsSection();
+        Note("📁 Email projects (sorting your emails per project) has its own page now: Email & AI → 📁 Email projects.", Th.Muted);
 
         page.Add(Th.Section("How Nova knows your files"));
         page.Add(Th.Check("Keep the list of file names up to date (new, renamed and deleted files within seconds; a full check every day)", Projects.Indexer.On, v => Projects.Indexer.On = v));
@@ -963,8 +993,8 @@ class SettingsForm : NovaForm
         {
             var r = order[k]; var idx = k;
             var row = page.Add(new FlowLayoutPanel { AutoSize = true, WrapContents = false, BackColor = Color.FromArgb(0x18, 0x1C, 0x24), Padding = new Padding(6, 4, 6, 4), Margin = new Padding(0, 2, 0, 2) }, true);
-            var up = Th.B("▲", () => { var o = MailProjects.Order; if (idx > 0) { (o[idx - 1], o[idx]) = (o[idx], o[idx - 1]); MailProjects.Order = o; Draw("📁 Projects"); } });
-            var dn = Th.B("▼", () => { var o = MailProjects.Order; if (idx < o.Count - 1) { (o[idx + 1], o[idx]) = (o[idx], o[idx + 1]); MailProjects.Order = o; Draw("📁 Projects"); } });
+            var up = Th.B("▲", () => { var o = MailProjects.Order; if (idx > 0) { (o[idx - 1], o[idx]) = (o[idx], o[idx - 1]); MailProjects.Order = o; Draw("📁 Email projects"); } });
+            var dn = Th.B("▼", () => { var o = MailProjects.Order; if (idx < o.Count - 1) { (o[idx + 1], o[idx]) = (o[idx], o[idx + 1]); MailProjects.Order = o; Draw("📁 Email projects"); } });
             up.Font = dn.Font = Th.F(8); up.Padding = dn.Padding = new Padding(2, 0, 2, 0);
             row.Controls.Add(up); row.Controls.Add(dn);
             var ck = Th.Check($"{k + 1} · {MailProjects.RuleNames[r]}", MailProjects.RuleOn(r), v => MailProjects.SetRule(r, v));
@@ -1004,19 +1034,19 @@ class SettingsForm : NovaForm
                     if (v == null) return;
                     var all = Projects.All(); var pp = all.First(x => x.Code == cc);
                     pp.Codes = v.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
-                    Projects.SaveAll(all); Draw("📁 Projects");
+                    Projects.SaveAll(all); Draw("📁 Email projects");
                 }));
             eb.Controls.Add(Th.B("✎ Names", () =>
             {
                 var v = Prompt.Ask(this, "📛 Names · " + cc, "Other names people write for this project (comma separated), e.g. Sea La Vie, 1-Sea La vie", string.Join(", ", cfg.Names));
                 if (v == null) return;
-                cfg.Names = v.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList(); MailProjects.SaveCfg(cc, cfg); Draw("📁 Projects");
+                cfg.Names = v.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList(); MailProjects.SaveCfg(cc, cfg); Draw("📁 Email projects");
             }));
             eb.Controls.Add(Th.B("🗂 Outlook folders", () =>
             {
                 var v = Prompt.Ask(this, "🗂 Outlook folders · " + cc, "Outlook folder names (comma separated) — emails in these folders and their sub-folders belong to this project, e.g. SLV, Projects › Sea La Vie", string.Join(", ", cfg.Folders));
                 if (v == null) return;
-                cfg.Folders = v.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select(x => x.Replace("›", "").Trim()).ToList(); MailProjects.SaveCfg(cc, cfg); Draw("📁 Projects");
+                cfg.Folders = v.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select(x => x.Replace("›", "").Trim()).ToList(); MailProjects.SaveCfg(cc, cfg); Draw("📁 Email projects");
             }));
             eb.Controls.Add(Th.B("👤 Senders", () =>
             {
@@ -1024,7 +1054,7 @@ class SettingsForm : NovaForm
                 if (v == null) return;
                 var list = v.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select(x => x.ToLowerInvariant()).ToList();
                 foreach (var s0 in list.Except(cfg.Senders)) MailProjects.AlwaysSender(s0, cc);
-                var c2 = MailProjects.CfgOf(cc); c2.Senders = list; MailProjects.SaveCfg(cc, c2); Draw("📁 Projects");
+                var c2 = MailProjects.CfgOf(cc); c2.Senders = list; MailProjects.SaveCfg(cc, c2); Draw("📁 Email projects");
             }));
             box.Controls.Add(eb);
         }
@@ -1038,7 +1068,7 @@ class SettingsForm : NovaForm
             undo.Dock = DockStyle.Bottom;
             f.Controls.Add(lb); f.Controls.Add(undo);
             f.ShowDialog(this);
-            Draw("📁 Projects");
+            Draw("📁 Email projects");
         }));
 
         page.Add(Th.Section("✦ AI for the unclear ones"));

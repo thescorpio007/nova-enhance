@@ -938,7 +938,7 @@ class AskForm : NovaForm
         m.Items.Add(new ToolStripSeparator());
         Add("?", "❔ Unsorted");
         m.Items.Add(new ToolStripSeparator());
-        m.Items.Add("⚙ Sorting rules & progress…", null, (_, _) => Screens.Settings("📁 Projects"));
+        m.Items.Add("⚙ Sorting rules & progress…", null, (_, _) => Screens.Settings("📁 Email projects"));
         m.Show(projBtn, new Point(0, projBtn.Height));
     }
 
