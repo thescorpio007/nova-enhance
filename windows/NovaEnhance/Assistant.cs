@@ -416,24 +416,33 @@ static class BriefLogic
         hits.Clear(); hits.AddRange(re);
     }
 
+    static bool InTo(MailHit h) => Me.Addrs.Any(a => (h.ToAddr ?? "").Contains(a, StringComparison.OrdinalIgnoreCase)) || (Me.Name.Length > 0 && (h.To ?? "").Contains(Me.Name, StringComparison.OrdinalIgnoreCase));
+
     public static async Task<(List<MailHit> Needs, List<MailHit> Follow)> Build(CancellationToken ct)
     {
         var needs = new List<MailHit>();
-        if (Store.NeedTo || Store.NeedCcNamed)
+        if (Store.NeedTo || Store.NeedCcNamed || BriefRules.Any)
         {
-            var q = new MailQuery { Folder = "received", Unanswered = true, After = DateTime.Now.AddDays(-Store.BriefDays), Limit = 300, MeIn = Store.NeedTo ? (Store.NeedCcNamed ? "any" : "to") : "cc" };
+            // ✦ Your instructions may bring in emails where you are only in Cc, or automatic ones (Asite…): read them too, keep only what a rule wants.
+            var rules = BriefRules.Current;
+            var q = new MailQuery { Folder = "received", Unanswered = true, After = DateTime.Now.AddDays(-Store.BriefDays), Limit = 300, MeIn = Store.NeedTo && !Store.NeedCcNamed && !BriefRules.WantsCc ? "to" : Store.NeedTo || BriefRules.WantsCc ? "any" : "cc" };
             var all = await Task.Run(() => MailIndex.Search(q), ct);
             var first = Me.FirstName;
             foreach (var h in all)
             {
-                if (IsAuto(h) || Me.IsMe(h.FromAddr)) continue;
-                bool inTo = Me.Addrs.Any(a => (h.ToAddr ?? "").Contains(a, StringComparison.OrdinalIgnoreCase)) || (Me.Name.Length > 0 && (h.To ?? "").Contains(Me.Name, StringComparison.OrdinalIgnoreCase));
+                if (Me.IsMe(h.FromAddr)) continue;
+                bool inTo = InTo(h);
+                var rule = BriefRules.Any ? BriefRules.Match(rules, h, inTo) : null;
+                if (IsAuto(h) && (rule == null || rule.Then == "hide")) continue;
+                if (rule != null && rule.Then != "hide" && (rule.Then == "include" || !inTo)) { needs.Add(h); continue; }
                 if (inTo && Store.NeedTo) { needs.Add(h); continue; }
                 if (!inTo && Store.NeedCcNamed && first.Length > 1 && h.NewPart.Contains(first, StringComparison.OrdinalIgnoreCase)) needs.Add(h);
             }
             var checkedNeeds = await Task.Run(() => Outstanding.Check(needs), ct);
             needs = Classify(checkedNeeds.Where(h => h.MaybeAnswered.Length == 0).ToList());
             await AiCheck(needs, ct);
+            // ✦ My brief instructions: your rules on this PC, the AI for what no rule decides.
+            if (BriefRules.Any) await BriefRules.Apply(needs, InTo, ct);
             needs.AddRange(checkedNeeds.Where(h => h.MaybeAnswered.Length > 0));
         }
         var follow = new List<MailHit>();

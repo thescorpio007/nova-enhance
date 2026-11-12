@@ -414,7 +414,10 @@ class SettingsForm : NovaForm
         hour.ValueChanged += (_, _) => Store.BriefHour = (int)hour.Value;
         br.Controls.Add(hour);
         br.Controls.Add(Th.L(":00", 10, Th.Text));
-        page.Add(Th.Row(false)).Controls.Add(Th.B("☀ Open the brief now", Screens.Brief));
+        var bri = page.Add(Th.Row(false));
+        bri.Controls.Add(Th.B("☀ Open the brief now", Screens.Brief));
+        bri.Controls.Add(Th.B("✦ My brief instructions…", () => BriefRules.Edit(this, () => Draw("Email & AI")), true));
+        if (BriefRules.Any) Note("✦ Your instructions are in use:\n" + BriefRules.Describe(BriefRules.Current), Th.Muted);
 
         page.Add(Th.Section("Calendar"));
         Note("Read from Outlook on this PC only — nothing from your calendar goes to the AI.");

@@ -1495,7 +1495,6 @@ class BriefForm : NovaForm
     // 💬 Nova tab in the right pane · ☑ several emails picked
     readonly TalkPanel talk;
     readonly PickBar pickBar;
-    readonly Button tabEmail, tabNova;
     bool talkOpen, settingSplit;
 
     void SizePane()
@@ -1542,15 +1541,14 @@ class BriefForm : NovaForm
         talk = new TalkPanel("brief",
             () => new TalkContext { All = lastNeeds.Concat(lastFollow).ToList(), Focus = Picks() is { Count: > 0 } p ? p : new[] { needs, fyi, follow }.Select(l => l.Selected).Where(x => x != null).Take(1).ToList(), Where = "morning brief: emails waiting for my reply, FYI, and my emails with no answer" },
             f => { needs.Nova = fyi.Nova = follow.Nova = f; Draw(); })
-        { Dock = DockStyle.Fill, Visible = false };
-        var tabs = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 38, BackColor = Th.Bg, Padding = new Padding(0, 2, 0, 2) };
-        tabEmail = Th.Chip("👁 Email", true, () => ShowTab(false));
-        tabNova = Th.Chip("💬 Nova", false, () => ShowTab(true));
-        tabs.Controls.Add(tabEmail); tabs.Controls.Add(tabNova);
+        { Dock = DockStyle.Bottom, Height = Math.Clamp(Store.Int("win_brief_talk_h", 270), 150, 900) };
+        // 💬 The conversation sits at the bottom, across the whole window (drag the bar above it); the right side shows the email.
+        var talkBar = new Splitter { Dock = DockStyle.Bottom, Height = 6, BackColor = Th.Card, MinSize = 150, MinExtra = 220 };
+        talkBar.SplitterMoved += (_, _) => Store.SetInt("win_brief_talk_h", talk.Height);
         split.Panel2.Controls.Add(pane);
-        split.Panel2.Controls.Add(talk);
-        split.Panel2.Controls.Add(tabs);
         Controls.Add(split);
+        Controls.Add(talkBar);
+        Controls.Add(talk);
         Controls.Add(top);
 
         head = top.Add(Th.L("☀ Good morning", 15, Th.Text, true));
@@ -1562,7 +1560,8 @@ class BriefForm : NovaForm
         row.Controls.Add(Th.B("⇩ Export", Export));
         row.Controls.Add(Th.B("📁 Briefs folder", () => Shell.Open(Paths.Briefs)));
         row.Controls.Add(Th.B("🔍 Search for email", Screens.Ask));
-        row.Controls.Add(Th.B("💬 Talk with Nova", () => { talkOpen = true; Relayout(true); ShowTab(true); }, true));
+        row.Controls.Add(Th.B("✦ My instructions", () => BriefRules.Edit(this, Reload), true));
+        row.Controls.Add(Th.B("💬 Talk with Nova", () => talk.FocusInput()));
         row.Controls.Add(Th.B("⚙ Rules", () => Screens.Settings("Email & AI")));
         message = top.Add(Th.Wrap("", 10, Th.Text), true);
         message.BackColor = Th.Card; message.Padding = new Padding(8); message.Visible = false;
@@ -1598,7 +1597,7 @@ class BriefForm : NovaForm
                 Draw(); pickBar.Refresh2();
                 message.Visible = true; message.Text = $"✓ {hs.Count} emails marked as handled — they won't show as waiting again."; top.FitAll();
             };
-            l.OnAskMany = hs => { talkOpen = true; Relayout(true); ShowTab(true); talk.AskAbout(hs); };
+            l.OnAskMany = hs => { talk.AskAbout(hs); talk.FocusInput(); };
         }
         pane.OnSummary = Summary;
         pane.OnDraft = Draft;
@@ -1634,13 +1633,6 @@ class BriefForm : NovaForm
         Relayout(true);
     }
 
-    /// <summary>The right pane: 👁 Email or 💬 Nova.</summary>
-    void ShowTab(bool nova)
-    {
-        talk.Visible = nova; pane.Visible = !nova;
-        Th.SetChip(tabEmail, !nova); Th.SetChip(tabNova, nova);
-        if (nova) talk.FocusInput();
-    }
 
     /// <summary>Wider window = more detail: reading pane from 1300 px, columns from 1800 px.</summary>
     void Relayout(bool force)
@@ -1690,7 +1682,8 @@ class BriefForm : NovaForm
         int wDue = wk.Count(t => t.DueToday), wOver = wk.Count(t => t.Overdue), wWait = wk.Count(t => t.Status == "waiting");
         info.Text = $"⏳ {n.Count} still waiting · 🔴 {red} overdue · 🟠 {orange} this week · ⚪ {fy} FYI · ↩ {lastFollow.Count} follow-ups · ✓ {Outstanding.HandledToday()} handled today · ↻ checked {lastCheck:HH:mm}\n" +
                     (wDue + wOver + wWait > 0 ? $"📌 My Work: {wDue} due today · {wOver} overdue · {wWait} waiting for others · " : "") +
-                    $"{DateTime.Now:dddd dd MMMM} · last {Store.BriefDays} days · Index: {MailIndex.Status}";
+                    $"{DateTime.Now:dddd dd MMMM} · last {Store.BriefDays} days · Index: {MailIndex.Status}" +
+                    (BriefRules.Any ? $"\n✦ Your instructions: {BriefRules.Current.Rules.Count} rule(s){(BriefRules.Current.AiCheck.Length > 0 ? " + the AI for the rest" : "")} — ✦ My instructions to change them" : "");
         info.Font = Th.F(10, true);
         top.FitAll();
     }
