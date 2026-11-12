@@ -1009,6 +1009,9 @@ class AskForm : NovaForm
             var named = Projects.ForText(mainQ);
             if (named != null && named.Code.Length > 0 && !named.Code.Equals(Project, StringComparison.OrdinalIgnoreCase)) SetProject(named.Code);
             act.Mark("📐 document numbers", $"{hits.Count} at once");
+            // 📁 Files start now, alongside the emails.
+            fileRows = new(); filesAll = false; DrawFiles();
+            var filesTask = FilesFor(mainQ, my.Token);
             var ans = In("mail")
                 ? await Assistant.Ask(mainQ, followUp ? lastFilter : null, hits, my.Token, fromTalk, Project)
                 : new Assistant.Answer { Explain = "emails not searched (✉ is off in Search in)" };
@@ -1061,12 +1064,22 @@ class AskForm : NovaForm
             list.Nova = null;
             ShowList();
             // 📁 Project files, drawings, 🧠 Memory and past answers for the same question.
-            await FindFiles(mainQ, my.Token);
+            // The files were searched alongside the emails: shown now if ready, otherwise when they arrive (emails never wait > 15 s).
+            if (await Task.WhenAny(filesTask, Task.Delay(15000)) == filesTask)
+            {
+                try { fileRows = await filesTask; } catch { fileRows = new(); }
+                DrawFiles();
+                if (fileRows.Count > 0) info.Text += $" · 📁 {fileRows.Count} file(s) / note(s) above the emails";
+            }
+            else
+            {
+                info.Text += " · 📁 files still being searched…";
+                LateFiles(filesTask, my);
+            }
             if (my.IsCancellationRequested) { act.Fail("stopped"); return; }
-            act.Mark("📁 files, drawings, memory", $"{fileRows.Count} found");
+            act.Mark("📁 files, drawings, memory (in parallel)", $"{fileRows.Count} found");
             act.Note("files", string.Join("\n", fileRows.Take(20).Select(r => r.Icon + " " + r.Title)));
             act.Result = $"{hits.Count} emails · {fileRows.Count} files · {ans.Seconds:0.0} s";
-            if (fileRows.Count > 0) info.Text += $" · 📁 {fileRows.Count} file(s) / note(s) above the emails";
             if (!fromTalk) talk.ListLoaded();
             bottom.Visible = true;
             follow.Text = "";
@@ -1086,14 +1099,12 @@ class AskForm : NovaForm
 
     // ------------------------------------------------------------------ 📁 project files & drawings with the emails
 
-    async Task FindFiles(string q, CancellationToken ct)
+    /// <summary>📁 Files, drawings, 🧠 Memory and past answers — searched at the same time as the emails.</summary>
+    async Task<List<FileRow>> FilesFor(string q, CancellationToken ct)
     {
-        fileRows = new(); filesAll = false; DrawFiles();
         bool files = In("files"), draw = In("draw"), mem = In("mem"), hist = In("hist");
-        if (!(files || draw || mem || hist)) return;
+        if (!(files || draw || mem || hist)) return new();
         await SearchGate.Wait(ct);
-        var prev = info.Text;
-        info.Text = prev + " · 📁 looking in project files and drawings…";
         var terms = FolderAsk.LocalTerms(q);
         fileTerms = string.Join(" ", terms.Concat(Revisions.Numbers(q)));
         var pobj = Project.Length > 1 ? Projects.All().FirstOrDefault(x => x.Code.Equals(Project, StringComparison.OrdinalIgnoreCase)) : null;
@@ -1135,9 +1146,17 @@ class AskForm : NovaForm
             catch (Exception e) { Log.Warn("ask files", e.Message); }
             return res;
         }, ct);
-        info.Text = prev;
+        return rows;
+    }
+
+    async void LateFiles(Task<List<FileRow>> t, CancellationTokenSource my)
+    {
+        List<FileRow> rows;
+        try { rows = await t; } catch { return; }
+        if (my.IsCancellationRequested || cts != my || IsDisposed) return;
         fileRows = rows;
         DrawFiles();
+        info.Text = info.Text.Replace(" · 📁 files still being searched…", "") + (rows.Count > 0 ? $" · 📁 {rows.Count} file(s) / note(s) above the emails" : "");
     }
 
     static string Short(string t) { t = Regex.Replace(t ?? "", @"\s+", " ").Trim(); return t.Length > 140 ? t[..140] + "…" : t; }

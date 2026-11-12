@@ -448,7 +448,9 @@ static class MailProjects
             var sys = "You sort an architect's work emails into his projects. Reply with JSON only: {\"p\":{\"1\":\"SLV\",\"2\":\"?\"}} — the project code for each email, or \"?\" when you are not sure. Never guess.";
             try
             {
-                var j = Ai.ParseJson(Ai.Chat(sys, sb.ToString(), true, true).GetAwaiter().GetResult());
+                // Your cloud AI (Gemini first), 60 s at most — the local model took up to 30 minutes per batch.
+                using var lim = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+                var j = Ai.ParseJson(Ai.Chat(sys, sb.ToString(), true, true, SmartSearch.Cloud(), lim.Token).GetAwaiter().GetResult());
                 if (j["p"] is JsonObject o)
                     foreach (var (k, v) in o)
                         if (int.TryParse(k, out var i) && i >= 1 && i <= send.Count)

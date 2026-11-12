@@ -1059,9 +1059,9 @@ class SettingsForm : NovaForm
             }));
             box.Controls.Add(eb);
         }
-        var fx = MailProjects.Corrections();
-        page.Add(Th.Row(false)).Controls.Add(Th.B($"✋ My corrections ({fx.Count})", () =>
+        page.Add(Th.Row(false)).Controls.Add(Th.B("✋ My corrections", () =>
         {
+            var fx = MailProjects.Corrections();
             using var f = new NovaForm { Text = "✋ My corrections", Width = 720, Height = 460, StartPosition = FormStartPosition.CenterParent };
             var lb = new ListBox { Dock = DockStyle.Fill, BackColor = Th.Card, ForeColor = Th.Text, Font = Th.F(10), BorderStyle = BorderStyle.None, SelectionMode = SelectionMode.MultiExtended };
             foreach (var (_, pj, subj) in fx) lb.Items.Add($"{pj}  ·  {subj}");

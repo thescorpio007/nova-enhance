@@ -195,9 +195,27 @@ static class SmartSearch
         // 1 · Every matching email for each idea, in any of its forms — all years (ids only, fast).
         var gIds = new List<HashSet<long>>();
         var dates = new Dictionary<long, long>();
+        // Very common ideas (e.g. "SSM" in 47,000 SLV emails) are not collected one by one: the rarer ideas find the
+        // candidates, the common one only adds to the score (checked in each candidate's subject / attachments / text).
+        var common = new HashSet<int>();
+        if (n >= 2)
+            for (int gi = 0; gi < n; gi++)
+            {
+                int total = 0;
+                foreach (var t in groups[gi].Take(6))
+                {
+                    var q0 = Clone(baseQ);
+                    if (t.Contains(' ') || t.Contains('-')) q0.Phrase = t; else q0.Words = new() { t };
+                    try { total += await Task.Run(() => MailIndex.CountIds(q0, 20001), ct); } catch (OperationCanceledException) { throw; } catch { }
+                    if (total > 20000) break;
+                }
+                if (total > 20000) common.Add(gi);
+            }
+        if (common.Count == n) common.Clear();
         for (int gi = 0; gi < n; gi++)
         {
             var set = new HashSet<long>();
+            if (common.Contains(gi)) { gIds.Add(set); continue; }
             foreach (var t in groups[gi].Take(6))
             {
                 ct.ThrowIfCancellationRequested();
@@ -211,7 +229,7 @@ static class SmartSearch
             }
             gIds.Add(set);
         }
-        Activity.Current?.Mark("find every match (all years)", $"{queries} searches · " + string.Join(" · ", gIds.Select((g, i) => $"{groups[i][0]} {g.Count:N0}")));
+        Activity.Current?.Mark("find every match (all years)", $"{queries} searches · " + string.Join(" · ", gIds.Select((g, i) => common.Contains(i) ? $"{groups[i][0]} (very common — scored only)" : $"{groups[i][0]} {g.Count:N0}")));
         var count = new Dictionary<long, int>();
         foreach (var set in gIds) foreach (var id in set) count[id] = count.TryGetValue(id, out var c) ? c + 1 : 1;
         // Meaning search: what is said in other words.
@@ -248,7 +266,7 @@ static class SmartSearch
         string precision = "";
         if (scored.Count > 200 && n >= 2)
         {
-            var rare = Enumerable.Range(0, n).OrderBy(i => gIds[i].Count).First();
+            var rare = Enumerable.Range(0, n).Where(i => !common.Contains(i)).OrderBy(i => gIds[i].Count).DefaultIfEmpty(0).First();
             var kept = scored.Where(x => x.P[rare].Score >= 1 || semantic.Contains(x.H.Id)).ToList();
             if (kept.Count >= 3) { scored = kept; precision = $" · precision: “{groups[rare][0]}” required in subject / attachment / new text"; }
         }

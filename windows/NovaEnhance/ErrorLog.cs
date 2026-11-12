@@ -57,10 +57,22 @@ static class Log
     /// <summary>Older calls: a line of text is a warning.</summary>
     public static void Write(string s) => Warn("Nova", s);
 
+    // The same warning again and again (e.g. one bad file at every pass) is written once an hour, with how many times it happened.
+    static readonly Dictionary<string, (DateTime At, int Skipped)> recent = new();
+
     static void Add(LogEntry e)
     {
         try
         {
+            var key = e.Level + "|" + e.Area + "|" + (e.Message.Length > 160 ? e.Message[..160] : e.Message);
+            lock (recent)
+            {
+                var window = e.Level == "warn" ? TimeSpan.FromHours(1) : TimeSpan.FromMinutes(10);
+                if (recent.TryGetValue(key, out var r) && DateTime.Now - r.At < window) { recent[key] = (r.At, r.Skipped + 1); return; }
+                if (recent.TryGetValue(key, out var r2) && r2.Skipped > 0) e.Message += $"   (×{r2.Skipped + 1} since {r2.At:HH:mm})";
+                recent[key] = (DateTime.Now, 0);
+                if (recent.Count > 2000) recent.Clear();
+            }
             e.Ts = DateTimeOffset.Now.ToUnixTimeMilliseconds();
             e.Step = CurrentStep;
             if (!Samples || string.IsNullOrEmpty(e.Sample)) e.Sample = "";

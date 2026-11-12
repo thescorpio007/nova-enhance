@@ -1108,6 +1108,17 @@ static class MailIndex
         return res;
     }
 
+    /// <summary>How many emails match, counted up to <paramref name="cap"/> (fast: no sorting).</summary>
+    public static int CountIds(MailQuery q, int cap)
+    {
+        var (where, ps) = Build(q);
+        using var c = Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM (SELECT 1 FROM mail m" + (where.Count > 0 ? " WHERE " + string.Join(" AND ", where) : "") + $" LIMIT {cap})";
+        foreach (var (n, v) in ps) cmd.Parameters.AddWithValue(n, v ?? DBNull.Value);
+        return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
     public static List<MailHit> Search(MailQuery q)
     {
         var (where, ps) = Build(q);

@@ -193,6 +193,8 @@ class Stack : FlowLayoutPanel
 
     public TC Add<TC>(TC c, bool stretch = false) where TC : Control
     {
+        // 🧪 Settings: the time each part of a page takes (Activity history), to find a slow one.
+        if (c is Label sec && sec.Text.Length > 2 && sec.Text == sec.Text.ToUpperInvariant() && sec.Text.Any(char.IsLetter)) Activity.Current?.Mark("before " + sec.Text);
         if (UiWatch.Doing.StartsWith("Settings")) UiWatch.Step(UiWatch.Doing.Split(" · adding")[0] + " · adding “" + (c.Text.Length > 40 ? c.Text[..40] : c.Text) + "”");
         if (stretch) c.Tag = "s";
         Controls.Add(c);
