@@ -42,7 +42,10 @@ class SettingsForm : NovaForm
         };
         live.Start();
         FormClosing += (_, e) => { if (e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Hide(); } };
-        nav.SelectedIndex = Ai.WithKeys.Length == 0 ? 0 : 3;
+        // 🛡 If a page did not finish opening last time, start on the simple About page.
+        var stuck = Store.Str("win_set_drawing", "");
+        if (stuck.Length > 0) { Store.Set("win_set_drawing", ""); Log.Warn("settings", $"the page “{stuck}” did not open last time — starting on About"); nav.SelectedIndex = Array.IndexOf(Sections, "About"); }
+        else nav.SelectedIndex = Ai.WithKeys.Length == 0 ? 0 : 3;
     }
 
     public void Go(string section)
@@ -59,6 +62,7 @@ class SettingsForm : NovaForm
         host.Controls.Add(page);
         page.Add(Th.L(section, 15, Th.Text, true));
         liveIndex = null; liveUpdate = null;
+        Store.Set("win_set_drawing", section);
         try
         {
             switch (section)
@@ -85,6 +89,7 @@ class SettingsForm : NovaForm
             }
         }
         catch (Exception e) { page.Add(Th.Wrap("⚠ " + e.Message, 10, Th.Bad)); Log.Error("settings " + section, e); }
+        Store.Set("win_set_drawing", "");
         page.Add(Th.Signature());
         host.ResumeLayout();
         page.FitAll();
@@ -465,19 +470,41 @@ class SettingsForm : NovaForm
         var folders = MailIndex.Folders();
         if (folders.Count == 0) Note("The list fills in while Nova reads Outlook — open this page again in a few minutes.", Th.Muted);
         // How far back each mailbox / archive is searchable.
-        var stats = MailIndex.StoreStats();
-        var statsAt = DateTime.Now;
-        foreach (var sst0 in stats)
+        // Counted in the background: the page opens at once.
+        var statsBox = page.Add(new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, BackColor = Color.Transparent }, true);
+        statsBox.Controls.Add(Th.L("Counting the emails of each mailbox and archive… ● ● ●", 9.5f, Th.Muted));
+        List<(string Store, int Indexed, int Total, DateTime? Oldest, DateTime? Newest)> stats = new();
+        var statsAt = DateTime.MinValue;
+        Task.Run(MailIndex.StoreStats).ContinueWith(t =>
         {
-            var stName = sst0.Store;
-            page.Add(new ProgressRow(() =>
+            try
             {
-                if (DateTime.Now - statsAt > TimeSpan.FromSeconds(5)) { stats = MailIndex.StoreStats(); statsAt = DateTime.Now; }
-                var stX = stats.FirstOrDefault(y => y.Store == stName);
-                var stPc = stX.Total > 0 ? (int)Math.Min(100, 100L * stX.Indexed / stX.Total) : 100;
-                var stSpan = (stX.Oldest is { } o1 ? o1.ToString("dd MMM yyyy") : "—") + " → " + (stX.Newest is { } n1 ? n1.ToString("dd MMM yyyy") : "—");
-                return ("✉ " + stName, stPc, $"{stX.Indexed:N0} of {stX.Total:N0} emails · {stSpan}", !IndexProgress.Now.Complete);
-            }), true);
+                if (statsBox.IsDisposed) return;
+                BeginInvoke(() =>
+                {
+                    if (statsBox.IsDisposed) return;
+                    stats = t.Result; statsAt = DateTime.Now;
+                    statsBox.Controls.Clear();
+                    StatRows2();
+                    page?.FitAll();
+                });
+            }
+            catch { }
+        });
+        void StatRows2()
+        {
+            foreach (var sst0 in stats)
+            {
+                var stName = sst0.Store;
+                statsBox.Controls.Add(new ProgressRow(() =>
+                {
+                    if (DateTime.Now - statsAt > TimeSpan.FromSeconds(5)) { stats = MailIndex.StoreStats(); statsAt = DateTime.Now; }
+                    var stX = stats.FirstOrDefault(y => y.Store == stName);
+                    var stPc = stX.Total > 0 ? (int)Math.Min(100, 100L * stX.Indexed / stX.Total) : 100;
+                    var stSpan = (stX.Oldest is { } o1 ? o1.ToString("dd MMM yyyy") : "—") + " → " + (stX.Newest is { } n1 ? n1.ToString("dd MMM yyyy") : "—");
+                    return ("✉ " + stName, stPc, $"{stX.Indexed:N0} of {stX.Total:N0} emails · {stSpan}", !IndexProgress.Now.Complete);
+                }) { Width = Math.Max(500, statsBox.Parent?.ClientSize.Width - 70 ?? 900) });
+            }
         }
         // 📂 Archive files not open in Outlook (option B: opened for indexing, closed again after).
         page.Add(Th.Section("📂 Archive files (.pst) not open in Outlook"));
@@ -525,7 +552,7 @@ class SettingsForm : NovaForm
                 return ($"📂 {i.Name} (read directly)", pc, $"{i.Indexed:N0} added · {i.Skipped:N0} already in Nova · of {i.Total:N0}{rate} · {i.Status}", Pst.Current == fpx);
             }), true);
         }
-        arow.Controls.Add(Th.B("🔍 Find archive files", () => ShowArchives(Archives.Find()), true));
+        arow.Controls.Add(Th.B("🔍 Find archive files", FindArchivesLater, true));
         arow.Controls.Add(Th.B("📂 Archive reader…", () => Screens.PstReader(null)));
         arow.Controls.Add(Th.B("📂 Add an archive file…", () =>
         {
@@ -535,7 +562,19 @@ class SettingsForm : NovaForm
             ShowArchives(Archives.Find());
         }));
         arow.Controls.Add(Th.B("➕ Add all found (directly)", () => { foreach (var x in Archives.Find().Where(fz => !fz.Indexed)) AddDirect(x.Path); ShowArchives(Archives.Find()); }));
-        if (Archives.Extra.Count > 0) ShowArchives(Archives.Find());
+        // Asked in the background with a time limit: a busy Outlook can't freeze Settings.
+        async void FindArchivesLater()
+        {
+            alist.Controls.Clear();
+            alist.Controls.Add(Th.L("Looking for archive files… ● ● ●", 9.5f, Th.Muted));
+            try
+            {
+                var found = await Guard.Limit(Task.Run(Archives.Find), 15, "Outlook");
+                if (!alist.IsDisposed) ShowArchives(found);
+            }
+            catch (Exception ex) { if (!alist.IsDisposed) { alist.Controls.Clear(); alist.Controls.Add(Th.L("⚠ " + ex.Message, 9.5f, Th.Warn)); } }
+        }
+        if (Archives.Extra.Count > 0 || Pst.All.Count > 0) FindArchivesLater();
         Note("A big archive takes several hours the first time (Outlook reads it email by email). Gentle indexing: older mail is read after working hours or when the PC is idle — ⚡ Index now reads at full speed.", Th.Muted);
         page.Add(Th.Section("Folders"));
         var left = MailIndex.LeftOut();

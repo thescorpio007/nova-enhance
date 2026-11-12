@@ -62,12 +62,12 @@ class PstReaderForm : NovaForm
         bottom.Controls.Add(dots); bottom.Controls.Add(status);
         bottom.Controls.Add(Th.L("   " + Program.Sign + " · build " + Program.Build + " · reader: XstReader (Ms-PL)", 9, Th.Muted));
 
-        var split1 = new SplitContainer { Dock = DockStyle.Fill, SplitterDistance = 300, BackColor = Th.Bg, Panel1MinSize = 160 };
+        var split1 = new SplitContainer { Dock = DockStyle.Fill, BackColor = Th.Bg, Panel1MinSize = 160 };
         tree = new TreeView { Dock = DockStyle.Fill, BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.None, Font = Th.F(10), CheckBoxes = true, HideSelection = false };
         tree.AfterSelect += (_, e) => { if (e.Node?.Tag is X.Folder f) ShowFolder(f); };
         split1.Panel1.Controls.Add(tree);
 
-        var split2 = new SplitContainer { Dock = DockStyle.Fill, SplitterDistance = 640, BackColor = Th.Bg };
+        var split2 = new SplitContainer { Dock = DockStyle.Fill, BackColor = Th.Bg, Panel1MinSize = 300, Panel2MinSize = 320 };
         list = new ListView { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, HideSelection = false, VirtualMode = true, BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.None, Font = Th.F(9.5f) };
         list.Columns.Add("Date", 130); list.Columns.Add("From", 170); list.Columns.Add("Subject", 360); list.Columns.Add("📎", 30); list.Columns.Add("Folder", 160);
         list.RetrieveVirtualItem += (_, e) =>
@@ -92,7 +92,7 @@ class PstReaderForm : NovaForm
         var pv = new Panel { Dock = DockStyle.Fill, BackColor = Th.Card, Padding = new Padding(10) };
         head = new Label { Dock = DockStyle.Top, AutoSize = false, Height = 120, ForeColor = Th.Text, Font = Th.F(10), UseMnemonic = false };
         files = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, MaximumSize = new Size(4000, 110), AutoScroll = true, BackColor = Th.Card };
-        var tools = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, BackColor = Th.Card };
+        var tools = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, WrapContents = true, BackColor = Th.Card, Padding = new Padding(0, 4, 0, 4) };
         tools.Controls.Add(Th.B("🌐 Open as web page", () => { if (current == null) return; var f = Path.Combine(Paths.Cache, "pst-mail.html"); File.WriteAllText(f, current.Html.Length > 0 ? current.Html : "<pre>" + System.Net.WebUtility.HtmlEncode(current.Body) + "</pre>"); Shell.Open(f); }));
         tools.Controls.Add(Th.B("✉ Save as .eml", () => ExportEml(Selected())));
         tools.Controls.Add(Th.B("📎 Save attachments", () => SaveAttachments(Selected())));
@@ -106,6 +106,29 @@ class PstReaderForm : NovaForm
         Controls.Add(srow);
         Controls.Add(top);
         FormClosed += (_, _) => cts?.Cancel();
+
+        // Widths set once the window has its real size (tree 20 % · list 40 % · preview 40 %), remembered when you drag.
+        void Fit()
+        {
+            try
+            {
+                var w = split1.Width;
+                if (w < 600) return;
+                split1.SplitterDistance = Math.Clamp((int)(w * Store.Int("win_pst_tree", 20) / 100.0), 160, w - 640);
+                var w2 = split2.Width;
+                split2.SplitterDistance = Math.Clamp((int)(w2 * Store.Int("win_pst_list", 50) / 100.0), 300, w2 - 320);
+                list.Columns[2].Width = Math.Max(200, list.ClientSize.Width - 130 - 160 - 30 - 130 - 8);
+                tools.MaximumSize = new Size(pv.ClientSize.Width - 20, 0);
+                head.MaximumSize = new Size(pv.ClientSize.Width - 20, 0);
+            }
+            catch { }
+        }
+        bool fitting = false;
+        Shown += (_, _) => { fitting = true; Fit(); fitting = false; };
+        Resize += (_, _) => { if (WindowState != FormWindowState.Minimized) { fitting = true; Fit(); fitting = false; } };
+        split1.SplitterMoved += (_, _) => { if (!fitting && split1.Width > 0) Store.SetInt("win_pst_tree", Math.Clamp(100 * split1.SplitterDistance / split1.Width, 10, 45)); };
+        split2.SplitterMoved += (_, _) => { if (!fitting && split2.Width > 0) Store.SetInt("win_pst_list", Math.Clamp(100 * split2.SplitterDistance / split2.Width, 25, 75)); };
+        list.Resize += (_, _) => { try { list.Columns[2].Width = Math.Max(200, list.ClientSize.Width - 130 - 160 - 30 - 130 - 8); } catch { } };
     }
 
     void Busy(string text, bool on) { if (IsDisposed) return; status.Text = text; dots.On = on; }

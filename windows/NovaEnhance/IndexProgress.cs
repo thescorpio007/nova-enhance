@@ -268,7 +268,8 @@ class ProgressRow : Panel
         t.Start();
         Disposed += (_, _) => t.Dispose();
         Resize += (_, _) => Lay();
-        Update2();
+        title.Text = "loading…"; dots.On = true;
+        HandleCreated += (_, _) => Update2();
     }
 
     void Lay()
@@ -278,12 +279,28 @@ class ProgressRow : Panel
         back.Width = Math.Max(100, Width - 24);
     }
 
+    bool reading;
+
+    /// <summary>The numbers are read in the background (a busy index or Outlook never freezes the window).</summary>
     void Update2()
+    {
+        if (IsDisposed || reading) return;
+        reading = true;
+        Task.Run(() => { try { return ((string, int, string, bool)?)read(); } catch { return null; } })
+            .ContinueWith(t =>
+            {
+                try { if (!IsDisposed && IsHandleCreated && t.Result is { } v) BeginInvoke(() => Apply(v)); }
+                catch { }
+                finally { reading = false; }
+            });
+    }
+
+    void Apply((string Title, int Percent, string Detail, bool Working) v)
     {
         if (IsDisposed) return;
         try
         {
-            var (ti, p, de, w) = read();
+            var (ti, p, de, w) = v;
             p = Math.Clamp(p, 0, 100);
             title.Text = ti;
             pct.Text = p >= 100 ? "✓ 100 %" : p + " %";
