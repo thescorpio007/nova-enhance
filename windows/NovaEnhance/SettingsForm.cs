@@ -534,7 +534,7 @@ class SettingsForm : NovaForm
             foreach (var fn in pstDlg.FileNames) AddDirect(fn);
             ShowArchives(Archives.Find());
         }));
-        arow.Controls.Add(Th.B("➕ Add all found (directly)", () => { foreach (var x in Archives.Find().Where(x => !x.Indexed)) AddDirect(x.Path); ShowArchives(Archives.Find()); }));
+        arow.Controls.Add(Th.B("➕ Add all found (directly)", () => { foreach (var x in Archives.Find().Where(fz => !fz.Indexed)) AddDirect(x.Path); ShowArchives(Archives.Find()); }));
         if (Archives.Extra.Count > 0) ShowArchives(Archives.Find());
         Note("A big archive takes several hours the first time (Outlook reads it email by email). Gentle indexing: older mail is read after working hours or when the PC is idle — ⚡ Index now reads at full speed.", Th.Muted);
         page.Add(Th.Section("Folders"));
