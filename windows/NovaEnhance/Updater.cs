@@ -78,7 +78,7 @@ static class Updater
                 if (!names.Contains("SHA256SUMS.txt") || !names.Contains("SHA256SUMS.sig") || !names.Any(x => x.EndsWith(Want))) continue;
                 if (b > bestBuild) { bestBuild = b; best = r; }
             }
-            if (best == null || bestBuild <= Program.Build) return Done($"✓ Up to date (build {Program.Build})");
+            if (best == null || bestBuild <= Program.Build) return Done($"✓ Up to date ({Program.Shown})");
             var ready = Waiting();
             if (ready != null && ready.Build == bestBuild) return Done($"Build {bestBuild} is ready to install");
             return Done(await Fetch(http, best, bestBuild, progress, Folder));
@@ -93,11 +93,11 @@ static class Updater
         var urls = new Dictionary<string, string>();
         foreach (var a in release["assets"] as JsonArray ?? new JsonArray())
             if (a is JsonObject o) urls[o["name"]?.ToString() ?? ""] = o["browser_download_url"]?.ToString() ?? "";
-        progress?.Invoke($"Checking the signature of build {build}…");
+        progress?.Invoke($"Checking the signature of {Program.ShownOf(build)}…");
         var sums = await http.GetByteArrayAsync(urls["SHA256SUMS.txt"]);
         var sig = await http.GetByteArrayAsync(urls["SHA256SUMS.sig"]);
         if (tamper != null) sums = tamper(sums);
-        if (!SignatureOk(sums, sig)) return $"⚠ Build {build} refused: the checksum file is not signed with Nova Enhance's key";
+        if (!SignatureOk(sums, sig)) return $"⚠ {Program.ShownOf(build)} refused: the checksum file is not signed with Nova Enhance's key";
         var file = urls.Keys.First(n => n.EndsWith(Want));
         string expected = null;
         foreach (var line in Encoding.UTF8.GetString(sums).Split('\n'))
@@ -105,21 +105,21 @@ static class Updater
             var parts = line.Trim().Split(new[] { ' ', '\t' }, 2, StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length == 2 && parts[1].TrimStart('*').Trim() == file) expected = parts[0].ToLowerInvariant();
         }
-        if (expected == null) return $"⚠ Build {build} refused: the file is not in the checksum list";
+        if (expected == null) return $"⚠ {Program.ShownOf(build)} refused: the file is not in the checksum list";
         Directory.CreateDirectory(folder);
         foreach (var old in Directory.GetFiles(folder)) try { File.Delete(old); } catch { }
         var path = Path.Combine(folder, file);
-        progress?.Invoke($"Downloading build {build}…");
+        progress?.Invoke($"Downloading {Program.ShownOf(build)}…");
         await using (var s = await http.GetStreamAsync(urls[file]))
         await using (var fs = File.Create(path)) await s.CopyToAsync(fs);
         string got;
         await using (var fs = File.OpenRead(path)) got = Convert.ToHexString(await SHA256.HashDataAsync(fs)).ToLowerInvariant();
-        if (got != expected) { File.Delete(path); return $"⚠ Build {build} refused: the download does not match its SHA-256 (deleted)"; }
+        if (got != expected) { File.Delete(path); return $"⚠ {Program.ShownOf(build)} refused: the download does not match its SHA-256 (deleted)"; }
         if (record)
         {
             var o = Load(); o["readyBuild"] = build; o["readyFile"] = path; o["readyNotes"] = (release["body"]?.ToString() ?? "").Trim(); Save(o);
         }
-        return $"✓ Build {build} downloaded and verified (signature ✓ · SHA-256 ✓)";
+        return $"✓ {Program.ShownOf(build)} downloaded and verified (signature ✓ · SHA-256 ✓)";
     }
 
     static bool SignatureOk(byte[] data, byte[] sig)
@@ -161,7 +161,7 @@ static class Updater
         if (!always && offered == r.Build) return;
         o["offered"] = r.Build; Save(o);
         var notes = r.Notes.Length > 600 ? r.Notes[..600] : r.Notes;
-        var msg = $"Nova Enhance for Windows build {Program.Build} → build {r.Build}\n\n✓ Checksum file signed with Nova Enhance's own key\n✓ SHA-256 of the download matches\n\n" +
+        var msg = $"Nova Enhance for Windows {Program.Shown} → {Program.ShownOf(r.Build)}\n\n✓ Checksum file signed with Nova Enhance's own key\n✓ SHA-256 of the download matches\n\n" +
                   (notes.Length > 0 ? notes + "\n\n" : "") + "Nova closes, updates and opens again by itself. Install now?";
         if (MessageBox.Show(msg, "⬆ Update ready", MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes)
         {

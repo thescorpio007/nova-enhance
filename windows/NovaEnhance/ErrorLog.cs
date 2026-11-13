@@ -146,7 +146,7 @@ static class Log
     public static string Environment()
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"Nova Enhance for Windows 1.0 · build {Program.Build}");
+        sb.AppendLine($"Nova Enhance for Windows {Program.Shown} (internal {Program.Build})");
         try
         {
             using var k = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
@@ -221,7 +221,7 @@ static class Log
         {
             dynamic app = Outlook.Get();
             dynamic mail = app.CreateItem(0);
-            mail.Subject = $"Nova Enhance error report · build {Program.Build} · {DateTime.Now:dd MMM yyyy}";
+            mail.Subject = $"Nova Enhance error report · {Program.Shown} · {DateTime.Now:dd MMM yyyy}";
             mail.Body = "Hello,\r\n\r\nPlease find the Nova Enhance error report attached.\r\n\r\n" + Program.Sign;
             mail.Attachments.Add(zip);
             mail.Display(false);

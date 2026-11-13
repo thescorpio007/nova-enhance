@@ -117,7 +117,7 @@ static class Th
 
     public static Control Signature() => new Label
     {
-        Text = Program.Sign + " · build " + Program.Build, AutoSize = true, Font = F(8.5f), ForeColor = Color.FromArgb(0x6B, 0x73, 0x85),
+        Text = Program.Sign + " · " + Program.Shown, AutoSize = true, Font = F(8.5f), ForeColor = Color.FromArgb(0x6B, 0x73, 0x85),
         Margin = new Padding(0, 14, 0, 4), BackColor = Color.Transparent
     };
 

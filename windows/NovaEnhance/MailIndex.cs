@@ -343,7 +343,7 @@ static class MailIndex
     public static bool Running => th != null;
 
     static string Dir => Store.IndexLocal ? Paths.MailIndexLocal : Paths.MailIndexDocs;
-    static string DbPath => Path.Combine(Dir, "mail.db");
+    internal static string DbPath => Path.Combine(Dir, "mail.db");
     static readonly byte[] Entropy = Encoding.UTF8.GetBytes("Nova Enhance mail index");
 
     static string KeyHex()
@@ -393,6 +393,7 @@ static class MailIndex
     /// <summary>new_entry "" = not found anywhere in Outlook (moved to a file that is not open, or deleted).</summary>
     public static void SetMoved(string entry, string newEntry, string newStore)
     {
+        for (int attempt = 1; attempt <= 4; attempt++)
         try
         {
             using var c = Open(); EnsureMoved(c);
@@ -401,8 +402,10 @@ static class MailIndex
             cmd.Parameters.AddWithValue("$e", entry); cmd.Parameters.AddWithValue("$n", newEntry ?? ""); cmd.Parameters.AddWithValue("$s", newStore ?? "");
             cmd.Parameters.AddWithValue("$t", DateTimeOffset.Now.ToUnixTimeMilliseconds());
             cmd.ExecuteNonQuery();
+            return;
         }
-        catch (Exception e) { Log.Warn("moved emails", e.Message); }
+        catch (Exception e) when (attempt < 4 && (e.Message.Contains("locked") || e.Message.Contains("busy"))) { Thread.Sleep(1500 * attempt); }
+        catch (Exception e) { Log.Warn("moved emails", e.Message); return; }
     }
 
     /// <summary>The other copies of this email in the index (same subject, minute, sender and direction).</summary>

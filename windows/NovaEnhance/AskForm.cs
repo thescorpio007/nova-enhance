@@ -263,6 +263,14 @@ class MailList : FlowLayoutPanel
             if (!h.Sent && OnHandled != null) btns.Controls.Add(Th.B("✓ Handled", () => OnHandled(h)));
             btns.Controls.Add(Th.B("💾 Save as…", () => MailFile.SaveAs(h, FindForm())));
             btns.Controls.Add(Th.B("⧉ Copy as file", () => MailFile.Copy(h, FindForm())));
+        // ⭐ Star: the phone keeps this email (with its attachments) as a real file, to open offline.
+        Button star = null;
+        star = Th.B(PhoneLink.IsStarred(h) ? "★ Starred for the phone" : "⭐ Star for the phone", () =>
+        {
+            PhoneLink.ToggleStar(h);
+            star.Text = PhoneLink.IsStarred(h) ? "★ Starred for the phone" : "⭐ Star for the phone";
+        });
+        btns.Controls.Add(star);
             card.Controls.Add(btns);
         }
         // Click a card to read it · Ctrl+click / Shift+click to pick several (every action then applies to all of them).
@@ -1915,6 +1923,7 @@ class BriefForm : NovaForm
         {
             var (n, f) = await BriefLogic.Build(CancellationToken.None);
             lastNeeds = n; lastFollow = f;
+            PhoneLink.BriefMade(n, f);   // 📱 the phone gets the same brief
             needs.Nova = fyi.Nova = follow.Nova = null;
             await DrawCalendar(n, true);
             lastCheck = DateTime.Now;

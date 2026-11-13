@@ -8,6 +8,12 @@ static class Program
 {
     public const string Sign = "Designed by A.HAMROUNI";
     public static int Build => Assembly.GetExecutingAssembly().GetName().Version?.Build ?? 0;
+    /// <summary>2.0: the build count starts again at 01 (internally the number keeps going up, so updates keep working).</summary>
+    public const int Base2 = 76;
+    public static int ShownBuild => Build > Base2 ? Build - Base2 : Build;
+    public static string Version => Build > Base2 ? "2.0" : "1.0";
+    public static string Shown => ShownOf(Build);
+    public static string ShownOf(int internalBuild) => internalBuild > Base2 ? $"2.0 · build {internalBuild - Base2:00}" : $"1.0 · build {internalBuild}";
     public static SynchronizationContext UiContext;
     /// <summary>A hidden control on Nova's window thread (to bring work back to it).</summary>
     public static Control Marshal;
@@ -255,15 +261,8 @@ class NovaContext : ApplicationContext
         Guard.Stage("archive reader"); Pst.Start();
         Guard.Stage("activity auto-save"); Activity.StartAuto();
         Guard.Stage("test connector"); TestConnector.Start();
-        Guard.Stage("moved emails check");
-        new Thread(() => Guard.Run("moved emails check", () =>
-        {
-            while (true)
-            {
-                Thread.Sleep(TimeSpan.FromMinutes(20));
-                try { MailIndex.CheckMovedNightly(); } catch (Exception e) { Log.Warn("moved emails", e.Message); }
-            }
-        })) { IsBackground = true, Name = "Nova moved emails", Priority = ThreadPriority.Lowest }.Start();
+        // (2.0) The night check of moved emails was removed: it crashed Nova (build 75–76). Moved emails are found when you open them.
+        Guard.Stage("phone link"); PhoneLink.Start();
         Guard.Stage("started");
     }
 

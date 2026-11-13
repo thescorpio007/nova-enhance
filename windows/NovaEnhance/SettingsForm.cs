@@ -3,7 +3,7 @@ namespace NovaEnhance;
 /// <summary>Settings, split into sections like the phone app.</summary>
 class SettingsForm : NovaForm
 {
-    static readonly string[] Sections = { "AI & API keys", "About me", "Enhancement", "Email & AI", "📥 Email index", "🗂 Mailboxes & archives", "📂 Folders in the index", "📁 Email projects", "Folder search", "📁 Projects", "✦ Prompts", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "🧪 Activity history", "🔌 Test connector", "About" };
+    static readonly string[] Sections = { "AI & API keys", "About me", "Enhancement", "Email & AI", "📥 Email index", "🗂 Mailboxes & archives", "📂 Folders in the index", "📁 Email projects", "Folder search", "📁 Projects", "✦ Prompts", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "🧪 Activity history", "🔌 Test connector", "📱 Phone link", "About" };
     readonly ListBox nav;
     readonly Panel host;
     Stack page;
@@ -93,6 +93,7 @@ class SettingsForm : NovaForm
                 case "Error log": ErrorLog(); break;
                 case "🧪 Activity history": ActivityPage(); break;
                 case "🔌 Test connector": TestConnectorPage(); break;
+                case "📱 Phone link": PhoneLinkPage(); break;
                 case "Office tab": OfficeTab(); break;
                 default: About(); break;
             }
@@ -1510,7 +1511,7 @@ class SettingsForm : NovaForm
     }
 
     // ------------------------------------------------------------------ Updates
-    static string UpdateText() => $"This is build {Program.Build}. " + (Updater.Status.Length > 0 ? Updater.Status : "Checked once a day from GitHub (signature and SHA-256 verified before installing).");
+    static string UpdateText() => $"This is {Program.Shown}. " + (Updater.Status.Length > 0 ? Updater.Status : "Checked once a day from GitHub (signature and SHA-256 verified before installing).");
 
     void Updates()
     {
@@ -1532,6 +1533,83 @@ class SettingsForm : NovaForm
     bool logErrorsOnly;
 
     int actDays = 1;
+
+    /// <summary>📱 Phone link (2.0): the phone gets Nova's data from this PC, encrypted with the key in the QR code.</summary>
+    void PhoneLinkPage()
+    {
+        Note("Your phone gets Nova's data from this PC — every email with full text (all periods), attachment text, brief, email projects, project-file catalogue, ⭐ starred items, rules, prompts, profile, vocabulary and My Work — encrypted with the key in the QR code. 🔒 Private folders and files (wallet, password, bank…) never leave this PC.");
+        page.Add(Th.Check("📱 Link my phone (prepare and send the data)", PhoneLink.On, v => PhoneLink.On = v));
+
+        page.Add(Th.Section("Pair your phone"));
+        var pr = page.Add(Th.Row(false));
+        var qrBox = new PictureBox { Width = 260, Height = 260, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.White, Margin = new Padding(0, 4, 16, 4) };
+        void DrawQr()
+        {
+            try
+            {
+                using var gen = new QRCoder.QRCodeGenerator();
+                using var data = gen.CreateQrCode(PhoneLink.PairPayload(), QRCoder.QRCodeGenerator.ECCLevel.M);
+                var png = new QRCoder.PngByteQRCode(data).GetGraphic(6);
+                using var ms = new MemoryStream(png);
+                qrBox.Image?.Dispose();
+                qrBox.Image = new Bitmap(Image.FromStream(ms));
+            }
+            catch (Exception e) { Log.Warn("phone link", "QR: " + e.Message); }
+        }
+        var qrShown = false;
+        Button showQr = null;
+        showQr = Th.B("🔳 Show the pairing QR code", () => { if (!qrShown) { DrawQr(); qrShown = true; showQr.Text = "🙈 Hide the QR code"; qrBox.Visible = true; } else { qrBox.Image?.Dispose(); qrBox.Image = null; qrBox.Visible = false; qrShown = false; showQr.Text = "🔳 Show the pairing QR code"; } }, true);
+        qrBox.Visible = false;
+        pr.Controls.Add(qrBox);
+        var pc = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, BackColor = Color.Transparent };
+        pc.Controls.Add(Th.L("On the phone: Nova Enhance → 🖥 My PC → Scan to pair.\nThe QR code holds the encryption key, this PC's office address and the relay key — show it only to your own phone.", 10, Th.Muted));
+        pc.Controls.Add(showQr);
+        pc.Controls.Add(Th.L(PhoneLink.PhoneName.Length > 0 ? $"✓ Paired: {PhoneLink.PhoneName}" + (PhoneLink.PhoneSeen > DateTime.MinValue ? $" · seen {PhoneLink.PhoneSeen:dd MMM HH:mm}" : "") : "No phone paired yet.", 10, PhoneLink.PhoneName.Length > 0 ? Th.Good : Th.Muted));
+        pc.Controls.Add(Th.B("🔑 New key (un-pair the phone)", () =>
+        {
+            if (MessageBox.Show(this, "Make a new key? The phone stops receiving data until it scans the new QR code, and the next sync is a full copy.", "Nova Enhance", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
+            PhoneLink.NewKey(); if (qrShown) DrawQr();
+        }));
+        pr.Controls.Add(pc);
+
+        page.Add(Th.Section("Sync status"));
+        var st = Note("", Th.Muted);
+        void Line() => st.Text = (PhoneLink.Status.Length > 0 ? PhoneLink.Status + "\n" : "") +
+            (PhoneLink.LastRun > DateTime.MinValue ? $"Last update {PhoneLink.LastRun:dd MMM HH:mm} · next about {PhoneLink.LastRun.AddMinutes(PhoneLink.EveryMin):HH:mm} · every {PhoneLink.EveryMin} min" : "Not sent yet") +
+            (PhoneLink.LastError.Length > 0 ? "\n⚠ " + PhoneLink.LastError : "") + "\n" + PhoneLink.SizesText();
+        Line();
+        foreach (var (k, l) in new[] { ("email", "📥 Email — all periods, full text"), ("att", "📎 Attachment text (PDF, Word, Excel…)"), ("brief", "🌅 Brief · 📁 Email projects"), ("files", "📂 Project files catalogue"), ("star", "⭐ Starred emails and files (the real files)"), ("brain", "📏 Rules · ✦ Prompts · 👤 Profile · 📚 Vocabulary · 📌 My Work") })
+        { var key = k; page.Add(Th.Check(l, PhoneLink.Send(key), v => PhoneLink.SetSend(key, v))); }
+        page.Add(Th.Check("Full text for the last 12 months only (older emails: subject, people, date, attachment names)", PhoneLink.Last12, v => PhoneLink.Last12 = v));
+
+        page.Add(Th.Section("How the phone gets it — use any or all"));
+        var dr = PhoneLink.DriveRoot;
+        page.Add(Th.Check("A · ☁ Google Drive — full copy + hourly updates, from anywhere", PhoneLink.DriveOn, v => PhoneLink.DriveOn = v));
+        Note(dr.Length > 0 ? $"✓ Google Drive for desktop found: {dr} → Nova Enhance Sync (Drive uploads it by itself)" : "⚠ Google Drive for desktop was not found — install it (drive.google.com/download) or pick your Drive folder. Until then the files stay in Documents\\Nova Enhance\\Nova Enhance Sync.", dr.Length > 0 ? Th.Good : Th.Warn);
+        var dpick = page.Add(Th.Row(false));
+        dpick.Controls.Add(Th.B("📁 Pick the Google Drive folder…", () =>
+        {
+            using var d = new FolderBrowserDialog { Description = "Your Google Drive folder (My Drive)" };
+            if (d.ShowDialog(this) == DialogResult.OK) { Store.Set("win_pl_drive_root", d.SelectedPath); Go("📱 Phone link"); }
+        }));
+        dpick.Controls.Add(Th.B("📂 Open the Sync folder", () => Shell.Open(PhoneLink.Dir)));
+        page.Add(Th.Check("B · 🔁 GitHub relay — live questions from the phone (search, brief, fetch a file) + small updates when Drive is off", PhoneLink.RelayOn, v => PhoneLink.RelayOn = v));
+        Note(Relay.On ? $"✓ {Relay.Repo} (Settings → 🔌 Test connector)" : "⚠ Switch on 🌐 A · GitHub relay in 🔌 Test connector first.", Relay.On ? Th.Good : Th.Warn);
+        page.Add(Th.Check("C · 📶 Office Wi-Fi — direct and fastest when the phone is on the same network (used first)", PhoneLink.WifiOn, v => { PhoneLink.WifiOn = v; }));
+        Note((PhoneLink.WifiStatus.Length > 0 ? PhoneLink.WifiStatus : "Starts when 📱 Link my phone is on") + " · Windows may ask once to allow Nova on the network — choose Private networks.", Th.Muted);
+
+        page.Add(Th.Section("Timing"));
+        var tr = page.Add(Th.Row(false));
+        tr.Controls.Add(Th.L("Update every", 10, Th.Text));
+        foreach (var (m, l) in new[] { (30, "30 min"), (60, "1 h"), (180, "3 h") })
+        { var mm = m; tr.Controls.Add(Th.Radio(l, PhoneLink.EveryMin == mm, () => PhoneLink.EveryMin = mm)); }
+        page.Add(Th.Check("Also right after the morning brief", PhoneLink.AfterBrief, v => PhoneLink.AfterBrief = v));
+        var br = page.Add(Th.Row(false));
+        br.Controls.Add(Th.B("⟳ Update the phone now", () => { st.Text = "⏳ preparing…"; _ = Task.Run(() => { PhoneLink.RunSafe("Update now"); BeginInvoke(Line); }); }, true));
+        br.Controls.Add(Th.B("⟳ Make a new full copy", () => { Store.Set("win_pl_state", "{}"); st.Text = "⏳ preparing the full copy…"; _ = Task.Run(() => { PhoneLink.RunSafe("new full copy"); BeginInvoke(Line); }); }));
+        br.Controls.Add(Th.B("📋 What was sent (Activity)", () => Go("🧪 Activity history")));
+        Note("⚠ With ☁ A, company emails (encrypted) are stored in your Google Drive — check MZA's IT policy. Untick A to keep everything inside the office network.", Th.Warn);
+    }
 
     /// <summary>🔌 Test connector: Claude (through the Claude desktop app) tests Nova on this PC with test tools only.</summary>
     void TestConnectorPage()
@@ -1721,7 +1799,7 @@ class SettingsForm : NovaForm
         stats.Controls.Add(Stat(today.Count(e => e.Level == "error").ToString(), "errors today", Th.Bad));
         stats.Controls.Add(Stat(entries.Count(e => e.Level == "error" && e.Time > DateTime.Now.AddDays(-7)).ToString(), "last 7 days", Th.Warn));
         var env = Log.Environment().Split('\n');
-        stats.Controls.Add(Stat("build " + Program.Build, env.Length > 1 ? env[1].Trim() : "", Th.Text));
+        stats.Controls.Add(Stat(Program.Shown, env.Length > 1 ? env[1].Trim() : "", Th.Text));
 
         page.Add(Th.Section("Recording"));
         page.Add(Th.Check("Record every error with full technical details (what failed, where, the step you were doing, the technical trace)", Log.Detailed, v => Log.Detailed = v));
@@ -1846,7 +1924,7 @@ class SettingsForm : NovaForm
     void About()
     {
         page.Add(Th.L("✦ Nova Enhance for Windows", 13, Th.Text, true));
-        Note($"Version 1.0 · build {Program.Build}", Th.Text);
+        Note($"Version {Program.Shown}", Th.Text);
         Note("Enhance text anywhere (Ctrl+Shift+E), 🔍 Search for email (Ctrl+Shift+F), 💬 Talk about this email (Ctrl+Alt+Q), morning brief and follow-ups. Works with the Nova Enhance phone app.");
         Note("All your files: " + Paths.Root, Th.Text);
         page.Add(Th.L(Program.Sign, 11, Th.AccentText, true));

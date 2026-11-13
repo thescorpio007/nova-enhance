@@ -265,7 +265,7 @@ static class Activity
                 using var w = new StreamWriter(e.Open(), new UTF8Encoding(false));
                 w.Write(text);
             }
-            Add("README.txt", $"Nova Enhance activity history · last {days} days · {items.Count:N0} tasks · {(auto ? $"saved automatically (every {AutoEvery} h)" : "saved by the user")} {DateTime.Now:dd MMM yyyy HH:mm} · build {Program.Build}\r\n" +
+            Add("README.txt", $"Nova Enhance activity history · last {days} days · {items.Count:N0} tasks · {(auto ? $"saved automatically (every {AutoEvery} h)" : "saved by the user")} {DateTime.Now:dd MMM yyyy HH:mm} · {Program.Shown}\r\n" +
                               "Names and email addresses are replaced by Person N / personN@… (the same label for the same person). Project codes, subjects and file names are kept.\r\n" +
                               "activity.jsonl = one task per line: steps with milliseconds, thinking (what Nova understood and decided), AI calls with the text sent.\r\n" + Program.Sign + "\r\n");
             status?.Invoke("Writing the summary…");
@@ -283,7 +283,7 @@ static class Activity
     public static string Summary(List<JsonObject> items, int days)
     {
         long Ms(JsonObject o) => o["ms"]?.GetValue<long>() ?? 0;
-        var sb = new StringBuilder($"# Nova activity · last {days} days\n\n{items.Count:N0} tasks · build {Program.Build}\n\n## Per feature\n\n| Feature | Tasks | Average | Slowest | Failed |\n|---|---|---|---|---|\n");
+        var sb = new StringBuilder($"# Nova activity · last {days} days\n\n{items.Count:N0} tasks · {Program.Shown}\n\n## Per feature\n\n| Feature | Tasks | Average | Slowest | Failed |\n|---|---|---|---|---|\n");
         foreach (var g in items.GroupBy(o => o["feature"]?.ToString() ?? "").OrderByDescending(g => g.Count()))
             sb.Append($"| {g.Key} | {g.Count()} | {g.Average(Ms) / 1000:0.0} s | {g.Max(Ms) / 1000.0:0.0} s | {g.Count(o => o["failed"]?.GetValue<bool>() == true)} |\n");
         sb.Append("\n## 10 slowest tasks\n\n");

@@ -85,8 +85,13 @@ static class Relay
                 var tool = req["tool"]?.ToString() ?? "";
                 var args = req["args"] as JsonObject ?? new JsonObject();
                 Status = $"⏳ answering {tool}…";
-                answer = await TestConnector.RunTool("GitHub relay", tool, (JsonObject)args.DeepClone());
-                answer = $"# {id} · {tool} · answered {DateTime.Now:yyyy-MM-dd HH:mm:ss} · build {Program.Build}\n\n{answer}";
+                if (tool == "phone")
+                    answer = "NES:" + await PhoneLink.PhoneRequest(req["enc"]?.ToString() ?? "");   // 📱 the paired phone (encrypted both ways)
+                else
+                {
+                    answer = await TestConnector.RunTool("GitHub relay", tool, (JsonObject)args.DeepClone());
+                    answer = $"# {id} · {tool} · answered {DateTime.Now:yyyy-MM-dd HH:mm:ss} · {Program.Shown}\n\n{answer}";
+                }
             }
             catch (Exception e) { answer = $"# {id} · ERROR {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n\n{e.Message}"; }
             var put = new JsonObject { ["message"] = "answer " + id, ["content"] = B64(answer) };
@@ -99,6 +104,19 @@ static class Relay
         }
         Status = $"✓ Connected · {LastCheck:HH:mm:ss} · {(n > 0 ? n + " request(s) answered" : "no request waiting")}";
         await Clean(c);
+    }
+
+    /// <summary>Puts a file in the relay repository (replacing it) — the phone's small hourly updates when Drive is off.</summary>
+    public static async Task PutFile(string path, byte[] data)
+    {
+        using var c = Client();
+        string sha = null;
+        var g = await c.GetAsync($"repos/{Repo}/contents/{path}");
+        if (g.IsSuccessStatusCode) sha = JsonNode.Parse(await g.Content.ReadAsStringAsync())?["sha"]?.ToString();
+        var o = new JsonObject { ["message"] = "sync " + path, ["content"] = Convert.ToBase64String(data) };
+        if (sha != null) o["sha"] = sha;
+        var r = await c.PutAsync($"repos/{Repo}/contents/{path}", new StringContent(o.ToJsonString(), Encoding.UTF8, "application/json"));
+        if (!r.IsSuccessStatusCode) throw new Exception($"GitHub {(int)r.StatusCode} writing {path}");
     }
 
     static DateTime lastClean = DateTime.MinValue;

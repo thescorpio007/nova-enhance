@@ -4,6 +4,9 @@
 #ifndef AppVersion
   #define AppVersion "1.0.0"
 #endif
+#ifndef ShownNo
+  #define ShownNo "00"
+#endif
 #ifndef BuildNo
   #define BuildNo "0"
 #endif
@@ -15,7 +18,7 @@
 AppId={{4B7E2C1A-9D3F-4E8B-A6C2-5F1D0E9B7A33}
 AppName=Nova Enhance
 AppVersion={#AppVersion}
-AppVerName=Nova Enhance for Windows 1.0 (build {#BuildNo})
+AppVerName=Nova Enhance for Windows 2.0 (build {#ShownNo})
 VersionInfoVersion={#AppVersion}
 AppPublisher=A.HAMROUNI
 AppCopyright=Designed by A.HAMROUNI
@@ -24,7 +27,7 @@ DefaultGroupName=Nova Enhance
 DisableProgramGroupPage=yes
 DisableDirPage=yes
 PrivilegesRequired=lowest
-OutputBaseFilename=NovaEnhance-Windows-1.0-build-{#BuildNo}-Setup
+OutputBaseFilename=NovaEnhance-Windows-2.0-build-{#ShownNo}-Setup
 SetupIconFile=NovaEnhance\nova.ico
 UninstallDisplayIcon={app}\NovaEnhance.exe
 Compression=lzma2/max

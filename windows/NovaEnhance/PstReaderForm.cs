@@ -60,7 +60,7 @@ class PstReaderForm : NovaForm
         dots = new WorkDots();
         status = Th.L("", 9.5f, Th.AccentText);
         bottom.Controls.Add(dots); bottom.Controls.Add(status);
-        bottom.Controls.Add(Th.L("   " + Program.Sign + " · build " + Program.Build + " · reader: XstReader (Ms-PL)", 9, Th.Muted));
+        bottom.Controls.Add(Th.L("   " + Program.Sign + " · " + Program.Shown + " · reader: XstReader (Ms-PL)", 9, Th.Muted));
 
         var split1 = new SplitContainer { Dock = DockStyle.Fill, BackColor = Th.Bg };
         tree = new TreeView { Dock = DockStyle.Fill, BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.None, Font = Th.F(10), CheckBoxes = true, HideSelection = false };

@@ -143,7 +143,7 @@ static class Guard
                 {
                     // A normal exit leaves the clean-exit mark: the Guardian stops too.
                     if (File.Exists(CleanFile)) return 0;
-                    Crash("Nova closed unexpectedly" + (TryExit(nova) is { } code ? $" (exit code {code})" : ""));
+                    Crash("Nova closed unexpectedly" + (TryExit(nova) is { } code ? $" (exit code {code})" : "") + Faulting());
                     restarts.RemoveAll(t => DateTime.Now - t > TimeSpan.FromMinutes(10));
                     if (restarts.Count >= 3)
                     {
@@ -176,6 +176,31 @@ static class Guard
     }
 
     static int? TryExit(Process p) { try { return p.ExitCode; } catch { return null; } }
+
+    /// <summary>Windows' own crash record (Event Viewer → Application Error): which component failed (e.g. olmapi32.dll).</summary>
+    static string Faulting()
+    {
+        try
+        {
+            Thread.Sleep(4000);   // Windows Error Reporting writes it a moment after the crash
+            using var log = new EventLog("Application");
+            var n = log.Entries.Count;
+            for (int i = n - 1; i >= Math.Max(0, n - 60); i--)
+            {
+                var e = log.Entries[i];
+                if (DateTime.Now - e.TimeGenerated > TimeSpan.FromMinutes(3)) break;
+                if (e.Source != "Application Error" && e.Source != ".NET Runtime") continue;
+                var m = e.Message ?? "";
+                if (!m.Contains("NovaEnhance", StringComparison.OrdinalIgnoreCase)) continue;
+                string F(string label) { var x = System.Text.RegularExpressions.Regex.Match(m, label + @"[^:]*:\s*([^\r\n]+)"); return x.Success ? x.Groups[1].Value.Trim() : ""; }
+                var mod = F("Faulting module name"); var code = F("Exception code"); var path = F("Faulting module path");
+                if (mod.Length > 0) return $"\r\n  ⚙ faulting module: {mod} · exception {code}{(path.Length > 0 ? " · " + path : "")}";
+                return "\r\n  ⚙ .NET: " + (m.Length > 600 ? m[..600] : m).Replace("\r\n", " ");
+            }
+        }
+        catch (Exception x) { return "\r\n  (Event log not readable: " + x.Message + ")"; }
+        return "";
+    }
 
     static void Crash(string what)
     {
@@ -249,5 +274,5 @@ static class UiWatch
         }) { IsBackground = true, Name = "Nova freeze recorder" }.Start();
     }
 
-    static void Write(string line) { try { File.AppendAllText(FilePath, line + " · build " + Program.Build + "\r\n"); } catch { } }
+    static void Write(string line) { try { File.AppendAllText(FilePath, line + " · " + Program.Shown + "\r\n"); } catch { } }
 }

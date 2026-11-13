@@ -22,7 +22,7 @@ static class Dots
 
     static Icon baseIcon;
     static Icon[] trayFrames;
-    static bool trayAnimating;
+    static bool trayAnimating, trayBroken;
 
     public static void Start()
     {
@@ -84,14 +84,17 @@ static class Dots
     {
         var t = Program.Tray;
         if (t == null) return;
+        if (trayBroken) return;
         if (Busy > 0)
         {
-            if (trayFrames == null) { baseIcon = t.Icon; trayFrames = Enumerable.Range(0, 3).Select(MakeFrame).ToArray(); }
-            t.Icon = trayFrames[frame];
-            trayAnimating = true;
+            // The three images are made once and reused; any drawing problem switches the tray dots off for this session.
+            try { if (trayFrames == null) { baseIcon = t.Icon; trayFrames = Enumerable.Range(0, 3).Select(MakeFrame).ToArray(); } t.Icon = trayFrames[frame]; trayAnimating = true; }
+            catch (Exception e) { trayBroken = true; Log.Warn("dots", "tray icon: " + e.Message); try { if (baseIcon != null) t.Icon = baseIcon; } catch { } }
         }
         else if (trayAnimating && baseIcon != null) { t.Icon = baseIcon; trayAnimating = false; }
     }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr h);
 
     static Icon MakeFrame(int lit)
     {
@@ -100,7 +103,7 @@ static class Dots
         {
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.Clear(Color.Transparent);
-            if (baseIcon != null) g.DrawIcon(new Icon(baseIcon, 32, 32), new Rectangle(0, 0, 32, 32));
+            if (baseIcon != null) { using var ic = new Icon(baseIcon, 32, 32); using var bi = ic.ToBitmap(); g.DrawImage(bi, new Rectangle(0, 0, 32, 32)); }
             using var bg = new SolidBrush(Color.FromArgb(230, 0x14, 0x17, 0x22));
             g.FillRectangle(bg, 0, 22, 32, 10);
             for (int i = 0; i < 3; i++)
@@ -109,6 +112,9 @@ static class Dots
                 g.FillEllipse(br, 3 + i * 10, 23, 7, 7);
             }
         }
-        return Icon.FromHandle(bmp.GetHicon());
+        // A copy that owns its own handle (the temporary one is released), so nothing points to freed memory.
+        var h = bmp.GetHicon();
+        try { using var tmp = Icon.FromHandle(h); return (Icon)tmp.Clone(); }
+        finally { DestroyIcon(h); }
     }
 }

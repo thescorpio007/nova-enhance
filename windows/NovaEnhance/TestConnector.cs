@@ -198,13 +198,15 @@ static class TestConnector
         {
             case "status":
             {
-                sb.AppendLine($"Nova Enhance build {Program.Build} · {DateTime.Now:dd MMM yyyy HH:mm} · safe mode {(Guard.SafeMode ? "ON" : "off")}");
+                sb.AppendLine($"Nova Enhance {Program.Shown} (internal {Program.Build}) · {DateTime.Now:dd MMM yyyy HH:mm} · safe mode {(Guard.SafeMode ? "ON" : "off")}");
                 sb.AppendLine("Index: " + MailIndex.OldestText);
                 try { foreach (var s in MailIndex.StoreStats()) sb.AppendLine($"- mailbox/archive “{s.Store}”: {s.Indexed:N0} of {s.Total:N0} · {s.Oldest:yyyy-MM-dd} → {s.Newest:yyyy-MM-dd}"); } catch (Exception e) { sb.AppendLine("stores: " + e.Message); }
                 try { foreach (var x in Archives.StoreFiles()) sb.AppendLine($"- in Outlook: {x.Key} = {x.Value} {(File.Exists(x.Value) ? "" : "⚠ FILE NOT FOUND")}"); } catch { }
                 try { foreach (var x in Pst.All.Values) sb.AppendLine($"- read directly: {Path.GetFileName(x.Path)} · {x.Indexed:N0} indexed of {x.Total:N0} · {x.Status} {(File.Exists(x.Path) ? "" : "⚠ FILE NOT FOUND")}"); } catch { }
                 try { sb.AppendLine("Email projects: " + string.Join(" · ", MailProjects.Counts.OrderByDescending(x => x.Value).Take(15).Select(x => $"{(x.Key.Length > 0 ? x.Key : "unsorted")} {x.Value:N0}"))); } catch { }
                 sb.AppendLine("Background jobs: " + Guard.JobsLine());
+                sb.AppendLine("Sizes: " + PhoneLink.SizesText());
+                sb.AppendLine($"Phone link: {(PhoneLink.On ? "on" : "off")} · last {PhoneLink.LastRun:dd MMM HH:mm} · {PhoneLink.Status} {PhoneLink.LastError}");
                 sb.AppendLine($"AI: current {Ai.LabelOf(Ai.Current())} · search/ranking {Ai.LabelOf(SmartSearch.Cloud())} · AI search {(SmartSearch.On ? "on" : "off")}");
                 break;
             }
