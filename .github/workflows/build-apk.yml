@@ -1,17 +1,15 @@
 name: Build APK
 
+# Started by "Build Nova (Windows + Android)" with one shared build number for both apps.
 on:
-  push:
-    branches: [main]
-    paths-ignore: ['**.md', 'windows/**', '.github/workflows/windows-build.yml']
-  workflow_dispatch:
+  workflow_call:
+    inputs:
+      build:
+        required: true
+        type: string
 
 permissions:
   contents: write
-
-concurrency:
-  group: build-apk
-  cancel-in-progress: true
 
 jobs:
   build:
@@ -52,7 +50,7 @@ jobs:
 
       - name: Build
         env:
-          NOVA_BUILD: ${{ github.run_number }}
+          NOVA_BUILD: ${{ inputs.build }}
         run: |
           set -o pipefail
           gradle :app:assembleRelease --no-daemon 2>&1 | tee build.log || {
@@ -92,10 +90,10 @@ jobs:
       - name: Release (marked pre-release until the emulator test passes)
         env:
           GH_TOKEN: ${{ github.token }}
-          NOVA_BUILD: ${{ github.run_number }}
+          NOVA_BUILD: ${{ inputs.build }}
         run: |
           n=$(printf '%02d' "$NOVA_BUILD")
-          shown=$(printf '%02d' $((NOVA_BUILD - 29)))
+          shown=$(printf '%02d' $(( NOVA_BUILD > 100 ? NOVA_BUILD - 95 : NOVA_BUILD - 29 )))
           cd app/build/outputs/apk/release
           gh release create "build-$n" *.apk SHA256SUMS.txt SHA256SUMS.sig \
             --title "Nova Enhance 2.0 · build $shown" \
@@ -150,7 +148,7 @@ jobs:
             if grep -q "FATAL EXCEPTION" logcat.txt; then grep -A 30 "FATAL EXCEPTION" logcat.txt; echo "::error title=Crash::the app crashed"; exit 1; fi
             adb shell am force-stop com.nova.enhance
             adb logcat -c
-            adb shell am start -W -n com.nova.enhance/.MainActivity --es updtest "build-$(printf '%02d' ${{ github.run_number }})"
+            adb shell am start -W -n com.nova.enhance/.MainActivity --es updtest "build-$(printf '%02d' ${{ inputs.build }})"
             for i in $(seq 1 24); do sleep 5; adb logcat -d -s NOVA_UPDTEST:I > updtest.txt; grep -q "PASS\|FAIL" updtest.txt && break; done; cat updtest.txt
             grep -q "PASS" updtest.txt || { echo "::error title=Update self-test::$(grep NOVA_UPDTEST updtest.txt | tail -1 | cut -c1-400)"; exit 1; }
             echo "::notice title=Update self-test::$(grep NOVA_UPDTEST updtest.txt | tail -1 | cut -c1-400)"
@@ -172,7 +170,7 @@ jobs:
       - name: Test passed — publish for the app's automatic updates
         env:
           GH_TOKEN: ${{ github.token }}
-          NOVA_BUILD: ${{ github.run_number }}
+          NOVA_BUILD: ${{ inputs.build }}
         run: |
           n=$(printf '%02d' "$NOVA_BUILD")
           gh release edit "build-$n" --prerelease=false --latest -R "$GITHUB_REPOSITORY"

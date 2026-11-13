@@ -1,0 +1,42 @@
+name: Build Nova (Windows + Android)
+
+# Every change builds BOTH apps with the SAME build number (2.0 · build 06, 07…).
+# Internal number = run + 100 (always rising, so the automatic updates keep working); shown = internal − 95.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-nova
+  cancel-in-progress: true
+
+jobs:
+  number:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.n.outputs.build }}
+    steps:
+      - id: n
+        run: |
+          b=$(( ${{ github.run_number }} + 100 ))
+          echo "build=$b" >> "$GITHUB_OUTPUT"
+          echo "::notice title=Build number::2.0 · build $(printf '%02d' $((b - 95))) (internal $b) for Windows and Android"
+
+  windows:
+    needs: number
+    uses: ./.github/workflows/windows-build.yml
+    with:
+      build: ${{ needs.number.outputs.build }}
+    secrets: inherit
+
+  android:
+    needs: number
+    uses: ./.github/workflows/build-apk.yml
+    with:
+      build: ${{ needs.number.outputs.build }}
+    secrets: inherit

@@ -10,10 +10,13 @@ static class Program
     public static int Build => Assembly.GetExecutingAssembly().GetName().Version?.Build ?? 0;
     /// <summary>2.0: the build count starts again at 01 (internally the number keeps going up, so updates keep working).</summary>
     public const int Base2 = 77;
-    public static int ShownBuild => Build > Base2 ? Build - Base2 : Build;
+    /// <summary>From internal 101 the number is shared with the Android app (one build number for both): shown = internal − 95.</summary>
+    public const int BaseShared = 95;
+    public static int ShownBuild => Build > 100 ? Build - BaseShared : Build > Base2 ? Build - Base2 : Build;
     public static string Version => Build > Base2 ? "2.0" : "1.0";
     public static string Shown => ShownOf(Build);
-    public static string ShownOf(int internalBuild) => internalBuild > Base2 ? $"2.0 · build {internalBuild - Base2:00}" : $"1.0 · build {internalBuild}";
+    public static string ShownOf(int internalBuild) => internalBuild > 100 ? $"2.0 · build {internalBuild - BaseShared:00}"
+        : internalBuild > Base2 ? $"2.0 · build {internalBuild - Base2:00}" : $"1.0 · build {internalBuild}";
     public static SynchronizationContext UiContext;
     /// <summary>A hidden control on Nova's window thread (to bring work back to it).</summary>
     public static Control Marshal;

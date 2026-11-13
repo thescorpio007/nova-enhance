@@ -64,7 +64,7 @@ object Updater {
     } catch (_: Exception) { 0 }
 
     /** "2.0 · build 01" for the internal build number (2.0 counts from internal 30). */
-    fun shown(b: Int): String = if (b > 29) "2.0 · build %02d".format(b - 29) else "1.0 · build %02d".format(b)
+    fun shown(b: Int): String = if (b > 100) "2.0 · build %02d".format(b - 95) else if (b > 29) "2.0 · build %02d".format(b - 29) else "1.0 · build %02d".format(b)
 
     fun versionName(c: Context): String = try { c.packageManager.getPackageInfo(c.packageName, 0).versionName ?: "" } catch (_: Exception) { "" }
 

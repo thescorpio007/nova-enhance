@@ -1,21 +1,16 @@
 name: Build Windows
 
 # Nova Enhance for Windows. Only runs when the Windows code changes (the APK build ignores it).
+# Started by "Build Nova (Windows + Android)" with one shared build number for both apps.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'windows/**'
-      - '.github/workflows/windows-build.yml'
-      - 'global.json'
-  workflow_dispatch:
+  workflow_call:
+    inputs:
+      build:
+        required: true
+        type: string
 
 permissions:
   contents: write
-
-concurrency:
-  group: build-windows
-  cancel-in-progress: true
 
 jobs:
   build:
@@ -60,7 +55,7 @@ jobs:
 
       - name: Build
         run: |
-          dotnet publish windows/NovaEnhance/NovaEnhance.csproj -c Release -r win-x64 -o out "-p:Version=2.0.${{ github.run_number }}" -nologo 2>&1 | Tee-Object -FilePath build.log
+          dotnet publish windows/NovaEnhance/NovaEnhance.csproj -c Release -r win-x64 -o out "-p:Version=2.0.${{ inputs.build }}" -nologo 2>&1 | Tee-Object -FilePath build.log
           if ($LASTEXITCODE -ne 0) {
             Select-String -Path build.log -Pattern ' error ' | Select-Object -First 40 | ForEach-Object { Write-Host "::error::$($_.Line.Trim())" }
             exit 1
@@ -86,8 +81,8 @@ jobs:
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          $shown = "{0:D2}" -f ([int]"${{ github.run_number }}" - 77)
-          & $iscc /Qp "/DAppVersion=2.0.${{ github.run_number }}" "/DBuildNo=${{ github.run_number }}" "/DShownNo=$shown" "/DSourceDir=$((Resolve-Path out).Path)" "/O$((Resolve-Path dist).Path)" windows\installer.iss
+          $b = [int]"${{ inputs.build }}"; $shown = "{0:D2}" -f ($(if ($b -gt 100) { $b - 95 } else { $b - 77 }))
+          & $iscc /Qp "/DAppVersion=2.0.${{ inputs.build }}" "/DBuildNo=${{ inputs.build }}" "/DShownNo=$shown" "/DSourceDir=$((Resolve-Path out).Path)" "/O$((Resolve-Path dist).Path)" windows\installer.iss
           if ($LASTEXITCODE -ne 0) { exit 1 }
           Get-ChildItem dist | ForEach-Object { Write-Host ("::notice title=Output::{0} {1:N1} MB" -f $_.Name, ($_.Length / 1MB)) }
 
@@ -109,8 +104,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $n = "${{ github.run_number }}"
-          $shown = "{0:D2}" -f ([int]$n - 77)
+          $n = "${{ inputs.build }}"
+          $shown = "{0:D2}" -f ($(if ([int]$n -gt 100) { [int]$n - 95 } else { [int]$n - 77 }))
           gh release create "win-build-$n" (Get-ChildItem dist\*).FullName --title "Nova Enhance for Windows 2.0 · build $shown" `
             --notes "Nova Enhance for Windows 2.0 · build $shown (internal $n) — download NovaEnhance-Windows-2.0-build-$shown-Setup.exe and open it. Designed by A.HAMROUNI" --latest=false --prerelease
           if ($LASTEXITCODE -ne 0) { exit 1 }
@@ -118,7 +113,7 @@ jobs:
       - name: Update self-test (downloads this release, checks signature + SHA-256, and that a changed checksum file is refused)
         run: |
           $o = "$env:RUNNER_TEMP\upd.txt"
-          $p = Start-Process -FilePath out\NovaEnhance.exe -ArgumentList "--update-selftest","win-build-${{ github.run_number }}","--out","`"$o`"" -PassThru
+          $p = Start-Process -FilePath out\NovaEnhance.exe -ArgumentList "--update-selftest","win-build-${{ inputs.build }}","--out","`"$o`"" -PassThru
           if (-not $p.WaitForExit(300000)) { $p.Kill(); Write-Host "::error::update self-test hung"; exit 1 }
           $t = Get-Content $o -Raw; Write-Host $t
           if ($p.ExitCode -ne 0) { Write-Host "::error title=Update self-test::$($t -replace "`r?`n", '%0A')"; exit 1 }
@@ -128,9 +123,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release edit "win-build-${{ github.run_number }}" --prerelease=false --latest=false
+          gh release edit "win-build-${{ inputs.build }}" --prerelease=false --latest=false
           if ($LASTEXITCODE -ne 0) { exit 1 }
-          Write-Host "::notice title=Published::win-build-${{ github.run_number }} is live for PCs (the phone's latest release is unchanged)"
+          Write-Host "::notice title=Published::win-build-${{ inputs.build }} is live for PCs (the phone's latest release is unchanged)"
 
       - name: Clean up the key
         if: always()
