@@ -31,7 +31,8 @@
         android:roundIcon="@drawable/ic_launcher"
         android:label="Nova Enhance"
         android:supportsRtl="true"
-        android:theme="@style/NovaTheme">
+        android:theme="@style/NovaTheme"
+        android:usesCleartextTraffic="true">
 
         <activity
             android:name=".MainActivity"
@@ -70,6 +71,27 @@
         <activity android:name=".LangActivity" android:exported="false" android:excludeFromRecents="true"
             android:taskAffinity="com.nova.enhance.lang" android:theme="@style/NovaSheet" android:windowSoftInputMode="stateVisible" />
         <activity android:name=".SettingsActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
+
+        <!-- 🖥 My PC: Nova's data from your PC (pairing QR opens here: novaenhance://pair?d=…) -->
+        <activity android:name=".MyPcActivity" android:exported="true" android:launchMode="singleTop" android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="novaenhance" android:host="pair" />
+            </intent-filter>
+        </activity>
+        <provider android:name=".PcFiles" android:authorities="com.nova.enhance.pcfiles" android:exported="false" android:grantUriPermissions="true" />
+        <service android:name=".PcSyncJob" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />
+
+        <!-- ✍ Nova as the phone's spell checker: red = spelling, blue = grammar (your AI); your words never marked -->
+        <service android:name=".NovaSpell" android:exported="true" android:label="Nova Enhance"
+            android:permission="android.permission.BIND_TEXT_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.textservice.SpellCheckerService" />
+            </intent-filter>
+            <meta-data android:name="android.view.textservice.scs" android:resource="@xml/spellchecker" />
+        </service>
 
 
         <service

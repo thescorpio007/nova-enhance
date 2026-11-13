@@ -7,8 +7,9 @@ plugins {
 
 // Build number comes from GitHub (run number); shown as "1.0 · build 01".
 val buildNo: Int = (System.getenv("NOVA_BUILD") ?: "1").toInt()
-val buildLabel: String = String.format("%02d", buildNo)
-val appVersion = "1.0"
+// 2.0 counts its builds from 01 (internal build 30 = 2.0 · build 01); the internal number keeps rising so updates keep working.
+val buildLabel: String = String.format("%02d", if (buildNo > 29) buildNo - 29 else buildNo)
+val appVersion = if (buildNo > 29) "2.0" else "1.0"
 
 // Signing key: decrypted by the GitHub workflow from keystore/nova-enhance.jks.enc using the
 // NOVA_ENHANCE_KEY secret. The key and its password are never stored in the public code.

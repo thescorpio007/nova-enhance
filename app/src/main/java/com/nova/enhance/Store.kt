@@ -5,6 +5,8 @@ import android.content.SharedPreferences
 
 /** Settings kept privately on the phone (API keys never leave the device except to their own AI). */
 class Store(c: Context) {
+    /** The app context (the 🧠 words from your PC are read with it). */
+    val ctx: Context = c.applicationContext ?: c
     private val sp: SharedPreferences = c.getSharedPreferences("nova_enhance", Context.MODE_PRIVATE)
 
     fun key(p: Provider): String = sp.getString("key_${p.id}", "")!!.trim()

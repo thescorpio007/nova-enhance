@@ -45,6 +45,11 @@ class NovaKeyboard : InputMethodService() {
     private var trBtn: TextView? = null
 
     private val modes = listOf("grammar", "shorten", "professional", "informal", "translate")
+    private lateinit var preview: LinearLayout
+    private lateinit var previewText: TextView
+    private var pending: Triple<String, String, Boolean>? = null   // (before, after, whole) waiting for ✓ Replace
+    private var extra = ""
+    private fun pref(k: String, d: Boolean = true) = getSharedPreferences("nova_enhance", MODE_PRIVATE).getBoolean(k, d)
 
     override fun onCreateInputView(): View {
         store = Store(this)
@@ -90,6 +95,16 @@ class NovaKeyboard : InputMethodService() {
         root.addView(r1, Ui.lp(top = Ui.dp(c, 10)))
         root.addView(r2, Ui.lp(top = Ui.dp(c, 8)))
 
+        // ⏭ Fix the next mistake · ✎ extra instruction (as the PC's Enhance window)
+        val (tsv, trow) = Ui.chipRow(c)
+        trow.addView(chip("⏭ Fix next mistake") { fixNext() }.apply { setTextColor(Color.WHITE); background = Ui.round(Ui.ACCENT, Ui.dp(c, 14).toFloat()) }, chipLp())
+        for ((label, instr) in listOf("✎ To contractor" to "Write it as a firm, clear instruction to the contractor.",
+                "✎ To client" to "Write it in a respectful, reassuring tone for the client.", "✎ Firmer" to "Make it firmer and more direct.",
+                "✎ Polite" to "Make it more polite and diplomatic.", "✎ Shorter" to "Make it shorter.", "✎ Bullet points" to "Turn it into short bullet points.")) {
+            trow.addView(chip(label) { extra = instr; enhance(if (store.mode == "translate") "grammar" else store.mode) }, chipLp())
+        }
+        root.addView(tsv, Ui.lp(top = Ui.dp(c, 8)))
+
         // 🌐 Translate to: shown by long-pressing Translate
         langBox = Ui.col(c).apply {
             background = Ui.round(0xFF181C24.toInt(), Ui.dp(c, 12).toFloat(), Ui.dp(c, 1), 0x667C6CFF)
@@ -105,6 +120,21 @@ class NovaKeyboard : InputMethodService() {
 
         status = Ui.text(c, "Tap a mode — long-press 🌐 to change the language", 12.5f, Ui.MUTED).apply { maxLines = 1; isSingleLine = true; ellipsize = android.text.TextUtils.TruncateAt.END }
         root.addView(status, Ui.lp(top = Ui.dp(c, 8)))
+
+        // ✓ The changes before Replace (red → green)
+        preview = Ui.col(c).apply {
+            background = Ui.round(0xFF181C24.toInt(), Ui.dp(c, 12).toFloat(), Ui.dp(c, 1), 0x667C6CFF)
+            setPadding(Ui.dp(c, 10), Ui.dp(c, 8), Ui.dp(c, 10), Ui.dp(c, 8))
+            visibility = View.GONE
+        }
+        previewText = Ui.text(c, "", 13.5f, Ui.TEXT).apply { maxLines = 7; ellipsize = android.text.TextUtils.TruncateAt.END; setOnClickListener { maxLines = if (maxLines == 7) 40 else 7 } }
+        preview.addView(previewText)
+        val pr = Ui.row(c)
+        pr.addView(chip("✓ Replace") { acceptPending() }.apply { setTextColor(Color.WHITE); background = Ui.round(Ui.ACCENT, Ui.dp(c, 14).toFloat()) }, chipLp())
+        pr.addView(chip("⧉ Copy") { pending?.let { Ui.copy(this, it.second) } }, chipLp())
+        pr.addView(chip("✗ Keep mine") { pending = null; preview.visibility = View.GONE; say("Kept your text") }, chipLp())
+        preview.addView(pr, Ui.lp(top = Ui.dp(c, 8)))
+        root.addView(preview, Ui.lp(top = Ui.dp(c, 8)))
 
         // 📄 Original box: the text as it was before the last enhancements
         origBox = Ui.col(c).apply {
@@ -157,7 +187,11 @@ class NovaKeyboard : InputMethodService() {
 
     override fun onStartInputView(info: android.view.inputmethod.EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
-        if (::store.isInitialized) { drawAi(); drawModes() }
+        if (::store.isInitialized) {
+            if (pref("kb_start_grammar") && store.mode != "grammar") store.mode = "grammar"   // always start with ✦ Fix grammar, like the PC
+            pending = null; if (::preview.isInitialized) preview.visibility = View.GONE
+            drawAi(); drawModes()
+        }
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
@@ -283,12 +317,23 @@ class NovaKeyboard : InputMethodService() {
         val t0 = System.currentTimeMillis()
         Thread {
             val r = runCatching {
-                Providers.chatSmart(p, store.key(p), store.model(p), Modes.system(store),
+                Providers.chatSmart(p, store.key(p), store.model(p), Modes.system(store, text) + (if (extra.isNotBlank()) " Also follow this instruction from the user: $extra" else ""),
                     listOf(Msg("user", Modes.firstMessage(mode, store.custom, text))), fast = modeId == "grammar") { msg -> say(msg) }.text
             }
             main.post {
                 busy = false
+                val usedExtra = extra; extra = ""
                 r.onSuccess { out ->
+                    if (pref("kb_preview")) {
+                        // Show the changes first (red → green); ✓ Replace puts the text in.
+                        pending = Triple(text, out, whole)
+                        previewText.text = Diff.spans(text, out)
+                        preview.visibility = View.VISIBLE
+                        val fixed = Diff.countChanged(text, out)
+                        sub.text = String.format("Done in %.1f s", (System.currentTimeMillis() - t0) / 1000.0)
+                        say("✓ ${Modes.label(mode)}${if (usedExtra.isNotBlank()) " + your instruction" else ""} · $fixed change(s) — ✓ Replace to use it", Ui.GOOD)
+                        return@onSuccess
+                    }
                     undoText = text; undoWhole = whole
                     saveOriginal(text, out, whole, Modes.label(mode))
                     put(out, whole)
@@ -305,6 +350,49 @@ class NovaKeyboard : InputMethodService() {
                     ErrorLog.add(this, "Keyboard", p.label, store.model(p), (e as? AiException)?.code ?: 0, e.message ?: "", text)
                     say(e.message ?: "Failed", Ui.BAD)
                 }
+            }
+        }.start()
+    }
+
+    private fun acceptPending() {
+        val (before, out, whole) = pending ?: return
+        pending = null; preview.visibility = View.GONE
+        undoText = before; undoWhole = whole
+        saveOriginal(before, out, whole, Modes.label(Modes.byId(store.mode)))
+        put(out, whole)
+        say("✓ Replaced · original saved (↶ Undo)", Ui.GOOD)
+    }
+
+    /** ⏭ The sentence before the cursor is checked and fixed in place (like Ctrl+Space on the PC). */
+    private fun fixNext() {
+        if (busy) return
+        val ic = currentInputConnection ?: return
+        val p = provider() ?: run { say("Add an API key in Nova Enhance ▸ Settings ▸ AI & API keys", Ui.BAD); return }
+        val before = ic.getTextBeforeCursor(1500, 0)?.toString() ?: ""
+        if (before.isBlank()) { say("Put the cursor after the sentence to check", Ui.BAD); return }
+        // The last sentence before the cursor (up to the previous . ! ? or new line).
+        val trimmed = before.trimEnd()
+        val cut = trimmed.dropLast(1).indexOfLast { it == '.' || it == '!' || it == '?' || it == '\n' }
+        val sentence = before.substring(cut + 1)
+        if (sentence.isBlank()) return
+        busy = true
+        say("⏳ Checking the sentence…", 0xFFB9B0FF.toInt())
+        Thread {
+            val r = runCatching {
+                Providers.chatSmart(p, store.key(p), store.model(p), Modes.system(store, sentence),
+                    listOf(Msg("user", Modes.firstMessage(Modes.byId("grammar"), store.custom, sentence.trim()))), fast = true) { msg -> say(msg) }.text
+            }
+            main.post {
+                busy = false
+                r.onSuccess { out ->
+                    val lead = sentence.takeWhile { it.isWhitespace() }; val tail = sentence.takeLastWhile { it.isWhitespace() }
+                    val fixed = lead + out.trim() + tail
+                    if (fixed == sentence) { say("✓ No mistake in this sentence", Ui.GOOD); return@onSuccess }
+                    val ic2 = currentInputConnection ?: return@onSuccess
+                    ic2.beginBatchEdit(); ic2.deleteSurroundingText(sentence.length, 0); ic2.commitText(fixed, 1); ic2.endBatchEdit()
+                    undoText = null
+                    say("✓ Fixed: " + Diff.countChanged(sentence, fixed) + " word(s)", Ui.GOOD)
+                }.onFailure { say(it.message ?: "Failed", Ui.BAD) }
             }
         }.start()
     }

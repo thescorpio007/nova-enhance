@@ -23,6 +23,8 @@ class MainActivity : BaseActivity() {
         titles.addView(Ui.title(c, "Nova Enhance").apply { textSize = 20f; maxLines = 1; isSingleLine = true; setPadding(0, 0, 0, 0) })
         titles.addView(Ui.text(c, "Project: ${Db.PROJECT}", 12f, Ui.MUTED))
         head.addView(titles, Ui.lp(0, weight = 1f))
+        head.addView(Ui.smallButton(c, "🖥 My PC") { startActivity(Intent(c, MyPcActivity::class.java)) },
+            Ui.lp(android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, Ui.dp(c, 32), end = Ui.dp(c, 8)))
         head.addView(Ui.smallButton(c, "History") { startActivity(Intent(c, HistoryActivity::class.java)) },
             Ui.lp(android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, Ui.dp(c, 32), end = Ui.dp(c, 8)))
         head.addView(Ui.smallButton(c, "⚙") { startActivity(Intent(c, SettingsActivity::class.java)) },

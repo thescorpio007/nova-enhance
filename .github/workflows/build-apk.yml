@@ -44,6 +44,12 @@ jobs:
           printf 'password=%s\n' "$NOVA_ENHANCE_KEY" > keystore/signing.properties
           echo "::notice title=Signing key::ready"
 
+      - name: English word list for the spell checker (dwyl/english-words, Unlicense)
+        run: |
+          mkdir -p app/src/main/assets
+          curl -sSL --retry 3 https://raw.githubusercontent.com/dwyl/english-words/master/words_alpha.txt | tr -d '\r' | tr 'A-Z' 'a-z' | grep -E '^[a-z]{2,}$' | LC_ALL=C sort -u > app/src/main/assets/words.txt || true
+          echo "::notice title=Word list::$(wc -l < app/src/main/assets/words.txt) words"
+
       - name: Build
         env:
           NOVA_BUILD: ${{ github.run_number }}
@@ -89,10 +95,11 @@ jobs:
           NOVA_BUILD: ${{ github.run_number }}
         run: |
           n=$(printf '%02d' "$NOVA_BUILD")
+          shown=$(printf '%02d' $((NOVA_BUILD - 29)))
           cd app/build/outputs/apk/release
           gh release create "build-$n" *.apk SHA256SUMS.txt SHA256SUMS.sig \
-            --title "Nova Enhance 1.0 · build $n" \
-            --notes "Nova Enhance 1.0 · build $n — tap the .apk below to download and install. Designed by A.H" \
+            --title "Nova Enhance 2.0 · build $shown" \
+            --notes "Nova Enhance 2.0 · build $shown (internal $n) — tap the .apk below to download and install. Designed by A.HAMROUNI" \
             --prerelease
 
   smoke-test:

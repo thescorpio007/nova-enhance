@@ -35,6 +35,7 @@ class SettingsActivity : BaseActivity() {
         const val S_BACKUP = "backup"
         const val S_ERRORS = "errors"
         const val S_ABOUT = "about"
+        const val S_CORRECT = "correct"
         private const val REQ_BACKUP = 51
         private const val REQ_RESTORE = 52
 
@@ -68,6 +69,7 @@ class SettingsActivity : BaseActivity() {
             S_BACKUP -> backupSection()
             S_ERRORS -> errorsSection()
             S_ABOUT -> aboutSection()
+            S_CORRECT -> correctionSection()
         }
         root.addView(Ui.signature(this))
     }
@@ -84,6 +86,20 @@ class SettingsActivity : BaseActivity() {
         row("👤", "Accounts", "Send to the official AI apps · $apps installed", S_ACCOUNTS)
         row("✂", "Capture", "Nova keyboard, Share menu, text selection, bubble, tile", S_CAPTURE)
         row("✦", "Enhancement", "About me, default route, speaking language, custom instruction", S_ENHANCE)
+        row("✍", "Correction", "Same brain as your PC · underlines in any app · keyboard panel", S_CORRECT)
+        val pcCard = Ui.row(c).apply {
+            background = Ui.round(Ui.CARD, Ui.dp(c, 16).toFloat())
+            setPadding(Ui.dp(c, 14), Ui.dp(c, 14), Ui.dp(c, 14), Ui.dp(c, 14))
+            setOnClickListener { startActivity(android.content.Intent(c, MyPcActivity::class.java)) }
+        }
+        pcCard.addView(Ui.text(c, "🖥", 18f, Ui.ACCENT, true).apply { gravity = Gravity.CENTER; background = Ui.round(Ui.CARD2, Ui.dp(c, 12).toFloat()) },
+            LinearLayout.LayoutParams(Ui.dp(c, 42), Ui.dp(c, 42)).apply { marginEnd = Ui.dp(c, 14) })
+        val pt = Ui.col(c)
+        pt.addView(Ui.text(c, "My PC · Phone link", 16f, Ui.TEXT, true))
+        pt.addView(Ui.text(c, if (PcLink.paired(c)) "Paired with ${PcLink.pcName(c)}" else "Pair with Nova on your PC (QR code)", 13f, Ui.MUTED))
+        pcCard.addView(pt, Ui.lp(0, weight = 1f))
+        pcCard.addView(Ui.text(c, "›", 22f, Ui.MUTED))
+        root.addView(pcCard, Ui.lp(top = Ui.dp(c, 10)))
         row("💾", "Backup & restore", "All settings, history and password-protected keys", S_BACKUP)
         row("⚠", "Error log", if (errs == 0) "No errors recorded" else "$errs record(s) · share with support", S_ERRORS)
         resetRow()
@@ -170,6 +186,52 @@ class SettingsActivity : BaseActivity() {
         Ui.toast(this, "Reset done")
         startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
         finish()
+    }
+
+    // ==================================================================== ✍ Correction (same brain as the PC)
+
+    private fun correctionSection() {
+        val c = this
+        val sp = getSharedPreferences("nova_enhance", MODE_PRIVATE)
+        header("✍ Correction", "Corrections on the phone work like Nova on your PC.")
+        fun check(label: String, key: String, def: Boolean = true) {
+            root.addView(android.widget.CheckBox(c).apply {
+                text = label; setTextColor(Ui.TEXT); textSize = 14.5f; isChecked = sp.getBoolean(key, def)
+                buttonTintList = android.content.res.ColorStateList.valueOf(Ui.ACCENT)
+                setOnCheckedChangeListener { _, v -> sp.edit().putBoolean(key, v).apply() }
+            })
+        }
+        root.addView(Ui.section(c, "Same brain as your PC"))
+        val brain = PcLink.json(c, "brain.json")?.let { runCatching { org.json.JSONObject(it) }.getOrNull() }
+        root.addView(Ui.card(c).apply {
+            addView(Ui.text(c, if (brain == null) "Not received yet — pair with your PC in 🖥 My PC" else
+                "✓ From your PC (📱 Phone link)\n👤 ${brain.optString("fields")} ${brain.optString("about").take(80)}\n" +
+                "📚 Project vocabulary: ${brain.optJSONObject("vocab")?.length() ?: 0} · 👥 names: ${brain.optJSONArray("names")?.length() ?: 0} · " +
+                "🧠 learned words: ${brain.optJSONArray("learned")?.length() ?: 0} · ✍ writing style: ${if (brain.optString("style").isBlank()) "not learned" else "learned"}",
+                13f, if (brain == null) Ui.MUTED else Ui.TEXT))
+        })
+        check("Keep codes, references and numbers exactly as written", "keep_codes")
+
+        root.addView(Ui.section(c, "Underlines in any app"))
+        root.addView(Ui.text(c, "Make Nova the phone's spell checker: 🔴 spelling (on the phone) · 🔵 grammar with your AI when a sentence is finished (Android 12+). " +
+            "Works in apps that use Android's spell checker (Outlook, Gmail, WhatsApp…); some keyboards use their own.", 13f, Ui.MUTED))
+        root.addView(Ui.button(c, "Open Android's spell checker setting → choose Nova Enhance", true) {
+            val tries = listOf(android.content.Intent().setClassName("com.android.settings", "com.android.settings.Settings\$SpellCheckersSettingsActivity"),
+                android.content.Intent(android.provider.Settings.ACTION_LOCALE_SETTINGS), android.content.Intent(android.provider.Settings.ACTION_SETTINGS))
+            for (i in tries) { try { startActivity(i); break } catch (_: Exception) { } }
+        }, Ui.lp(top = Ui.dp(c, 8)))
+        check("🔵 Check grammar with my AI", "spell_grammar")
+
+        root.addView(Ui.section(c, "Keyboard panel"))
+        check("Always start with ✦ Fix grammar", "kb_start_grammar")
+        check("Show the changes (red → green) before Replace", "kb_preview")
+
+        root.addView(Ui.section(c, "My words (never marked)"))
+        val words = Ui.input(c, "Words, names and codes — one per line or separated by commas", true, 4)
+        words.setText(sp.getString("my_words", ""))
+        root.addView(words)
+        root.addView(Ui.button(c, "Save my words") { sp.edit().putString("my_words", words.text.toString()).apply(); Ui.toast(c, "Saved") }, Ui.lp(top = Ui.dp(c, 8)))
+        root.addView(Ui.text(c, "Your words from the PC (About me terms, project vocabulary, names from your emails) are added by themselves.", 12.5f, Ui.MUTED), Ui.lp(top = Ui.dp(c, 6)))
     }
 
     private fun header(title: String, sub: String) {

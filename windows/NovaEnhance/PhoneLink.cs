@@ -657,6 +657,9 @@ static class PhoneLink
         ["port"] = WifiPort, ["relay"] = Relay.Repo, ["rt"] = Relay.Token, ["drive"] = DriveOn ? "Nova Enhance Sync" : ""
     }.ToJsonString();
 
+    /// <summary>The QR code: a link the phone's camera opens in Nova Enhance (novaenhance://pair?d=…).</summary>
+    public static string PairLink() => "novaenhance://pair?d=" + Convert.ToBase64String(Encoding.UTF8.GetBytes(PairPayload())).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
     // ------------------------------------------------------------------ sizes (Settings and the relay status)
 
     public static string SizesText()

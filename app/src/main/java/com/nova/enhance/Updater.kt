@@ -63,6 +63,9 @@ object Updater {
         ((if (Build.VERSION.SDK_INT >= 28) pi.longVersionCode else @Suppress("DEPRECATION") pi.versionCode.toLong()) - CODE_BASE).toInt()
     } catch (_: Exception) { 0 }
 
+    /** "2.0 · build 01" for the internal build number (2.0 counts from internal 30). */
+    fun shown(b: Int): String = if (b > 29) "2.0 · build %02d".format(b - 29) else "1.0 · build %02d".format(b)
+
     fun versionName(c: Context): String = try { c.packageManager.getPackageInfo(c.packageName, 0).versionName ?: "" } catch (_: Exception) { "" }
 
     /** Ready to install: (build, file, release notes) or null. */
@@ -121,28 +124,28 @@ object Updater {
             val cur = current(c)
             val pick = best
             if (pick == null || pick.first <= cur) {
-                return done(c, "✓ Up to date (build %02d)".format(cur))
+                return done(c, "✓ Up to date (%s)".format(shown(cur)))
             }
             val (build, r, urls) = pick
-            ready(c)?.let { if (it.first == build) { if (!manual) notifyReady(c, build); return done(c, "Build %02d is ready to install".format(build)) } }
-            progress("Checking the signature of build %02d…".format(build))
+            ready(c)?.let { if (it.first == build) { if (!manual) notifyReady(c, build); return done(c, "%s is ready to install".format(shown(build))) } }
+            progress("Checking the signature of %s…".format(shown(build)))
             val sums = get(urls["SHA256SUMS.txt"]!!); val sig = get(urls["SHA256SUMS.sig"]!!)
-            if (!signatureOk(c, sums, sig)) return done(c, "⚠ Build %02d refused: the checksum file is not signed with this app's key".format(build))
+            if (!signatureOk(c, sums, sig)) return done(c, "⚠ %s refused: the checksum file is not signed with this app's key".format(shown(build)))
             val apkName = urls.keys.filter { apkFits(it, legacy) }.maxByOrNull { it.length }!!
             val want = sums.toString(Charsets.UTF_8).lines().map { it.trim() }.firstOrNull { l ->
                 l.split(Regex("\\s+"), 2).getOrNull(1)?.trimStart('*')?.trim() == apkName }?.split(Regex("\\s+"))?.firstOrNull()?.lowercase()
-                ?: return done(c, "⚠ Build %02d refused: the APK is not in the checksum file".format(build))
-            progress("Downloading build %02d…".format(build))
+                ?: return done(c, "⚠ %s refused: the APK is not in the checksum file".format(shown(build)))
+            progress("Downloading %s…".format(shown(build)))
             val dir = File(c.filesDir, "update").apply { mkdirs(); listFiles()?.forEach { it.delete() } }
             val f = File(dir, apkName)
-            download(urls[apkName]!!, f) { pct -> progress("Downloading build %02d… %d%%".format(build, pct)) }
+            download(urls[apkName]!!, f) { pct -> progress("Downloading %s… %d%%".format(shown(build), pct)) }
             val got = sha256(f)
-            if (got != want) { f.delete(); return done(c, "⚠ Build %02d refused: the download does not match its SHA-256 (deleted)".format(build)) }
-            if (!sameSigner(c, f)) { f.delete(); return done(c, "⚠ Build %02d refused: signed with another key (deleted)".format(build)) }
+            if (got != want) { f.delete(); return done(c, "⚠ %s refused: the download does not match its SHA-256 (deleted)".format(shown(build))) }
+            if (!sameSigner(c, f)) { f.delete(); return done(c, "⚠ %s refused: signed with another key (deleted)".format(shown(build))) }
             sp(c).edit().putInt("ready_build", build).putString("ready_path", f.absolutePath)
                 .putString("ready_notes", r.optString("body").take(800)).apply()
             notifyReady(c, build)
-            return done(c, "✓ Build %02d downloaded and verified (signature ✓ · SHA-256 ✓ · same key ✓)".format(build))
+            return done(c, "✓ %s downloaded and verified (signature ✓ · SHA-256 ✓ · same key ✓)".format(shown(build)))
         } catch (e: Exception) {
             return done(c, "⚠ Update check failed: " + (e.message ?: e.javaClass.simpleName))
         } finally { busy.set(false) }
@@ -250,7 +253,7 @@ object Updater {
             val pi = PendingIntent.getActivity(c, NOTE_ID, Intent(c, UpdateActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
             val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(c, CHANNEL) else @Suppress("DEPRECATION") Notification.Builder(c)
-            nm.notify(NOTE_ID, b.setSmallIcon(c.applicationInfo.icon).setContentTitle("$APP build %02d is ready".format(build))
+            nm.notify(NOTE_ID, b.setSmallIcon(c.applicationInfo.icon).setContentTitle("$APP %s is ready".format(shown(build)))
                 .setContentText("Downloaded and verified (signature, SHA-256, same key). Tap to install.")
                 .setContentIntent(pi).setAutoCancel(true).build())
         } catch (_: Exception) { }
@@ -342,7 +345,7 @@ class UpdateActivity : BaseActivity() {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(14), dp(14), dp(14), dp(14))
             background = GradientDrawable().apply { setColor(card); cornerRadius = dp(16).toFloat() } }
         if (r == null) {
-            box.addView(tv("No update waiting. You have build %02d.".format(cur), 15f, fg))
+            box.addView(tv("No update waiting. You have %s.".format(shown(cur)), 15f, fg))
         } else {
             box.addView(tv("Build %02d → build %02d".format(cur, r.first), 18f, accent, true))
             box.addView(tv("✓ Checksum file signed with $APP's own key\n✓ SHA-256 of the download matches\n✓ Same signing key as the installed app", 14f, fg)

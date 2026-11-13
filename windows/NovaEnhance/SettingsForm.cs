@@ -1548,7 +1548,7 @@ class SettingsForm : NovaForm
             try
             {
                 using var gen = new QRCoder.QRCodeGenerator();
-                using var data = gen.CreateQrCode(PhoneLink.PairPayload(), QRCoder.QRCodeGenerator.ECCLevel.M);
+                using var data = gen.CreateQrCode(PhoneLink.PairLink(), QRCoder.QRCodeGenerator.ECCLevel.M);
                 var png = new QRCoder.PngByteQRCode(data).GetGraphic(6);
                 using var ms = new MemoryStream(png);
                 qrBox.Image?.Dispose();

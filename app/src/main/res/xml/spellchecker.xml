@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<spell-checker xmlns:android="http://schemas.android.com/apk/res/android"
+    android:label="Nova Enhance"
+    android:settingsActivity="com.nova.enhance.SettingsActivity">
+    <subtype android:label="English" android:subtypeLocale="en" />
+    <subtype android:label="English (UK)" android:subtypeLocale="en_GB" />
+    <subtype android:label="English (US)" android:subtypeLocale="en_US" />
+</spell-checker>
