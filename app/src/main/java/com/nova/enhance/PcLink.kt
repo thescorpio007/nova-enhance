@@ -198,22 +198,43 @@ object PcLink {
                 got.keys().asSequence().toList().forEach { got.remove(it) }
             }
             val files = man.optJSONArray("files") ?: JSONArray()
-            var done = 0; var missing = 0
-            val todo = (0 until files.length()).map { files.getJSONObject(it) }
-                .filter { got.optString(it.optString("n")) != "${it.optLong("b")}:${it.optLong("m")}" }
-            for (f in todo) {
-                val n = f.optString("n")
-                progress("⬇ ${++done}/${todo.size} · $n")
-                val box = fetch(n)
-                if (box == null) { missing++; continue }
-                try { importFile(c, n, box) } catch (e: Exception) { ErrorLog.add(c, "My PC", "sync", n, 0, e.message ?: "", "") ; continue }
-                got.put(n, "${f.optLong("b")}:${f.optLong("m")}")
-                p.edit().putString("got", got.toString()).apply()
+            val all = (0 until files.length()).map { files.getJSONObject(it) }
+            fun mark(f: JSONObject) = "${f.optLong("b")}:${f.optLong("m")}"
+            // Each file is tried 3 times; what failed is tried again after a pause (3 rounds), and the rest continues by itself later.
+            fun fetchRetry(name: String): ByteArray? {
+                for (attempt in 0 until 3) {
+                    try { fetch(name)?.let { return it } } catch (_: Exception) { }
+                    Thread.sleep(3000L * (attempt + 1))
+                }
+                return null
             }
+            var copied = 0
+            for (round in 0 until 3) {
+                val todo = all.filter { got.optString(it.optString("n")) != mark(it) }
+                if (todo.isEmpty()) break
+                if (round > 0) { progress("⏳ ${todo.size} file(s) left — trying again in 60 s…"); Thread.sleep(60_000) }
+                var i = 0
+                for (f in todo) {
+                    val n = f.optString("n")
+                    val have = all.size - todo.size + i
+                    progress("📥 ${have * 100 / maxOf(1, all.size)}% · ${++i}/${todo.size} · $n")
+                    val box = fetchRetry(n) ?: continue
+                    try { importFile(c, n, box) } catch (e: Exception) { ErrorLog.add(c, "My PC", "sync", n, 0, e.message ?: "", ""); continue }
+                    got.put(n, mark(f)); copied++
+                    p.edit().putString("got", got.toString()).apply()
+                }
+            }
+            val left = all.count { got.optString(it.optString("n")) != mark(it) }
+            val pct = (all.size - left) * 100 / maxOf(1, all.size)
             p.edit().putString("fullAt", man.optString("fullAt")).putString("manifest", man.toString()).putLong("last_sync", System.currentTimeMillis())
                 .putString("last_way", way)
-                .putString("last_note", if (missing > 0) "$missing file(s) wait for the office Wi-Fi (the full copy is too big for the relay)" else "").apply()
-            return "✓ Updated · ${todo.size - missing} file(s) via $way" + (if (missing > 0) " · $missing wait for the office Wi-Fi" else "")
+                .putString("last_note", when {
+                    left == 0 -> ""
+                    base == null -> "📥 $pct% of the copy · $left file(s) wait for the office Wi-Fi (too big for the relay)"
+                    else -> "📥 $pct% of the copy · $left file(s) left — continues by itself"
+                }).apply()
+            if (left > 0 && base != null) scheduleSoon(c)
+            return "✓ $copied file(s) copied via $way" + (if (left > 0) " · $pct% done, $left left" else " · complete")
         } catch (e: Exception) {
             sp(c).edit().putString("last_note", "⚠ " + (e.message ?: "failed")).apply()
             return "⚠ " + (e.message ?: "failed")
@@ -439,6 +460,15 @@ object PcLink {
         try { scheduleJob(c) } catch (e: Exception) {
             sp(c).edit().putString("last_note", "Hourly update not available on this phone (${e.message?.take(80)}) — use ⟳").apply()
         }
+    }
+
+    /** The rest of an unfinished copy: once more in about 2 minutes. */
+    private fun scheduleSoon(c: Context) {
+        try {
+            val js = c.getSystemService(Context.JOB_SCHEDULER_SERVICE) as JobScheduler
+            js.schedule(JobInfo.Builder(JOB_ID + 1, ComponentName(c, PcSyncJob::class.java))
+                .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY).setMinimumLatency(120_000).setOverrideDeadline(600_000).build())
+        } catch (_: Exception) { }
     }
 
     private fun scheduleJob(c: Context) {

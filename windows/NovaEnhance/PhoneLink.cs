@@ -527,8 +527,10 @@ static class PhoneLink
         if (wifi != null || !On || !WifiOn) return;
         try
         {
-            wifi = new TcpListener(IPAddress.Any, WifiPort); wifi.Start();
-            var l = wifi; _ = Task.Run(() => Accept(l));
+            wifi = new TcpListener(IPAddress.Any, WifiPort); wifi.Start(64);
+            var l = wifi;
+            // Its own thread (not the shared workers): the phone gets an answer even while Nova is busy preparing the copy.
+            new Thread(() => Accept(l)) { IsBackground = true, Name = "Nova phone Wi-Fi" }.Start();
             WifiStatus = $"✓ Listening on {string.Join(", ", Addresses())} : {WifiPort}";
         }
         catch (Exception e) { wifi = null; WifiStatus = "⚠ " + e.Message; }
@@ -536,13 +538,13 @@ static class PhoneLink
     public static void StopWifi() { try { wifi?.Stop(); } catch { } wifi = null; WifiStatus = "Off"; }
     public static DateTime PhoneSeen = DateTime.MinValue;
 
-    static async Task Accept(TcpListener l)
+    static void Accept(TcpListener l)
     {
         while (true)
         {
             TcpClient c;
-            try { c = await l.AcceptTcpClientAsync(); } catch { return; }
-            _ = Serve(c);
+            try { c = l.AcceptTcpClient(); } catch { return; }
+            new Thread(() => { try { Serve(c).GetAwaiter().GetResult(); } catch { } }) { IsBackground = true, Name = "Nova phone file" }.Start();
         }
     }
 
@@ -556,7 +558,7 @@ static class PhoneLink
             var stream = client.GetStream();
             var (method, path, headers, _) = await Server.Read(stream);
             if (method == null) return;
-            int code = 200; byte[] body; string type = "application/octet-stream";
+            int code = 200; byte[] body; string type = "application/octet-stream"; string sendFile = null;
             if (!headers.TryGetValue("X-Nova-Pair", out var t) || t != PairToken) { code = 403; body = Encoding.UTF8.GetBytes("{\"error\":\"not paired\"}"); type = "application/json"; }
             else if (path == "/hello")
             {
@@ -570,13 +572,18 @@ static class PhoneLink
                 var rel = Uri.UnescapeDataString(path[5..].Split('?')[0]).Replace('/', Path.DirectorySeparatorChar);
                 var full = Path.GetFullPath(Path.Combine(Dir, rel));
                 if (!full.StartsWith(Path.GetFullPath(Dir), StringComparison.OrdinalIgnoreCase) || !full.EndsWith(".nes") || !File.Exists(full)) { code = 404; body = Array.Empty<byte>(); }
-                else body = await File.ReadAllBytesAsync(full);
+                else { sendFile = full; body = Array.Empty<byte>(); }
             }
             else if (path == "/sync-now") { _ = Task.Run(() => RunSafe("asked by the phone")); body = Encoding.UTF8.GetBytes("{\"ok\":true}"); type = "application/json"; }
             else { code = 404; body = Array.Empty<byte>(); }
-            var head = $"HTTP/1.1 {code} {(code == 200 ? "OK" : code == 403 ? "Forbidden" : "Not Found")}\r\nContent-Type: {type}\r\nContent-Length: {body.Length}\r\nConnection: close\r\n\r\n";
+            // Files go in pieces of 1 MB (never the whole file in memory).
+            using var fs = sendFile != null ? new FileStream(sendFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1 << 20) : null;
+            var len = fs?.Length ?? body.Length;
+            var head = $"HTTP/1.1 {code} {(code == 200 ? "OK" : code == 403 ? "Forbidden" : "Not Found")}\r\nContent-Type: {type}\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n";
+            client.SendTimeout = 120000;
             await stream.WriteAsync(Encoding.ASCII.GetBytes(head));
-            if (body.Length > 0) await stream.WriteAsync(body);
+            if (fs != null) await fs.CopyToAsync(stream, 1 << 20);
+            else if (body.Length > 0) await stream.WriteAsync(body);
             await stream.FlushAsync();
         }
         catch { }
