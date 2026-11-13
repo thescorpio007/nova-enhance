@@ -9,7 +9,7 @@ static class Program
     public const string Sign = "Designed by A.HAMROUNI";
     public static int Build => Assembly.GetExecutingAssembly().GetName().Version?.Build ?? 0;
     /// <summary>2.0: the build count starts again at 01 (internally the number keeps going up, so updates keep working).</summary>
-    public const int Base2 = 76;
+    public const int Base2 = 77;
     public static int ShownBuild => Build > Base2 ? Build - Base2 : Build;
     public static string Version => Build > Base2 ? "2.0" : "1.0";
     public static string Shown => ShownOf(Build);

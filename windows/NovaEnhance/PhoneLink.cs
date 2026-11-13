@@ -193,7 +193,7 @@ static class PhoneLink
         long added = 0;
         if (Send("email")) added += Emails(s, full, stamp);
         act.Mark("emails", $"{added:N0} rows");
-        if (Send("brief")) { Projects(s); Brief(s); }
+        if (Send("brief")) { ProjectMap(s); Brief(s); }
         if (Send("files")) Files(s, full, stamp);
         if (Send("brain")) Brain(s);
         if (Send("star")) Starred(s);
@@ -260,7 +260,7 @@ static class PhoneLink
     }
 
     /// <summary>Which email belongs to which project (sent again only when it changed).</summary>
-    static void Projects(State s)
+    static void ProjectMap(State s)
     {
         var sb = new StringBuilder();
         using (var c = MailIndex.Open())

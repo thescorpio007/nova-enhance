@@ -86,7 +86,7 @@ jobs:
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          $shown = "{0:D2}" -f ([int]"${{ github.run_number }}" - 76)
+          $shown = "{0:D2}" -f ([int]"${{ github.run_number }}" - 77)
           & $iscc /Qp "/DAppVersion=2.0.${{ github.run_number }}" "/DBuildNo=${{ github.run_number }}" "/DShownNo=$shown" "/DSourceDir=$((Resolve-Path out).Path)" "/O$((Resolve-Path dist).Path)" windows\installer.iss
           if ($LASTEXITCODE -ne 0) { exit 1 }
           Get-ChildItem dist | ForEach-Object { Write-Host ("::notice title=Output::{0} {1:N1} MB" -f $_.Name, ($_.Length / 1MB)) }
@@ -110,7 +110,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $n = "${{ github.run_number }}"
-          $shown = "{0:D2}" -f ([int]$n - 76)
+          $shown = "{0:D2}" -f ([int]$n - 77)
           gh release create "win-build-$n" (Get-ChildItem dist\*).FullName --title "Nova Enhance for Windows 2.0 · build $shown" `
             --notes "Nova Enhance for Windows 2.0 · build $shown (internal $n) — download NovaEnhance-Windows-2.0-build-$shown-Setup.exe and open it. Designed by A.HAMROUNI" --latest=false --prerelease
           if ($LASTEXITCODE -ne 0) { exit 1 }
