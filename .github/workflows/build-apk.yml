@@ -95,6 +95,7 @@ jobs:
           n=$(printf '%02d' "$NOVA_BUILD")
           shown=$(printf '%02d' $(( NOVA_BUILD > 100 ? NOVA_BUILD - 95 : NOVA_BUILD - 29 )))
           cd app/build/outputs/apk/release
+          gh release delete "build-$n" --yes --cleanup-tag 2>/dev/null || true   # a re-run replaces its own test release
           gh release create "build-$n" *.apk SHA256SUMS.txt SHA256SUMS.sig \
             --title "Nova Enhance 2.0 · build $shown" \
             --notes "Nova Enhance 2.0 · build $shown (internal $n) — tap the .apk below to download and install. Designed by A.HAMROUNI" \

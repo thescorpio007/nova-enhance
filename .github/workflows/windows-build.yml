@@ -106,6 +106,7 @@ jobs:
         run: |
           $n = "${{ inputs.build }}"
           $shown = "{0:D2}" -f ($(if ([int]$n -gt 100) { [int]$n - 95 } else { [int]$n - 77 }))
+          gh release delete "win-build-$n" --yes --cleanup-tag 2>$null   # a re-run replaces its own test release
           gh release create "win-build-$n" (Get-ChildItem dist\*).FullName --title "Nova Enhance for Windows 2.0 · build $shown" `
             --notes "Nova Enhance for Windows 2.0 · build $shown (internal $n) — download NovaEnhance-Windows-2.0-build-$shown-Setup.exe and open it. Designed by A.HAMROUNI" --latest=false --prerelease
           if ($LASTEXITCODE -ne 0) { exit 1 }
@@ -113,9 +114,14 @@ jobs:
       - name: Update self-test (downloads this release, checks signature + SHA-256, and that a changed checksum file is refused)
         run: |
           $o = "$env:RUNNER_TEMP\upd.txt"
-          $p = Start-Process -FilePath out\NovaEnhance.exe -ArgumentList "--update-selftest","win-build-${{ inputs.build }}","--out","`"$o`"" -PassThru
-          if (-not $p.WaitForExit(300000)) { $p.Kill(); Write-Host "::error::update self-test hung"; exit 1 }
-          $t = Get-Content $o -Raw; Write-Host $t
+          # GitHub may answer "rate limit exceeded" to the runner for a while: wait and try again (3 times).
+          for ($try = 1; $try -le 3; $try++) {
+            $p = Start-Process -FilePath out\NovaEnhance.exe -ArgumentList "--update-selftest","win-build-${{ inputs.build }}","--out","`"$o`"" -PassThru
+            if (-not $p.WaitForExit(300000)) { $p.Kill(); Write-Host "::error::update self-test hung"; exit 1 }
+            $t = Get-Content $o -Raw; Write-Host $t
+            if ($p.ExitCode -eq 0 -or $t -notmatch 'rate limit') { break }
+            Write-Host "GitHub rate limit — trying again in 90 s ($try/3)"; Start-Sleep -Seconds 90
+          }
           if ($p.ExitCode -ne 0) { Write-Host "::error title=Update self-test::$($t -replace "`r?`n", '%0A')"; exit 1 }
           Write-Host "::notice title=Update self-test::$($t -replace "`r?`n", '%0A')"
 
