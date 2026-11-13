@@ -1133,6 +1133,13 @@ static class MailIndex
 
     // ================================================================== 📂 emails read directly from .pst files (no Outlook)
 
+    /// <summary>The index id of an Outlook email (empty when it is not indexed).</summary>
+    public static long[] IdsOfEntry(string entry)
+    {
+        try { using var c = Open(); var v = Scalar(c, "SELECT id FROM mail WHERE entry=$e", ("$e", entry ?? "")); return v == null ? Array.Empty<long>() : new[] { Convert.ToInt64(v) }; }
+        catch { return Array.Empty<long>(); }
+    }
+
     public static bool HasEntry(SqliteConnection c, string entry) => Scalar(c, "SELECT 1 FROM mail WHERE entry=$e", ("$e", entry)) != null;
 
     /// <summary>The same email is already in Nova (same time and subject — e.g. from Outlook or another copy of the archive).</summary>

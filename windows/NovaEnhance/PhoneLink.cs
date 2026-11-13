@@ -447,10 +447,11 @@ static class PhoneLink
                     if (x.Kind == "file") { if (!File.Exists(x.Path) || new FileInfo(x.Path).Length > 60_000_000 || Private(x.Path)) continue; data = File.ReadAllBytes(x.Path); file = System.IO.Path.GetFileName(x.Path); }
                     else
                     {
-                        var tmp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "nova-star-" + Guid.NewGuid().ToString("N") + ".msg");
-                        Outlook.SaveMsg(x.Entry, x.StoreId, tmp);
-                        data = File.ReadAllBytes(tmp); try { File.Delete(tmp); } catch { }
-                        file = string.Join("_", (x.Title.Length > 0 ? x.Title : "email").Split(System.IO.Path.GetInvalidFileNameChars())) + ".msg";
+                        // ✉ The email as a formatted page (opens in Nova on the phone, offline).
+                        var mh = MailIndex.ByIds(MailIndex.IdsOfEntry(x.Entry), 1, 200000).FirstOrDefault() ?? new MailHit { Entry = x.Entry, StoreId = x.StoreId, Subject = x.Title };
+                        var page = MailPreview.Render(mh).GetAwaiter().GetResult();
+                        data = Encoding.UTF8.GetBytes(page != null ? OnePage(page) : "<pre>" + System.Net.WebUtility.HtmlEncode(mh.Body ?? x.Title) + "</pre>");
+                        file = string.Join("_", (x.Title.Length > 0 ? x.Title : "email").Split(System.IO.Path.GetInvalidFileNameChars())) + ".html";
                         if (data.Length > 60_000_000) continue;
                     }
                     var packed = Seal(Gzip(data));
@@ -556,7 +557,7 @@ static class PhoneLink
         {
             client.ReceiveTimeout = 15000;
             var stream = client.GetStream();
-            var (method, path, headers, _) = await Server.Read(stream);
+            var (method, path, headers, reqBody) = await Server.Read(stream);
             if (method == null) return;
             int code = 200; byte[] body; string type = "application/octet-stream"; string sendFile = null;
             if (!headers.TryGetValue("X-Nova-Pair", out var t) || t != PairToken) { code = 403; body = Encoding.UTF8.GetBytes("{\"error\":\"not paired\"}"); type = "application/json"; }
@@ -573,6 +574,12 @@ static class PhoneLink
                 var full = Path.GetFullPath(Path.Combine(Dir, rel));
                 if (!full.StartsWith(Path.GetFullPath(Dir), StringComparison.OrdinalIgnoreCase) || !full.EndsWith(".nes") || !File.Exists(full)) { code = 404; body = Array.Empty<byte>(); }
                 else { sendFile = full; body = Array.Empty<byte>(); }
+            }
+            else if (path == "/ask")
+            {
+                // 📶 A question from the paired phone on the office Wi-Fi (same encrypted request as through the relay, answered at once).
+                PhoneSeen = DateTime.Now;
+                body = Encoding.UTF8.GetBytes("NES:" + await PhoneRequest(reqBody.Trim())); type = "text/plain";
             }
             else if (path == "/sync-now") { _ = Task.Run(() => RunSafe("asked by the phone")); body = Encoding.UTF8.GetBytes("{\"ok\":true}"); type = "application/json"; }
             else { code = 404; body = Array.Empty<byte>(); }
@@ -661,12 +668,57 @@ static class PhoneLink
                 res = new JsonObject { ["name"] = name, ["data"] = Convert.ToBase64String(Gzip(data)) };
                 break;
             }
+            case "html":
+            {
+                // ✉ The email as Outlook shows it (fonts, tables, logos, pictures) in one page, and its attachments by name.
+                var id = a["i"]?.GetValue<long>() ?? 0;
+                var h = MailIndex.ByIds(new[] { id }, 1, 200000).FirstOrDefault() ?? throw new Exception("email not in the index");
+                if (Private(h.Subject, h.Folder, h.AttNames)) throw new Exception("🔒 private");
+                string html = null;
+                try { var f = await MailPreview.Render(h); if (f != null) html = OnePage(f); } catch (Exception e) { act.Mark("formatted", e.Message); }
+                html ??= "<html><head><meta charset='utf-8'></head><body><pre style='white-space:pre-wrap;font-family:Calibri,Segoe UI,Arial;font-size:15px'>" + System.Net.WebUtility.HtmlEncode(h.Body ?? "") + "</pre></body></html>";
+                var o = Hit(h); o["html"] = html;
+                o["atts"] = new JsonArray((h.AttNames ?? "").Split(';').Select(x => x.Trim()).Where(x => x.Length > 0).Select(x => (JsonNode)x).ToArray());
+                res = o;
+                break;
+            }
+            case "att":
+            {
+                var id = a["i"]?.GetValue<long>() ?? 0;
+                var name = a["name"]?.ToString() ?? "";
+                var h = MailIndex.ByIds(new[] { id }, 1).FirstOrDefault() ?? throw new Exception("email not in the index");
+                if (Private(h.Subject, h.Folder, h.AttNames, name)) throw new Exception("🔒 private");
+                var dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "nova-phone-att-" + Guid.NewGuid().ToString("N"));
+                var path = await MailPreview.SaveAttachment(h, name, dir);
+                try
+                {
+                    if (new FileInfo(path).Length > 25_000_000) throw new Exception("attachment larger than 25 MB — open it on the PC");
+                    res = new JsonObject { ["name"] = System.IO.Path.GetFileName(path), ["data"] = Convert.ToBase64String(Gzip(await File.ReadAllBytesAsync(path))) };
+                }
+                finally { try { Directory.Delete(dir, true); } catch { } }
+                break;
+            }
             case "sync": _ = Task.Run(() => RunSafe("asked by the phone")); res = new JsonObject { ["ok"] = true }; break;
             case "hello": PhoneSeen = DateTime.Now; if (a["phone"]?.ToString() is { Length: > 0 } ph) PhoneName = ph; res = new JsonObject { ["pc"] = Environment.MachineName, ["build"] = Program.Shown }; break;
             default: throw new Exception("unknown request " + op);
         }
         act.Result = "ok";
         return Convert.ToBase64String(Seal(Gzip(Encoding.UTF8.GetBytes(res.ToJsonString()))));
+    }
+
+    /// <summary>The rendered email page with its pictures inside it (one file the phone can show offline).</summary>
+    static string OnePage(string file)
+    {
+        var dir = System.IO.Path.GetDirectoryName(file)!;
+        var html = File.ReadAllText(file);
+        return System.Text.RegularExpressions.Regex.Replace(html, @"(src\s*=\s*[""']?)(img\d+\.[A-Za-z0-9]+)", m =>
+        {
+            var p = System.IO.Path.Combine(dir, m.Groups[2].Value);
+            if (!File.Exists(p) || new FileInfo(p).Length > 3_000_000) return m.Value;
+            var ext = System.IO.Path.GetExtension(p).TrimStart('.').ToLowerInvariant();
+            var mime = ext switch { "jpg" or "jpeg" => "image/jpeg", "gif" => "image/gif", "bmp" => "image/bmp", _ => "image/png" };
+            return m.Groups[1].Value + "data:" + mime + ";base64," + Convert.ToBase64String(File.ReadAllBytes(p));
+        });
     }
 
     // ------------------------------------------------------------------ pairing QR

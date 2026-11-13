@@ -388,10 +388,33 @@ object PcLink {
     // ------------------------------------------------------------------ 🔁 live questions to the PC (encrypted, through the relay)
 
     /** op: search · brief · mail · handled · fetch · sync. The PC answers within about 30–60 s. */
+    @Volatile private var wifiBase: Pair<Long, String?>? = null
+
+    /** 📶 The PC on this Wi-Fi (remembered for 2 minutes). */
+    private fun wifiNow(c: Context): String? {
+        wifiBase?.let { if (System.currentTimeMillis() - it.first < 120_000) return it.second }
+        val b = wifi(c); wifiBase = System.currentTimeMillis() to b; return b
+    }
+
+    private fun answer(c: Context, s0: String): JSONObject {
+        val s = s0.trim()
+        if (!s.startsWith("NES:")) throw Exception(s.substringAfter("\n\n").take(300))
+        return JSONObject(String(gunzip(open(key(c), Base64.decode(s.substring(4), Base64.DEFAULT))), Charsets.UTF_8))
+    }
+
     fun ask(c: Context, op: String, args: JSONObject, progress: (String) -> Unit = {}): JSONObject {
-        if (!hasRelay(c)) throw Exception("The relay is not set up on your PC (🔌 Test connector → GitHub relay)")
-        val id = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date()) + "-phone-" + (1000..9999).random()
         val enc = Base64.encodeToString(seal(key(c), JSONObject().put("op", op).put("args", args).toString().toByteArray()), Base64.NO_WRAP)
+        // 📶 On the office Wi-Fi: straight to the PC (1–3 s).
+        val base = wifiNow(c)
+        if (base != null) {
+            progress("⏳ asking your PC on the Wi-Fi…")
+            try {
+                val (code, b) = http("$base/ask", "POST", mapOf("X-Nova-Pair" to pairToken(c), "Content-Type" to "text/plain"), enc.toByteArray(), connectMs = 4000, readMs = 180000)
+                if (code == 200) return answer(c, String(b, Charsets.UTF_8))
+            } catch (e: Exception) { wifiBase = null; if (e.message?.startsWith("🔒") == true) throw e }
+        }
+        if (!hasRelay(c)) throw Exception("Your PC is not on this Wi-Fi and the relay is not set up (🔌 Test connector → GitHub relay)")
+        val id = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date()) + "-phone-" + (1000..9999).random()
         val req = JSONObject().put("tool", "phone").put("enc", enc).toString()
         val (code, _) = gh(c, "requests/$id.json", "PUT", JSONObject().put("message", "phone $op").put("content", Base64.encodeToString(req.toByteArray(), Base64.NO_WRAP)))
         if (code !in 200..299) throw Exception("GitHub $code — the relay key may have expired")
@@ -400,11 +423,7 @@ object PcLink {
             Thread.sleep(8000)
             progress("⏳ waiting for your PC… ${(System.currentTimeMillis() - t0) / 1000} s")
             val (rc, b) = gh(c, "responses/$id.md", raw = true)
-            if (rc == 200) {
-                val s = String(b, Charsets.UTF_8).trim()
-                if (!s.startsWith("NES:")) throw Exception(s.substringAfter("\n\n").take(300))
-                return JSONObject(String(gunzip(open(key(c), Base64.decode(s.substring(4), Base64.DEFAULT))), Charsets.UTF_8))
-            }
+            if (rc == 200) return answer(c, String(b, Charsets.UTF_8))
         }
         throw Exception("Your PC did not answer within 3 minutes (is it on, with Nova running?)")
     }

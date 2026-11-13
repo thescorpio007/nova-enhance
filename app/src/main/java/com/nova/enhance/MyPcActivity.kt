@@ -90,7 +90,11 @@ class MyPcActivity : BaseActivity() {
         if (r.isSuccess) syncNow()
     }
 
-    override fun onBackPressed() { if (page != "home" && page != "pair") show(if (page == "mail" && hits.isNotEmpty()) "search" else "home") else super.onBackPressed() }
+    override fun onBackPressed() {
+        if (page == "web" && lastMail != null) { openMail(lastMail!!); return }
+        if (page != "home" && page != "pair") show(if (page == "mail" && hits.isNotEmpty()) "search" else "home") else super.onBackPressed()
+    }
+    private var lastMail: PcLink.Hit? = null
 
     private fun say(s: String) = main.post { status.text = s }
 
@@ -306,24 +310,122 @@ class MyPcActivity : BaseActivity() {
     // ------------------------------------------------------------------ ✉ one email
 
     private fun openMail(h0: PcLink.Hit) {
-        page = "mail"
+        page = "mail"; lastMail = h0
         body.removeAllViews()
         val c = this
         val h = PcLink.mail(c, h0.id) ?: h0.also { it.body = it.first }
-        body.addView(Ui.text(c, h.subject, 18f, Ui.TEXT, true))
-        body.addView(Ui.text(c, "From ${if (h.sent) "me" else h.from} ${if (h.fromAddr.isNotBlank()) "<${h.fromAddr}>" else ""}\nTo ${h.to}" +
-            (if (h.cc.isNotBlank()) "\nCc ${h.cc}" else "") + "\n${fmt.format(Date(h.date))} · 📁 ${h.project.ifBlank { "unsorted" }}", 12.5f, Ui.MUTED).apply { setTextIsSelectable(true) },
-            Ui.lp(top = Ui.dp(c, 6)))
-        if (h.att.isNotBlank()) body.addView(Ui.text(c, "📎 " + h.att.split(';', '|').filter { it.isNotBlank() }.joinToString("\n📎 ") { it.trim() }, 12.5f, Ui.TEXT), Ui.lp(top = Ui.dp(c, 6)))
+        body.addView(Ui.text(c, h.subject.ifBlank { "(no subject)" }, 18f, Ui.TEXT, true).apply { setTextIsSelectable(true) })
+        // Header: one line, tap for To / Cc.
+        val short = "${if (h.sent) "Me" else h.from} · ${fmt.format(Date(h.date))} · 📁 ${h.project.ifBlank { "unsorted" }}"
+        val full = "From ${if (h.sent) "me" else h.from}${if (h.fromAddr.isNotBlank()) " <${h.fromAddr}>" else ""}\nTo ${h.to}" +
+            (if (h.cc.isNotBlank()) "\nCc ${h.cc}" else "") + "\n${fmt.format(Date(h.date))} · 📁 ${h.project.ifBlank { "unsorted" }}"
+        val head = Ui.text(c, "$short  ▾ more", 12.5f, Ui.MUTED)
+        head.setOnClickListener { head.text = if (head.text.startsWith("From ")) "$short  ▾ more" else full }
+        body.addView(head, Ui.lp(top = Ui.dp(c, 6)))
         val (sv, row) = Ui.chipRow(c)
         fun b(s: String, primary: Boolean = false, f: () -> Unit) = row.addView(Ui.chip(c, s, primary) { f() }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
-        b("✦ Draft reply", true) { draft(h) }
+        b("📄 Formatted", true) { formatted(h) }
+        b("✦ Draft reply") { draft(h) }
         b("✓ Handled") { pcDo("handled", JSONObject().put("i", h.id).put("on", true), "✓ Marked as handled on your PC") }
-        b("🖥 Fetch from PC") { fetch(JSONObject().put("i", h.id)) }
         b("⧉ Copy") { Ui.copy(c, h.subject + "\n\n" + h.body) }
         body.addView(sv, Ui.lp(top = Ui.dp(c, 8)))
-        body.addView(Ui.text(c, h.body.ifBlank { "(the text comes with the next update — or 🖥 Fetch from PC)" }, 14f, Ui.TEXT).apply { setTextIsSelectable(true) }, Ui.lp(top = Ui.dp(c, 10)))
+        attachments(h)
+        // The text, readable: links as 🔗, earlier messages folded.
+        val text = h.body.ifBlank { "(the text comes with the next update — or 📄 Formatted)" }
+        val cut = Regex("(?m)^\\s*(-{3,}\\s*Original Message\\s*-{3,}|-{5}.*-{5}|From:\\s.+\\n\\s*(Sent|Date):\\s|On .+wrote:)", RegexOption.IGNORE_CASE).find(text)
+        val top = if (cut != null && cut.range.first > 20) text.substring(0, cut.range.first) else text
+        body.addView(linkified(top.trimEnd()), Ui.lp(top = Ui.dp(c, 12)))
+        if (cut != null && cut.range.first > 20) {
+            val older = linkified(text.substring(cut.range.first)).apply { visibility = View.GONE; setTextColor(Ui.MUTED) }
+            val tg = Ui.smallButton(c, "▾ Show earlier messages") { older.visibility = if (older.visibility == View.GONE) View.VISIBLE else View.GONE }
+            body.addView(tg, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, top = Ui.dp(c, 10)))
+            body.addView(older, Ui.lp(top = Ui.dp(c, 8)))
+        }
         body.addView(Ui.signature(c))
+    }
+
+    /** Text with long links shown as "🔗 link" (tap to open), comfortable size and spacing. */
+    private fun linkified(t: String): TextView {
+        val c = this
+        val sb = android.text.SpannableStringBuilder()
+        var last = 0
+        for (m in Regex("<?(https?://[^\\s<>]+)>?").findAll(t)) {
+            sb.append(t, last, m.range.first)
+            val url = m.groupValues[1]
+            val label = "🔗 " + (Uri.parse(url).host ?: "link")
+            val st = sb.length; sb.append(label)
+            sb.setSpan(object : android.text.style.ClickableSpan() {
+                override fun onClick(w: View) { try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } catch (_: Exception) { } }
+            }, st, sb.length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            last = m.range.last + 1
+        }
+        sb.append(t, last, t.length)
+        return Ui.text(c, "", 15f, Ui.TEXT).apply {
+            text = sb; setLineSpacing(0f, 1.25f); movementMethod = android.text.method.LinkMovementMethod.getInstance()
+            setLinkTextColor(0xFFB9B0FF.toInt()); setTextIsSelectable(true)
+        }
+    }
+
+    /** 📎 each attachment: tap = get it from the PC and open it in the right app. */
+    private fun attachments(h: PcLink.Hit) {
+        val c = this
+        val names = h.att.split(';', '|').map { it.trim() }.filter { it.isNotEmpty() && !Regex("^image\\d+\\.(png|jpe?g|gif)$", RegexOption.IGNORE_CASE).matches(it) }
+        if (names.isEmpty()) return
+        val box = FlowLayout(c, Ui.dp(c, 6), Ui.dp(c, 6))
+        for (n in names) box.addView(Ui.chip(c, "📎 $n", false) { getAttachment(h, n) })
+        body.addView(box, Ui.lp(top = Ui.dp(c, 8)))
+    }
+
+    private fun getAttachment(h: PcLink.Hit, name: String) {
+        val local = File(File(PcLink.dir(this), "fetched"), name.replace(Regex("[\\\\/:*?\"<>|]"), "_"))
+        if (local.exists() && local.length() > 0) { openFile(local); return }
+        say("⏳ Getting “$name” from your PC…")
+        Thread {
+            val r = runCatching {
+                val o = PcLink.ask(applicationContext, "att", JSONObject().put("i", h.id).put("name", name)) { say(it) }
+                local.parentFile?.mkdirs()
+                local.writeBytes(PcLink.gunzip(android.util.Base64.decode(o.getString("data"), android.util.Base64.DEFAULT)))
+                local
+            }
+            main.post { r.onSuccess { status.text = "✓ ${it.name}"; openFile(it) }.onFailure { status.text = "⚠ " + it.message } }
+        }.start()
+    }
+
+    /** 📄 The email as Outlook shows it (fonts, tables, logos, pictures), shown inside Nova. Kept on the phone after the first time. */
+    private fun formatted(h: PcLink.Hit) {
+        val cache = File(File(PcLink.dir(this), "formatted").apply { mkdirs() }, "${h.id}.html")
+        if (cache.exists()) { showHtml(h.subject, cache.readText()); return }
+        say("⏳ Getting the formatted email from your PC…")
+        Thread {
+            val r = runCatching { PcLink.ask(applicationContext, "html", JSONObject().put("i", h.id)) { say(it) } }
+            main.post {
+                r.onSuccess { o -> val html = o.optString("html"); cache.writeText(html); status.text = "✓ Formatted"; showHtml(h.subject, html) }
+                    .onFailure { status.text = "⚠ " + it.message }
+            }
+        }.start()
+    }
+
+    private fun showHtml(title: String, html: String) {
+        page = "web"
+        body.removeAllViews()
+        val c = this
+        body.addView(Ui.text(c, title, 16f, Ui.TEXT, true))
+        val w = android.webkit.WebView(c).apply {
+            settings.javaScriptEnabled = false
+            settings.loadWithOverviewMode = true; settings.useWideViewPort = true
+            settings.builtInZoomControls = true; settings.displayZoomControls = false
+            settings.textZoom = 100
+            setBackgroundColor(0xFFFFFFFF.toInt())
+            webViewClient = object : android.webkit.WebViewClient() {
+                override fun shouldOverrideUrlLoading(v: android.webkit.WebView, req: android.webkit.WebResourceRequest): Boolean {
+                    try { startActivity(Intent(Intent.ACTION_VIEW, req.url)) } catch (_: Exception) { }
+                    return true
+                }
+            }
+        }
+        val fit = html.replace(Regex("<head[^>]*>", RegexOption.IGNORE_CASE)) { it.value + "<meta name='viewport' content='width=device-width, initial-scale=1'><style>body{word-wrap:break-word}table{max-width:100%}img{max-width:100%;height:auto}</style>" }
+        w.loadDataWithBaseURL(null, fit, "text/html", "utf-8", null)
+        body.addView(w, Ui.lp(h = (resources.displayMetrics.heightPixels * 0.78).toInt(), top = Ui.dp(c, 8)))
     }
 
     private fun pcDo(op: String, args: JSONObject, ok: String) {
@@ -446,10 +548,16 @@ class MyPcActivity : BaseActivity() {
     }
 
     private fun openFile(f: File) {
+        if (f.extension.lowercase() in listOf("html", "htm")) { showHtml(f.nameWithoutExtension, f.readText()); return }
         val uri = Uri.parse("content://${PcFiles.AUTH}/" + Uri.encode(f.relativeTo(PcLink.dir(this)).path, "/"))
-        val type = MimeTypeMap.getSingleton().getMimeTypeFromExtension(f.extension.lowercase()) ?: "application/octet-stream"
-        try { startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, type).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)) }
-        catch (_: Exception) { startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType(type).putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), "Open with")) }
+        val type = MimeTypeMap.getSingleton().getMimeTypeFromExtension(f.extension.lowercase())
+        // Only apps that really open this type; otherwise 📤 Share.
+        val view = Intent(Intent.ACTION_VIEW).setDataAndType(uri, type ?: "application/octet-stream").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        if (type != null && view.resolveActivity(packageManager) != null) {
+            try { startActivity(Intent.createChooser(view, "Open “${f.name}” with")); return } catch (_: Exception) { }
+        }
+        Ui.toast(this, "No app on this phone opens .${f.extension} files — choose where to send it")
+        startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType(type ?: "application/octet-stream").putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), "📤 Share “${f.name}”"))
     }
 
     // ------------------------------------------------------------------ ⚙
