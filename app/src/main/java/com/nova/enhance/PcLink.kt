@@ -61,7 +61,7 @@ object PcLink {
             .putInt("port", o.optInt("port", 47323)).putString("relay", o.optString("relay")).putString("rt", o.optString("rt"))
             .putLong("paired_at", System.currentTimeMillis()).apply()
         if (old != o.getString("key")) wipe(c)
-        schedule(c)
+        schedule(c)   // safe: never throws
         return "✓ Paired with ${o.optString("pc")}"
     }
 
@@ -433,8 +433,15 @@ object PcLink {
 
     const val JOB_ID = 7720
 
+    /** Never closes a screen: if Android refuses the job, "⟳ Update now" still works. */
     fun schedule(c: Context) {
         if (!paired(c)) return
+        try { scheduleJob(c) } catch (e: Exception) {
+            sp(c).edit().putString("last_note", "Hourly update not available on this phone (${e.message?.take(80)}) — use ⟳").apply()
+        }
+    }
+
+    private fun scheduleJob(c: Context) {
         val js = c.getSystemService(Context.JOB_SCHEDULER_SERVICE) as JobScheduler
         val every = c.getSharedPreferences("nova_pc", Context.MODE_PRIVATE).getInt("every_min", 60).coerceIn(15, 720)
         js.schedule(JobInfo.Builder(JOB_ID, ComponentName(c, PcSyncJob::class.java))

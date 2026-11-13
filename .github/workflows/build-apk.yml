@@ -137,6 +137,13 @@ jobs:
             sleep 5
             adb shell input keyevent 4
             sleep 2
+            # 🖥 My PC: pairing link (test key) opens the screen; it must not close
+            adb shell am start -W -a android.intent.action.VIEW -d "novaenhance://pair?d=eyJub3ZhIjoyLCJwYyI6IlRFU1QtUEMiLCJrZXkiOiJBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBPSIsImlwIjpbXSwicG9ydCI6NDczMjMsInJlbGF5IjoiIiwicnQiOiIifQ"
+            sleep 8
+            adb shell am start -W -n com.nova.enhance/.MyPcActivity
+            sleep 4
+            adb shell input keyevent 4
+            sleep 2
             adb shell screencap -p /sdcard/shot.png
             adb pull /sdcard/shot.png shot.png
             adb logcat -d > logcat.txt

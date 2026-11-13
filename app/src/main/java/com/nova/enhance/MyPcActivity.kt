@@ -66,6 +66,19 @@ class MyPcActivity : BaseActivity() {
         show(if (PcLink.paired(c)) "home" else "pair")
     }
 
+    /** 📷 Nova's own QR scanner. */
+    private fun scan() = startActivityForResult(Intent(this, QrScanActivity::class.java), 31)
+
+    @Deprecated("Activity result")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != 31 || resultCode != RESULT_OK) return
+        val text = data?.getStringExtra(QrScanActivity.RESULT_TEXT) ?: return
+        val r = runCatching { PcLink.pair(this, text) }
+        Ui.toast(this, r.getOrElse { it.message ?: "Failed" })
+        if (r.isSuccess) { show("home"); syncNow() }
+    }
+
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); handle(intent); show(if (PcLink.paired(this)) "home" else "pair") }
 
     /** The pairing QR (novaenhance://pair?d=…) opened from the camera. */
@@ -134,9 +147,10 @@ class MyPcActivity : BaseActivity() {
     private fun pairPage() {
         val c = this
         body.addView(Ui.text(c, "Pair this phone with Nova on your PC — once.", 16f, Ui.TEXT, true))
+        body.addView(Ui.button(c, "📷 Scan the QR code on your PC", true) { scan() }, Ui.lp(top = Ui.dp(c, 10)))
         body.addView(Ui.text(c, "1. On the PC: Nova → Settings → 📱 Phone link → 🔳 Show the pairing QR code.\n" +
-            "2. Scan it with your phone's camera and choose “Open with Nova Enhance”.\n" +
-            "   Or: copy the code the camera shows, then press 📋 Paste below.\n\n" +
+            "2. Press 📷 Scan above and point the phone at the screen.\n" +
+            "   (Or paste the code below.)\n\n" +
             "Everything is encrypted with the key in the QR code; 🔒 private items never leave your PC.", 14f, Ui.MUTED), Ui.lp(top = Ui.dp(c, 8)))
         val box = Ui.input(c, "…or paste the pairing code here", true, 3)
         body.addView(box, Ui.lp(top = Ui.dp(c, 12)))
@@ -452,6 +466,7 @@ class MyPcActivity : BaseActivity() {
         body.addView(Ui.text(c, "Ways: 📶 office Wi-Fi first (fast, the full copy) · 🔁 relay when away (small updates and questions to the PC).\n" +
             "☁ Google Drive: your PC writes the encrypted copy to Google Drive; reading it on the phone needs a Google sign-in set up — coming next.", 12.5f, Ui.MUTED), Ui.lp(top = Ui.dp(c, 8)))
         body.addView(Ui.text(c, "On this phone: ${mb(PcLink.sizeOnPhone(c))} · %,d emails · %,d files".format(PcLink.count(c, "mail"), PcLink.count(c, "files")), 13f, Ui.TEXT), Ui.lp(top = Ui.dp(c, 8)))
+        body.addView(Ui.button(c, "📷 Pair again (scan the QR code)") { scan() }, Ui.lp(top = Ui.dp(c, 14)))
         body.addView(Ui.button(c, "Unpair and delete the copy") {
             android.app.AlertDialog.Builder(c).setMessage("Delete everything from your PC on this phone and unpair?")
                 .setPositiveButton("Delete") { _, _ -> PcLink.unpair(c); show("pair") }.setNegativeButton("Cancel", null).show()

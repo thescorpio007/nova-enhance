@@ -71,4 +71,5 @@ android {
 
 dependencies {
     implementation("org.jetbrains.kotlin:kotlin-stdlib:2.0.21")
+    implementation("com.google.zxing:core:3.5.3")   // 📷 reading the pairing QR code (Apache 2.0)
 }
