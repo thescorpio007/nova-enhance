@@ -290,8 +290,8 @@ object PcLink {
         val doc: Triple<String, String, String> by lazy { DocCodes.of(subject.ifBlank { att }) }
     }
 
-    private val instruction = Regex("^(show|find|search|look|check|list|give|get|bring|display|all|every|each|any|old|older|oldest|earliest|new|newer|newest|latest|recent|recently|approved|approve|approval|approvals|accepted|please|me|my|kindly|history|the|a|an|of|in|for|from|to|and|with|on|about|project|emails?|mails?|which|that|is|are|was|were|i|need|want|do|did|has|have)$", RegexOptions.IGNORE_CASE)
-    private val approval = Regex("\\bcode\\s*[-:#]?\\s*(1|2|a|b)\\b|\\bapproved\\b|\\bapproval\\b|no objection|signed\\s+(sample\\s+|material\\s+)?submittal|with\\s+(the\\s+)?(client|engineer|consultant)'?s?\\s+comments", RegexOptions.IGNORE_CASE)
+    private val instruction = Regex("^(show|find|search|look|check|list|give|get|bring|display|all|every|each|any|old|older|oldest|earliest|new|newer|newest|latest|recent|recently|approved|approve|approval|approvals|accepted|please|me|my|kindly|history|the|a|an|of|in|for|from|to|and|with|on|about|project|emails?|mails?|which|that|is|are|was|were|i|need|want|do|did|has|have)$", RegexOption.IGNORE_CASE)
+    private val approval = Regex("\\bcode\\s*[-:#]?\\s*(1|2|a|b)\\b|\\bapproved\\b|\\bapproval\\b|no objection|signed\\s+(sample\\s+|material\\s+)?submittal|with\\s+(the\\s+)?(client|engineer|consultant)'?s?\\s+comments", RegexOption.IGNORE_CASE)
 
     /** Known short forms: one idea = any of these (the PC uses the same list). */
     private val abbrev = mapOf(
@@ -309,8 +309,8 @@ object PcLink {
         val phrases = Regex("\"([^\"]+)\"").findAll(question).map { it.groupValues[1].trim() }.filter { it.isNotEmpty() }.toList()
         var rest = question.replace(Regex("\"[^\"]*\""), " ")
         // "fire hose cabinet(s)" anywhere = the FHC idea
-        if (Regex("fire\\s+hose", RegexOptions.IGNORE_CASE).containsMatchIn(rest)) rest = rest.replace(Regex("fire\\s+hose(\\s+reel)?(\\s+cabinets?)?", RegexOptions.IGNORE_CASE), " fhc ")
-        if (Regex("shop\\s+drawings?", RegexOptions.IGNORE_CASE).containsMatchIn(rest)) rest = rest.replace(Regex("shop\\s+drawings?", RegexOptions.IGNORE_CASE), " sds ")
+        if (Regex("fire\\s+hose", RegexOption.IGNORE_CASE).containsMatchIn(rest)) rest = rest.replace(Regex("fire\\s+hose(\\s+reel)?(\\s+cabinets?)?", RegexOption.IGNORE_CASE), " fhc ")
+        if (Regex("shop\\s+drawings?", RegexOption.IGNORE_CASE).containsMatchIn(rest)) rest = rest.replace(Regex("shop\\s+drawings?", RegexOption.IGNORE_CASE), " sds ")
         val words = Regex("[\\p{L}\\p{N}][\\p{L}\\p{N}\\-_.]*").findAll(rest).map { it.value }
             .filter { it.length > 1 && !instruction.matches(it) && !it.equals(project, true) }.distinct().take(8).toList()
         val groups = ArrayList<List<String>>()
@@ -326,7 +326,7 @@ object PcLink {
         val sql = "SELECT id, d, s, fn, fa, too, cc, sub, an, p, f, substr(b,1,600) FROM mail m" + (if (where.isEmpty()) "" else " WHERE " + where.joinToString(" AND ")) + " ORDER BY d DESC LIMIT 3000"
         val hits = ArrayList<Pair<Hit, Double>>()
         // A phrase may have up to 2 words in between ("fire hose cabinet" finds "fire hose reel cabinet").
-        val rx = groups.map { g -> g.map { t -> Regex(t.trim('"', '*').split(' ').filter { it.isNotEmpty() }.joinToString("[\\s\\-_]*(?:\\w+[\\s\\-_]+){0,2}") { Regex.escape(it) }, RegexOptions.IGNORE_CASE) } }
+        val rx = groups.map { g -> g.map { t -> Regex(t.trim('"', '*').split(' ').filter { it.isNotEmpty() }.joinToString("[\\s\\-_]*(?:\\w+[\\s\\-_]+){0,2}") { Regex.escape(it) }, RegexOption.IGNORE_CASE) } }
         db.rawQuery(sql, args.toTypedArray()).use { cu ->
             while (cu.moveToNext()) {
                 val h = Hit(cu.getLong(0), cu.getLong(1), cu.getInt(2) != 0, cu.getString(3) ?: "", cu.getString(4) ?: "", cu.getString(5) ?: "", cu.getString(6) ?: "",

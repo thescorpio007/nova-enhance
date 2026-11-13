@@ -345,7 +345,7 @@ class UpdateActivity : BaseActivity() {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(14), dp(14), dp(14), dp(14))
             background = GradientDrawable().apply { setColor(card); cornerRadius = dp(16).toFloat() } }
         if (r == null) {
-            box.addView(tv("No update waiting. You have %s.".format(shown(cur)), 15f, fg))
+            box.addView(tv("No update waiting. You have %s.".format(Updater.shown(cur)), 15f, fg))
         } else {
             box.addView(tv("Build %02d → build %02d".format(cur, r.first), 18f, accent, true))
             box.addView(tv("✓ Checksum file signed with $APP's own key\n✓ SHA-256 of the download matches\n✓ Same signing key as the installed app", 14f, fg)
