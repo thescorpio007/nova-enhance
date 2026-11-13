@@ -705,10 +705,17 @@ static class FolderIndex
                     r.Problem = new Problem { Path = it.Key, Name = it.Name, Reason = "Empty, or not downloaded to this PC yet (cloud file)", Action = "right-click → Always keep on this device" };
                 }
             }
+            if (content && local != null && ReadGuard.Crashed(it.Key))
+            {
+                content = false;
+                r.Problem = new Problem { Path = it.Key, Name = it.Name, Reason = "Skipped: Nova closed while reading this file before (a broken or unusual file)", Action = "open the file to check it" };
+            }
             if (content && local != null)
             {
                 FileText.LastError = null;
-                var segs = FileText.Extract(local);
+                ReadGuard.Begin(it.Key);
+                List<Seg> segs;
+                try { segs = FileText.Extract(local); } finally { ReadGuard.End(); }
                 r.Segs.AddRange(segs);
                 r.ContentRead = true;
                 var err = FileText.LastError;
@@ -1239,5 +1246,42 @@ static class Opener
             return true;
         }
         catch (Exception e) { Log.Error("excel open", e); return false; }
+    }
+}
+
+
+/// <summary>🛡 Crash-loop guard: the file being read is written down; if Nova closes while reading it, it is skipped from the next start.</summary>
+static class ReadGuard
+{
+    static string NowPath => Path.Combine(Paths.Logs, "reading-now.txt");
+    static string BadPath => Path.Combine(Paths.Logs, "reading-crashed.txt");
+    static HashSet<string> bad;
+
+    public static void Begin(string path) { try { File.WriteAllText(NowPath, path); } catch { } }
+    public static void End() { try { File.Delete(NowPath); } catch { } }
+
+    /// <summary>Called once at start: the file Nova was reading when it closed goes on the skip list.</summary>
+    public static void AtStart()
+    {
+        try
+        {
+            if (!File.Exists(NowPath)) return;
+            var p = File.ReadAllText(NowPath).Trim();
+            File.Delete(NowPath);
+            if (p.Length == 0) return;
+            File.AppendAllLines(BadPath, new[] { p });
+            Log.Warn("Folder index", $"⚠ Nova closed while reading “{p}” — this file is skipped from now on");
+        }
+        catch { }
+    }
+
+    public static bool Crashed(string path)
+    {
+        try
+        {
+            bad ??= File.Exists(BadPath) ? new HashSet<string>(File.ReadAllLines(BadPath), StringComparer.OrdinalIgnoreCase) : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            return bad.Contains(path);
+        }
+        catch { return false; }
     }
 }

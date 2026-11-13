@@ -29,7 +29,9 @@ static class PhoneLink
     public static bool WifiOn { get => Store.Bool("win_pl_wifi_on", true); set { Store.SetBool("win_pl_wifi_on", value); if (value) StartWifi(); else StopWifi(); } }
     public static int EveryMin { get => Math.Clamp(Store.Int("win_pl_every", 60), 15, 720); set => Store.SetInt("win_pl_every", value); }
     public static bool AfterBrief { get => Store.Bool("win_pl_after_brief", true); set => Store.SetBool("win_pl_after_brief", value); }
+    /// <summary>"Full text for the last 24 months only" (older emails: subject, people, date, attachment names).</summary>
     public static bool Last12 { get => Store.Bool("win_pl_last12", false); set => Store.SetBool("win_pl_last12", value); }
+    public const int RecentMonths = 24;
     public static bool Send(string part) => Store.Bool("win_pl_send_" + part, true);
     public static void SetSend(string part, bool v) => Store.SetBool("win_pl_send_" + part, v);
     public static string PhoneName { get => Store.Str("win_pl_phone", ""); set => Store.Set("win_pl_phone", value); }
@@ -50,9 +52,21 @@ static class PhoneLink
     // ------------------------------------------------------------------ where the files go
 
     /// <summary>Google Drive for desktop: the "My Drive" folder on any drive letter (or the folder you picked).</summary>
+    static string driveCache; static DateTime driveAt = DateTime.MinValue;
+    /// <summary>Remembered for 10 minutes: checking every drive letter can take seconds (network drives).</summary>
     public static string DriveRoot
     {
         get
+        {
+            if (driveCache != null && DateTime.Now - driveAt < TimeSpan.FromMinutes(10)) return driveCache;
+            driveCache = FindDriveRoot(); driveAt = DateTime.Now;
+            return driveCache;
+        }
+    }
+    public static bool DriveKnown => driveCache != null && DateTime.Now - driveAt < TimeSpan.FromMinutes(10);
+
+    static string FindDriveRoot()
+    {
         {
             var picked = Store.Str("win_pl_drive_root", "");
             if (picked.Length > 0 && Directory.Exists(picked)) return picked;
@@ -209,11 +223,11 @@ static class PhoneLink
     static bool Private(params string[] parts) => Projects.Private.IsMatch(string.Join(" ", parts.Select(p => p ?? "")));
 
     /// <summary>Emails: chunks of 5,000 (full copy) or the new ones since the last run. Bodies and attachment text included
-    /// (older than 12 months: left out when "last 12 months only" is on).</summary>
+    /// (older than 24 months: left out when "last 24 months only" is on).</summary>
     static long Emails(State s, bool full, string stamp)
     {
         long n = 0, max = s.LastMail;
-        var cut = Last12 ? DateTimeOffset.Now.AddMonths(-12).ToUnixTimeMilliseconds() : 0;
+        var cut = Last12 ? DateTimeOffset.Now.AddMonths(-RecentMonths).ToUnixTimeMilliseconds() : 0;
         var proj = new Dictionary<long, string>();
         using var c = MailIndex.Open();
         using (var pc = c.CreateCommand())

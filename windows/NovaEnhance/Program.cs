@@ -35,6 +35,8 @@ static class Program
         if (args.Contains("--smoke")) return Smoke.Run(args);
         // 🔌 Test connector: Claude desktop starts "NovaEnhance.exe --mcp" (talks to the running Nova, no window).
         if (args.Contains("--mcp")) return TestConnector.Mcp();
+        // 🛡 Windows OCR in quarantine: one scanned file per helper process (a crash there never closes Nova).
+        if (args.Contains("--ocr")) { try { return Ocr.Helper(args); } catch { return 3; } }
         if (args.Contains("--update-selftest")) return Updater.SelfTest(args);
         // 🛡 The Guardian: a second copy that only watches Nova (restarts it after a crash or a freeze).
         if (args.Contains("--guardian")) { Application.EnableVisualStyles(); return Guard.Watch(args); }
@@ -254,6 +256,7 @@ class NovaContext : ApplicationContext
     {
         Guard.Stage("reading Outlook"); MailIndex.Start();
         Guard.Stage("email index"); IndexProgress.Start();
+        ReadGuard.AtStart();   // 🛡 a file Nova was reading when it closed is skipped from now on
         Guard.Stage("project folders"); Projects.Indexer.Start();
         Guard.Stage("reading project files"); Projects.ReadAll.Start();
         Guard.Stage("meaning search"); Semantic.Start();

@@ -102,7 +102,66 @@ static class Ocr
             }
     }
 
-    public static string Image(string path)
+    // ------------------------------------------------------------------ 🛡 quarantine: Windows OCR runs in a helper process
+
+    /// <summary>True inside the helper ("NovaEnhance.exe --ocr …"): OCR runs here directly.</summary>
+    static readonly bool InHelper = Environment.GetCommandLineArgs().Contains("--ocr");
+    static string BadPath => Path.Combine(Paths.Logs, "ocr-bad.txt");
+    static readonly object BadLock = new();
+
+    /// <summary>Files Windows OCR crashed on: never read with Windows OCR again.</summary>
+    public static bool IsBad(string path)
+    {
+        try { lock (BadLock) return File.Exists(BadPath) && File.ReadAllLines(BadPath).Any(l => l.Equals(path, StringComparison.OrdinalIgnoreCase)); } catch { return false; }
+    }
+    public static void MarkBad(string path, string why)
+    {
+        try { lock (BadLock) File.AppendAllLines(BadPath, new[] { path }); } catch { }
+        Log.Warn("OCR", $"⚠ Windows OCR crashed on “{path}” ({why}) — Nova skips it from now on (Gemini OCR can still read it if you allow it)");
+    }
+
+    /// <summary>Runs the OCR in a helper process: if Windows OCR crashes, only the helper dies and the file is skipped from then on.</summary>
+    static List<(int, string)> Isolated(string kind, string path, List<int> only, int maxPages)
+    {
+        var res = new List<(int, string)>();
+        if (IsBad(path)) return res;
+        var outFile = Path.Combine(Path.GetTempPath(), "nova-ocr-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo(Environment.ProcessPath ?? Application.ExecutablePath)
+            { UseShellExecute = false, CreateNoWindow = true };
+            foreach (var a in new[] { "--ocr", kind, path, only == null ? "all" : string.Join(",", only), maxPages.ToString(), outFile }) psi.ArgumentList.Add(a);
+            using var p = System.Diagnostics.Process.Start(psi)!;
+            try { p.PriorityClass = System.Diagnostics.ProcessPriorityClass.BelowNormal; } catch { }
+            if (!p.WaitForExit(10 * 60 * 1000)) { try { p.Kill(true); } catch { } MarkBad(path, "no answer after 10 minutes"); return res; }
+            if (p.ExitCode != 0 || !File.Exists(outFile)) { MarkBad(path, $"exit code {p.ExitCode}"); return res; }
+            foreach (var x in System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(outFile))!.AsArray())
+                res.Add(((int)x!["p"]!, x["t"]?.ToString() ?? ""));
+        }
+        catch (Exception e) { Log.Write($"OCR helper {Path.GetFileName(path)}: {e.Message}"); }
+        finally { try { File.Delete(outFile); } catch { } }
+        return res;
+    }
+
+    /// <summary>"NovaEnhance.exe --ocr image|pdf &lt;path&gt; all|1,2,3 &lt;maxPages&gt; &lt;out.json&gt;" — the helper itself.</summary>
+    public static int Helper(string[] args)
+    {
+        var i = Array.IndexOf(args, "--ocr");
+        if (i < 0 || args.Length < i + 6) return 2;
+        string kind = args[i + 1], path = args[i + 2], pages = args[i + 3], outFile = args[i + 5];
+        int.TryParse(args[i + 4], out var max);
+        var only = pages == "all" ? null : pages.Split(',').Select(s => int.TryParse(s, out var n) ? n : 0).Where(n => n > 0).ToList();
+        var r = kind == "image" ? new List<(int, string)> { (0, ImageHere(path)) } : PdfHere(path, only, max);
+        var arr = new System.Text.Json.Nodes.JsonArray(r.Select(x => (System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject { ["p"] = x.Item1, ["t"] = x.Item2 }).ToArray());
+        File.WriteAllText(outFile, arr.ToJsonString());
+        return 0;
+    }
+
+    public static string Image(string path) => InHelper ? ImageHere(path) : Isolated("image", path, null, 0).FirstOrDefault().Item2 ?? "";
+
+    public static List<(int, string)> Pdf(string path, List<int> only, int maxPages) => InHelper ? PdfHere(path, only, maxPages) : Isolated("pdf", path, only, maxPages);
+
+    static string ImageHere(string path)
     {
         if (Engines().Count == 0) return "";
         try
@@ -120,7 +179,7 @@ static class Ocr
     }
 
     /// <summary>OCR of PDF pages (all, or only the given ones): each part of the page is rendered at about 300 dpi. Returns (page, text).</summary>
-    public static List<(int, string)> Pdf(string path, List<int> only, int maxPages)
+    static List<(int, string)> PdfHere(string path, List<int> only, int maxPages)
     {
         var res = new List<(int, string)>();
         if (Engines().Count == 0) return res;

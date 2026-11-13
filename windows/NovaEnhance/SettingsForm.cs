@@ -1574,18 +1574,32 @@ class SettingsForm : NovaForm
 
         page.Add(Th.Section("Sync status"));
         var st = Note("", Th.Muted);
-        void Line() => st.Text = (PhoneLink.Status.Length > 0 ? PhoneLink.Status + "\n" : "") +
-            (PhoneLink.LastRun > DateTime.MinValue ? $"Last update {PhoneLink.LastRun:dd MMM HH:mm} · next about {PhoneLink.LastRun.AddMinutes(PhoneLink.EveryMin):HH:mm} · every {PhoneLink.EveryMin} min" : "Not sent yet") +
-            (PhoneLink.LastError.Length > 0 ? "\n⚠ " + PhoneLink.LastError : "") + "\n" + PhoneLink.SizesText();
+        // Loaded in the background: the page opens at once (sizes and drive checks can take seconds).
+        async void Line()
+        {
+            st.Text = "Reading the status…";
+            var t = await Task.Run(() => (PhoneLink.Status.Length > 0 ? PhoneLink.Status + "\n" : "") +
+                (PhoneLink.LastRun > DateTime.MinValue ? $"Last update {PhoneLink.LastRun:dd MMM HH:mm} · next about {PhoneLink.LastRun.AddMinutes(PhoneLink.EveryMin):HH:mm} · every {PhoneLink.EveryMin} min" : "Not sent yet") +
+                (PhoneLink.LastError.Length > 0 ? "\n⚠ " + PhoneLink.LastError : "") + "\n" + PhoneLink.SizesText());
+            if (!st.IsDisposed) { st.Text = t; page.FitAll(); }
+        }
         Line();
         foreach (var (k, l) in new[] { ("email", "📥 Email — all periods, full text"), ("att", "📎 Attachment text (PDF, Word, Excel…)"), ("brief", "🌅 Brief · 📁 Email projects"), ("files", "📂 Project files catalogue"), ("star", "⭐ Starred emails and files (the real files)"), ("brain", "📏 Rules · ✦ Prompts · 👤 Profile · 📚 Vocabulary · 📌 My Work") })
         { var key = k; page.Add(Th.Check(l, PhoneLink.Send(key), v => PhoneLink.SetSend(key, v))); }
-        page.Add(Th.Check("Full text for the last 12 months only (older emails: subject, people, date, attachment names)", PhoneLink.Last12, v => PhoneLink.Last12 = v));
+        page.Add(Th.Check($"Full text for the last {PhoneLink.RecentMonths} months only (older emails: subject, people, date, attachment names)", PhoneLink.Last12, v => PhoneLink.Last12 = v));
 
         page.Add(Th.Section("How the phone gets it — use any or all"));
-        var dr = PhoneLink.DriveRoot;
         page.Add(Th.Check("A · ☁ Google Drive — full copy + hourly updates, from anywhere", PhoneLink.DriveOn, v => PhoneLink.DriveOn = v));
-        Note(dr.Length > 0 ? $"✓ Google Drive for desktop found: {dr} → Nova Enhance Sync (Drive uploads it by itself)" : "⚠ Google Drive for desktop was not found — install it (drive.google.com/download) or pick your Drive folder. Until then the files stay in Documents\\Nova Enhance\\Nova Enhance Sync.", dr.Length > 0 ? Th.Good : Th.Warn);
+        var drNote = Note("Looking for Google Drive for desktop…", Th.Muted);
+        async void DriveLine()
+        {
+            var dr = await Task.Run(() => PhoneLink.DriveRoot);
+            if (drNote.IsDisposed) return;
+            drNote.Text = dr.Length > 0 ? $"✓ Google Drive for desktop found: {dr} → Nova Enhance Sync (Drive uploads it by itself)" : "⚠ Google Drive for desktop was not found — install it (drive.google.com/download) or pick your Drive folder. Until then the files stay in Documents\\Nova Enhance\\Nova Enhance Sync.";
+            drNote.ForeColor = dr.Length > 0 ? Th.Good : Th.Warn;
+            page.FitAll();
+        }
+        DriveLine();
         var dpick = page.Add(Th.Row(false));
         dpick.Controls.Add(Th.B("📁 Pick the Google Drive folder…", () =>
         {
