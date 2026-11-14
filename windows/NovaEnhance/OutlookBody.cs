@@ -84,7 +84,7 @@ static class OutlookBody
         try
         {
             if (doc == null) return "";
-            var sp = Span(doc);
+            (int Start, int End)? sp = Span(doc);   // typed: through "dynamic" a null check would fail
             if (sp == null) return "";
             string t = doc.Range(sp.Value.Start, sp.Value.End).Text ?? "";
             return t.Replace("\r\n", "\n").Replace('\r', '\n').Replace("\n", "\r\n").Replace("\a", "").Replace("\v", "\r\n").Trim();
@@ -98,7 +98,7 @@ static class OutlookBody
         try
         {
             if (doc == null) return false;
-            var sp = Span(doc);
+            (int Start, int End)? sp = Span(doc);   // typed: through "dynamic" a null check would fail
             if (sp == null) return false;
             dynamic r = doc.Range(sp.Value.Start, sp.Value.End);
             r.Text = (text ?? "").Replace("\r\n", "\n").TrimEnd().Replace("\n", "\r");
@@ -114,7 +114,7 @@ static class OutlookBody
         {
             dynamic doc = Editor();
             if (doc == null) return "";
-            var sp = Span(doc);
+            (int Start, int End)? sp = Span(doc);   // typed: through "dynamic" a null check would fail
             if (sp == null) return "";
             string t = doc.Range(sp.Value.Start, sp.Value.End).Text ?? "";
             return t.Replace("\r\n", "\n").Replace('\r', '\n').Replace("\n", "\r\n").Replace("\a", "").Replace("\v", "\r\n").Trim();
@@ -129,7 +129,7 @@ static class OutlookBody
         {
             dynamic doc = Editor();
             if (doc == null) return false;
-            var sp = Span(doc);
+            (int Start, int End)? sp = Span(doc);   // typed: through "dynamic" a null check would fail
             if (sp == null) return false;
             dynamic r = doc.Range(sp.Value.Start, sp.Value.End);
             r.Text = (text ?? "").Replace("\r\n", "\n").TrimEnd().Replace("\n", "\r");

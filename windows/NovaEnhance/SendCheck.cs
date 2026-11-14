@@ -28,10 +28,16 @@ static class SendCheck
     static bool passNext;
 
     /// <summary>Connects to Outlook's Send (on the window thread; called at start and every minute — Outlook may start later or restart).</summary>
+    static System.Windows.Forms.Timer watch;
+    static bool warned;
+
     public static void Ensure()
     {
-        if (!On) { Unhook(); Status = "Off"; return; }
-        try { if (hooked != null) { _ = ((dynamic)hooked).Name; return; } } catch { hooked = null; }
+        // Checked every 10 s: a restarted Outlook is watched again almost at once.
+        if (watch == null) { watch = new System.Windows.Forms.Timer { Interval = 10_000 }; watch.Tick += (_, _) => Ensure(); watch.Start(); }
+        if (!On) { if (hooked != null) Log.Write("🛡 check before sending: off"); Unhook(); Status = "Off"; return; }
+        try { if (hooked != null) { _ = ((dynamic)hooked).Name; return; } }
+        catch { hooked = null; Log.Write("🛡 check before sending: Outlook closed or restarted — connecting again"); }
         try
         {
             object app = Outlook.Running();
@@ -39,9 +45,16 @@ static class SendCheck
             handler = OnItemSend;
             ComEventsHelper.Combine(app, AppEvents, ItemSendId, handler);
             hooked = app;
-            Status = "✓ Watching Outlook's Send";
+            Status = $"✓ Watching Outlook's Send (since {DateTime.Now:HH:mm:ss})";
+            warned = false;
+            Log.Write("🛡 check before sending: connected to Outlook's Send");
         }
-        catch (Exception e) { Status = "⚠ Could not connect to Outlook's Send: " + e.Message; Log.Warn("check before sending", e.Message); }
+        catch (Exception e)
+        {
+            Status = "⚠ Could not connect to Outlook's Send: " + e.Message;
+            Log.Warn("check before sending", "connect: " + e.Message);
+            if (!warned) { warned = true; Program.Balloon("🛡 Check before sending is NOT active", "Nova could not connect to Outlook's Send — emails go out without the check. " + e.Message); }
+        }
     }
 
     static void Unhook()
@@ -61,19 +74,21 @@ static class SendCheck
     {
         try
         {
-            if (passNext) { passNext = false; return; }
-            if (!On) return;
+            if (passNext) { passNext = false; Log.Write("🛡 Send: your choice in the check window — sent"); return; }
+            if (!On) { Log.Write("🛡 Send: check is off — sent"); return; }
             dynamic m = item;
             int cls = 0; try { cls = (int)m.Class; } catch { }
-            if (cls != 43) return;                                   // emails only (not meeting replies, tasks…)
+            string subj = ""; try { subj = (string)m.Subject ?? ""; } catch { }
+            if (cls != 43) { Log.Write($"🛡 Send: not an email (class {cls}) — sent"); return; }   // meeting replies, tasks…
             Snap s = Take(m);
-            if (When == "external" && s.Outside.Count == 0) return;
-            if (When == "noforward" && s.Forward) return;
-            if (!Short && Regex.Matches(s.Own, @"\S+").Count <= 6) return;
+            if (When == "external" && s.Outside.Count == 0) { Log.Write($"🛡 Send “{subj}”: nobody outside the company — sent without the check"); return; }
+            if (When == "noforward" && s.Forward) { Log.Write($"🛡 Send “{subj}”: a forward — sent without the check"); return; }
+            if (!Short && Regex.Matches(s.Own, @"\S+").Count <= 6) { Log.Write($"🛡 Send “{subj}”: one-line email — sent without the check"); return; }
             cancel = true;                                          // held: nothing leaves until you choose
+            Log.Write($"🛡 Send “{subj}”: held for your check ({Regex.Matches(s.Own, @"\S+").Count} words)");
             Program.UiContext.Post(_ => { try { new SendCheckForm(item, s).Begin(); } catch (Exception e) { Log.Error("check before sending", e); } }, null);
         }
-        catch (Exception e) { Log.Warn("check before sending", e.Message); }   // any problem: Outlook sends as usual
+        catch (Exception e) { Log.Warn("check before sending", "⚠ sent without the check: " + e.Message); }   // any problem: Outlook sends as usual
     }
 
     /// <summary>Sends the email now (your choice in the window) — Nova lets this one through.</summary>
