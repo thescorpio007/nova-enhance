@@ -206,7 +206,7 @@ static class FileTalk
     }
 
     /// <summary>What the AI must do with attached files (added to every conversation's rules).</summary>
-    public const string Rules =
+    public static string Rules =>
         " ATTACHED FILES are given as [F1], [F2]… with their text (read on the PC, OCR for scans). " +
         "If the user asks to READ / OCR / transcribe / extract: give the full text of the file, cleaned and in reading order (keep tables as tables), nothing invented. " +
         "If the user asks to COMPARE files: start with a comparison table in Markdown — first line '| Item | <short name of F1> | <short name of F2> | … | Note |', " +

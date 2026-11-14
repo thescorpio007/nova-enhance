@@ -343,7 +343,7 @@ class MailAskForm : NovaForm
 
     // ------------------------------------------------------------------ asking
 
-    const string AnswerRules =
+    static string AnswerRules =>
         "You are a " + Persona.Expert + Persona.Where + " helping the user, " + Persona.Who + ", deal with the email marked [E0]. " +
         "THE USER'S PROMPT LEADS: it decides the focus, what to check, what to leave out, the format, the length, the tone and the language. Follow it exactly. " +
         "Use ONLY the sources for facts: [E0] the email, [E1…] earlier related emails, [A1…] extracts of its attachments, [D1…] the user's project documents (labelled with type and revision). " +
