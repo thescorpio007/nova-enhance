@@ -815,7 +815,7 @@ class AskForm : NovaForm
             prow.Controls.Add(chip);
         }
         instr = stack.Add(Th.Prose(Th.Box(true, 3)), true);
-        instr.PlaceholderText = "Optional — e.g. Exclude emails that start with \"proceed\" · ignore reminders from Eric · only SLV and Nouran projects · keep only where the contractor asks for my approval · group by project · export to Excel   (Ctrl+Enter = Ask)";
+        instr.PlaceholderText = "Optional — e.g. Exclude emails that start with \"proceed\" · ignore reminders from a colleague · only one project · keep only where the contractor asks for my approval · group by project · export to Excel   (Ctrl+Enter = Ask)";
         instr.Visible = false;
         instr.KeyDown += (_, e) => { if (e.Control && e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; Run(question.Text, false); } };
         moreLink.LinkClicked += (_, _) =>
@@ -833,11 +833,17 @@ class AskForm : NovaForm
         examples.FlowDirection = FlowDirection.TopDown;
         examples.WrapContents = false;
         examples.Controls.Add(Th.Section("Try asking"));
-        foreach (var ex in new[]
+        foreach (var ex in Packs.IsConstruction ? new[]
                  {
                      "Which emails addressed to me this week are still awaiting my reply?",
                      "Emails from the consultant about the façade drawings last month, not answered",
                      "Find the RFI where structural asked about the slab openings",
+                     "Which of my emails got no answer after 3 days?"
+                 } : new[]
+                 {
+                     "Which emails addressed to me this week are still awaiting my reply?",
+                     "Emails from my manager last month that I didn't answer",
+                     "Find the email with the " + (Packs.Current.ExSearch.Length > 0 ? Packs.Current.ExSearch : "latest report"),
                      "Which of my emails got no answer after 3 days?"
                  })
         {

@@ -729,7 +729,7 @@ static class Server
                     if (src.Count > 0) { sb.Append("SOURCES:\n"); foreach (var x in src) sb.Append($"[{x.Id}] {x.Title}\n{x.Text}\n\n"); }
                     if (c != null) { sb.Append("EARLIER IN THIS CONVERSATION:\n"); foreach (var m in c.Msgs.TakeLast(6)) sb.Append(m.Role == "user" ? "Q: " : "A: ").Append(m.Text.Length > 1500 ? m.Text[..1500] : m.Text).Append("\n"); sb.Append("\n"); }
                     sb.Append("MY QUESTION: ").Append(q);
-                    var sys = "You are Nova, the assistant of an architect / technical coordinator, helping with an email he is WRITING now. Answer his question about this draft: check it, find the facts, " +
+                    var sys = "You are Nova, the assistant of " + Persona.Who + ", helping with an email they are WRITING now. Answer his question about this draft: check it, find the facts, " +
                               "say what is missing or wrong, suggest wording. Use ONLY the draft, the thread and the numbered sources for facts, and cite them like [E1] [D2]; if something isn't in them, say so. " +
                               "When you write text meant to go into the email, put exactly that text between a line ✍ START and a line ✍ END (no citations inside it), in the language and tone of the draft." +
                               NovaSearch.SourceRule + FolderAsk.AdviceRule + Modes.ProfileNote();

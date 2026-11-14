@@ -28,10 +28,10 @@ static class FolderAsk
     public static List<string> LocalTerms(string q) =>
         Regex.Matches(q ?? "", @"[\p{L}\p{N}][\p{L}\p{N}\-\./]*").Select(m => m.Value.Trim('.', '-')).Where(w => w.Length > 1 && !Stop.Contains(w)).Distinct(StringComparer.OrdinalIgnoreCase).Take(12).ToList();
 
-    const string DeepSystem =
+    static string DeepSystem =>
         "The first search of the user's project documents found nothing. Give a WIDER set of search terms. Reply with JSON only: {\"terms\":[\"…\"]} with 15 to 28 short terms: " +
         "the broader element or system, the usual specification section names and numbers (CSI MasterFormat, e.g. 08 71 00 Door Hardware, 32 93 00 Plants), BOQ item descriptions, " +
-        "drawing title words, manufacturer-neutral product names, materials, standards (BS EN, ASTM, NFPA, UAE Fire Code), units and abbreviations. No sentences.";
+        "drawing title words, manufacturer-neutral product names, materials, standards" + (Packs.Current.ExStandards.Length > 0 ? " (" + Packs.Current.ExStandards + ")" : "") + ", units and abbreviations. No sentences.";
 
     /// <summary>Only the question (and the previous question for a follow-up) goes to the AI here.</summary>
     public static async Task<List<string>> Expand(string question, string previousQuestion, CancellationToken ct, bool deep = false)
@@ -79,8 +79,8 @@ static class FolderAsk
         "Cross-check: when the specification, BOQ, drawings, RFIs or letters give different values for the same item, add a line starting with ⚠ CONFLICT: that names both values and cites both. ";
 
     public static string AdviceRule => Memory.AdviceOn
-        ? " After the answer, add one empty line, then a line exactly '🎓 ARCHITECT'S ADVICE (general knowledge, not from your documents):' followed by 1 to 3 short practical lines " +
-          "(usual good practice, typical values, standards or a coordination point to check) for an architect in the UAE. Never cite [numbers] in that section and never present it as coming from the documents."
+        ? " After the answer, add one empty line, then a line exactly '🎓 EXPERT ADVICE (general knowledge, not from your documents):' followed by 1 to 3 short practical lines " +
+          "(usual good practice, typical values, standards or a point to check) for " + Persona.Who + ". Never cite [numbers] in that section and never present it as coming from the documents."
         : "";
 
     const string ShortRules =

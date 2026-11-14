@@ -63,7 +63,7 @@ static class RuleCheck
     public static async Task<List<string>> AiReview(string feature, RuleBook b, CancellationToken ct)
     {
         if (b.Instructions.Trim().Length == 0 || SmartSearch.Cloud() == null) return new();
-        var sys = "You check rules an architect wrote (or that were made from his words) for " + (feature == "brief" ? "his morning email brief" : "sorting his emails into projects") +
+        var sys = "You check rules written by " + Persona.Who + " (or made from their words) for " + (feature == "brief" ? "their morning email brief" : "sorting their emails into projects") +
                   ". Rules: all conditions of a rule must be true; each list = any of its words; the first matching rule decides. " +
                   "Reply with JSON only: {\"ok\":true|false,\"notes\":[\"short note: what does not fit his words, and the fix\"]}. Max 5 notes. If everything fits, ok=true and notes=[].";
         var j = Ai.ParseJson(await SearchGate.Limit(t => Ai.Chat(sys, $"His words:\n{b.Instructions}\n\nThe rules:\n{RuleBooks.Describe(feature, b)}", true, true, SmartSearch.Cloud(), t), 45, ct));
@@ -205,7 +205,7 @@ class RulesForm : NovaForm
         }
         words.Text = book.Instructions;
         words.PlaceholderText = f == "brief"
-            ? "e.g. SLV first. Contractor submittals of AR / ID / LS (SSM, SHD, SDS, MAR, RFI) = waiting, urgent when overdue. Hide MZA letters going out where I'm only in Cc."
+            ? (Packs.IsConstruction ? "e.g. My main project first. Contractor submittals (shop drawings, samples, RFIs) = waiting, urgent when overdue. Hide our letters going out where I'm only in Cc." : "e.g. My manager's emails first. Requests that ask for my approval = urgent. Hide newsletters and emails where I'm only in Cc.")
             : "e.g. Emails from @omniumint.com about Tower C → RS5. Anything with “Saadiyat Marina” → NOU. Newsletters → unsorted.";
         report = null; checkedSinceChange = false; useBtn.Enabled = false; useBtn.Text = "✓ Use these rules (✦ Check first)";
         output.Text = "";

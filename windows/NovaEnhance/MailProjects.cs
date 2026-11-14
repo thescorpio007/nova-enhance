@@ -21,7 +21,7 @@ static class MailProjects
     };
     public static readonly string[] RuleHelp =
     {
-        "", "“RE: SLV # WIR …”, “[NOU] …” — the project code as a word in the subject", "SLV-ZUC-AR-SSM-00171 in the subject or attachment names",
+        "", "“RE: PRJ # …”, “[ABC] …” — the project code as a word in the subject", "PRJ-ABC-0012 in the subject or attachment names",
         "the project name and the extra names below, in the subject or the first lines", "emails filed in an Outlook folder linked below (sub-folders too)",
         "a reply without a code takes the project of its thread", "a sender / company that writes about one project only (≥ 90 % of their sorted emails)",
         "subject + first lines only · your project list · answers a project or “not sure”"
@@ -169,6 +169,74 @@ static class MailProjects
         return res;
     }
 
+    // ------------------------------------------------------------------ backup of your corrections ("✋ moved by you")
+
+    /// <summary>Your corrections for the backup — with subject, date and sender, so they find their email again on a new PC.</summary>
+    public static JsonArray ExportFixes()
+    {
+        var a = new JsonArray();
+        try
+        {
+            Ensure();
+            using var c = MailIndex.Open();
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "SELECT f.entry, f.proj, IFNULL(m.subject,''), IFNULL(m.date,0), IFNULL(m.from_addr,'') FROM mfix f LEFT JOIN mail m ON m.entry=f.entry";
+            using var r = cmd.ExecuteReader();
+            while (r.Read()) a.Add(new JsonObject { ["entry"] = r.GetString(0), ["proj"] = r.GetString(1), ["subject"] = r.GetString(2), ["date"] = r.GetInt64(3), ["from"] = r.GetString(4) });
+        }
+        catch (Exception e) { Log.Warn("email projects", "backup of corrections: " + e.Message); }
+        foreach (var p in Pending()) a.Add(p.DeepClone());
+        return a;
+    }
+
+    static JsonArray Pending() { try { return JsonNode.Parse(Store.Str("win_mproj_pending", "[]")) as JsonArray ?? new(); } catch { return new(); } }
+
+    /// <summary>Restore: each correction goes back on its email (same entry, or same subject + date + sender). Emails not in the index yet wait and are matched when they are indexed.</summary>
+    public static int ImportFixes(JsonArray list)
+    {
+        if (list == null) return 0;
+        var all = Pending();
+        foreach (var x in list) if (x is JsonObject o) all.Add(o.DeepClone());
+        int n = ApplyPending(all);
+        wake.Set();
+        return n;
+    }
+
+    static int ApplyPending(JsonArray all)
+    {
+        int n = 0;
+        var left = new JsonArray();
+        try
+        {
+            Ensure();
+            using var c = MailIndex.Open();
+            using var tx = c.BeginTransaction();
+            foreach (var x in all)
+            {
+                if (x is not JsonObject o) continue;
+                string entry = o["entry"]?.ToString() ?? "", proj = o["proj"]?.ToString() ?? "", subj = o["subject"]?.ToString() ?? "", from = o["from"]?.ToString() ?? "";
+                long date = o["date"]?.GetValue<long>() ?? 0;
+                if (proj.Length == 0) continue;
+                using var q = c.CreateCommand(); q.Transaction = tx;
+                q.CommandText = "SELECT id, entry FROM mail WHERE entry=$e UNION ALL SELECT id, entry FROM mail WHERE $s<>'' AND subject=$s AND date=$d AND lower(from_addr)=lower($f) LIMIT 1";
+                q.Parameters.AddWithValue("$e", entry); q.Parameters.AddWithValue("$s", subj); q.Parameters.AddWithValue("$d", date); q.Parameters.AddWithValue("$f", from);
+                long id = 0; string realEntry = "";
+                using (var r = q.ExecuteReader()) if (r.Read()) { id = r.GetInt64(0); realEntry = r.GetString(1); }
+                if (id == 0) { left.Add(o.DeepClone()); continue; }
+                using var a = c.CreateCommand(); a.Transaction = tx;
+                a.CommandText = "INSERT OR REPLACE INTO mfix(entry,proj) VALUES($e,$p); INSERT OR REPLACE INTO mproj(id,proj,rule) VALUES($i,$p,9);";
+                a.Parameters.AddWithValue("$e", realEntry); a.Parameters.AddWithValue("$p", proj); a.Parameters.AddWithValue("$i", id);
+                a.ExecuteNonQuery();
+                lock (L) map[id] = proj;
+                n++;
+            }
+            tx.Commit();
+        }
+        catch (Exception e) { Log.Warn("email projects", "restore of corrections: " + e.Message); return 0; }
+        Store.Set("win_mproj_pending", left.Count > 5000 ? "[]" : left.ToJsonString());
+        return n;
+    }
+
     public static void Undo(string entry)
     {
         try
@@ -198,6 +266,7 @@ static class MailProjects
 
     static Rules Load(SqliteConnection c)
     {
+        try { var pend = Pending(); if (pend.Count > 0) ApplyPending(pend); } catch { }   // restored corrections whose emails are indexed now
         var r = new Rules { Order = Order, On = Enumerable.Range(1, 7).Where(RuleOn).ToHashSet(), User = RuleBooks.Load("projects") };
         var cfg = Config;
         foreach (var p in Projects.All().Where(p => p.Code.Length > 0))
@@ -454,7 +523,7 @@ static class MailProjects
             foreach (var p in Projects.All().Where(p => p.Code.Length > 0)) sb.Append($"- {p.Code}: {p.Name}{(p.Codes.Count > 0 ? " (codes " + string.Join(", ", p.Codes.Take(6)) + ")" : "")}\n");
             sb.Append("- GEN: general office matters (HR, IT, admin, company news, several projects at once)\nEmails:\n");
             for (int i = 0; i < send.Count; i++) sb.Append($"[{i + 1}] {send[i].Text}\n");
-            var sys = "You sort an architect's work emails into his projects. Reply with JSON only: {\"p\":{\"1\":\"SLV\",\"2\":\"?\"}} — the project code for each email, or \"?\" when you are not sure. Never guess.";
+            var sys = "You sort the work emails of " + Persona.Who + " into their projects. Reply with JSON only: {\"p\":{\"1\":\"PRJ\",\"2\":\"?\"}} — the project code for each email, or \"?\" when you are not sure. Never guess.";
             try
             {
                 // Your cloud AI (Gemini first), 60 s at most — the local model took up to 30 minutes per batch.

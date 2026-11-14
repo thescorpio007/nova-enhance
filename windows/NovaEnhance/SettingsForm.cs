@@ -3,7 +3,11 @@ namespace NovaEnhance;
 /// <summary>Settings, split into sections like the phone app.</summary>
 class SettingsForm : NovaForm
 {
-    static readonly string[] Sections = { "AI & API keys", "About me", "Enhancement", "Email & AI", "📥 Email index", "🗂 Mailboxes & archives", "📂 Folders in the index", "📁 Email projects", "Folder search", "📁 Projects", "✦ Prompts", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "🧪 Activity history", "🔌 Test connector", "📱 Phone link", "About" };
+    static readonly string[] AllSections = { "AI & API keys", "About me", "Enhancement", "Email & AI", "📥 Email index", "🗂 Mailboxes & archives", "📂 Folders in the index", "📁 Email projects", "Folder search", "📁 Projects", "✦ Prompts", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "🧪 Activity history", "🔌 Test connector", "📱 Phone link", "About" };
+    /// <summary>🧪 Activity history and 🔌 Test connector are advanced tools: shown only when switched on (About → Advanced tools).</summary>
+    static readonly string[] AdvancedSections = { "🧪 Activity history", "🔌 Test connector" };
+    static string[] Sections = Visible();
+    static string[] Visible() => AllSections.Where(s => Store.Bool("win_advanced", false) || !AdvancedSections.Contains(s)).ToArray();
     readonly ListBox nav;
     readonly Panel host;
     Stack page;
@@ -20,7 +24,7 @@ class SettingsForm : NovaForm
             Dock = DockStyle.Left, Width = 210, BackColor = Color.FromArgb(0x0E, 0x11, 0x16), ForeColor = Th.Text, BorderStyle = BorderStyle.None,
             Font = Th.F(10.5f), DrawMode = DrawMode.OwnerDrawFixed, ItemHeight = 38, IntegralHeight = false
         };
-        nav.Items.AddRange(Sections);
+        Sections = Visible(); nav.Items.AddRange(Sections);
         nav.DrawItem += (_, e) =>
         {
             if (e.Index < 0) return;
@@ -54,6 +58,7 @@ class SettingsForm : NovaForm
     {
         var i = Array.IndexOf(Sections, section);
         if (i >= 0) nav.SelectedIndex = i;
+        else if (AdvancedSections.Contains(section)) Draw(section);
     }
 
     void Draw(string section)
@@ -272,8 +277,19 @@ class SettingsForm : NovaForm
     // ------------------------------------------------------------------ About me
     void AboutMe()
     {
-        Note("Your field and role. Every enhancement and draft uses the correct technical terms of your field (same profile as the phone).");
-        page.Add(Th.Section("My field · pick one or more"));
+        Note("Your field and role. Every enhancement, search, brief and draft follows them — Nova has nothing personal built in (same profile as the phone).");
+        page.Add(Th.Section("🌐 My field · Nova's words, codes and examples"));
+        var fieldRow = page.Add(Th.Row());
+        var fieldNow = Store.Str("win_field", "general");
+        foreach (var pk in Packs.All) { var id = pk.Id; fieldRow.Controls.Add(Th.Radio($"{pk.Icon} {pk.Name}", fieldNow == id, () => fieldNow = id)); }
+        var rr = page.Add(Th.Row(false));
+        rr.Controls.Add(Th.L("My role", 10, Th.Text));
+        var roleBox = Th.Box(false); roleBox.Width = 340; roleBox.Text = Persona.Role; roleBox.PlaceholderText = "e.g. " + Packs.Current.Person;
+        rr.Controls.Add(roleBox);
+        rr.Controls.Add(Th.L("Country", 10, Th.Text));
+        var countryBox = Th.Box(false); countryBox.Width = 220; countryBox.Text = Persona.Country; countryBox.PlaceholderText = "optional";
+        rr.Controls.Add(countryBox);
+        page.Add(Th.Section("Also good at · pick any"));
         var chosen = Modes.ChosenFields().ToHashSet();
         var row = page.Add(Th.Row());
         foreach (var f in Modes.Fields.Concat(chosen.Where(c => !Modes.Fields.Contains(c))))
@@ -287,17 +303,18 @@ class SettingsForm : NovaForm
         page.Add(Th.Section("About me"));
         var about = page.Add(Th.Box(true, 4), true);
         about.Text = Store.ProfileAbout;
-        about.PlaceholderText = "e.g. Senior site architect: Design Development and coordination with structural and MEP…";
+        about.PlaceholderText = "e.g. " + (Packs.Current.ExAbout.Length > 0 ? Packs.Current.ExAbout : "what you do and what you write about") + "…";
         page.Add(Th.Section("My terms · kept exactly as written"));
         var terms = page.Add(Th.NoSpell(Th.Box(true, 2)), true);
         terms.Text = Store.ProfileTerms;
-        terms.PlaceholderText = "e.g. IFC, RFI, NY, PQP, PVRS, SLV";
+        terms.PlaceholderText = "e.g. " + (Packs.Current.ExTerms.Length > 0 ? Packs.Current.ExTerms : "words and short forms you use");
         var save = page.Add(Th.Row(false));
         var st = Th.L("", 9.5f, Th.Good);
         save.Controls.Add(Th.B("Save", () =>
         {
             if (otherBox.Text.Trim().Length > 0) chosen.Add(otherBox.Text.Trim().Replace("|", " "));
             Store.ProfileFields = string.Join("|", chosen);
+            Store.Set("win_field", fieldNow); Persona.Role = roleBox.Text; Persona.Country = countryBox.Text;
             Store.ProfileAbout = about.Text.Trim();
             Store.ProfileTerms = terms.Text.Trim();
             Store.SetBool("p_asked", true);
@@ -687,7 +704,7 @@ class SettingsForm : NovaForm
         Note("Give Nova your work folder. It reads only the folder and file NAMES (never the contents) and proposes your projects: a folder that starts with a number (1-, 2-, 3-…) is a project — the name after the number is the project, a bracket like (SAH) is its code. Folders that start with \"_\" are general reference used with every project. Private-looking folders (wallet, password, bank…) are 🔒 never read. Nothing is indexed until you tick ✓ Use and press Save.");
         var wr = page.Add(Th.Row(false));
         var wf = Th.Box(false);
-        wf.Text = Projects.WorkFolder.Length > 0 ? Projects.WorkFolder : @"F:\_MZA";
+        wf.Text = Projects.WorkFolder.Length > 0 ? Projects.WorkFolder : @"D:\Projects";
         if (wf is SpellBox sb) sb.Off = true;
         wf.Width = 300;
         wr.Controls.Add(wf);
@@ -1041,7 +1058,7 @@ class SettingsForm : NovaForm
             if (p != null)
                 eb.Controls.Add(Th.B("✎ Codes", () =>
                 {
-                    var v = Prompt.Ask(this, "🏷 Codes · " + cc, "Codes written in subjects and document numbers (comma separated), e.g. SLV, SLV-EUW", string.Join(", ", p.Codes));
+                    var v = Prompt.Ask(this, "🏷 Codes · " + cc, "Codes written in subjects and document numbers (comma separated), e.g. PRJ, PRJ-A", string.Join(", ", p.Codes));
                     if (v == null) return;
                     var all = Projects.All(); var pp = all.First(x => x.Code == cc);
                     pp.Codes = v.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
@@ -1049,13 +1066,13 @@ class SettingsForm : NovaForm
                 }));
             eb.Controls.Add(Th.B("✎ Names", () =>
             {
-                var v = Prompt.Ask(this, "📛 Names · " + cc, "Other names people write for this project (comma separated), e.g. Sea La Vie, 1-Sea La vie", string.Join(", ", cfg.Names));
+                var v = Prompt.Ask(this, "📛 Names · " + cc, "Other names people write for this project (comma separated), e.g. My Project, My-Project", string.Join(", ", cfg.Names));
                 if (v == null) return;
                 cfg.Names = v.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList(); MailProjects.SaveCfg(cc, cfg); Draw("📁 Email projects");
             }));
             eb.Controls.Add(Th.B("🗂 Outlook folders", () =>
             {
-                var v = Prompt.Ask(this, "🗂 Outlook folders · " + cc, "Outlook folder names (comma separated) — emails in these folders and their sub-folders belong to this project, e.g. SLV, Projects › Sea La Vie", string.Join(", ", cfg.Folders));
+                var v = Prompt.Ask(this, "🗂 Outlook folders · " + cc, "Outlook folder names (comma separated) — emails in these folders and their sub-folders belong to this project, e.g. PRJ, Projects › My project", string.Join(", ", cfg.Folders));
                 if (v == null) return;
                 cfg.Folders = v.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select(x => x.Replace("›", "").Trim()).ToList(); MailProjects.SaveCfg(cc, cfg); Draw("📁 Email projects");
             }));
@@ -1332,7 +1349,7 @@ class SettingsForm : NovaForm
         page.Add(Th.Check("Check grammar with my AI when I pause (questions, notes, Enhance text)", Speller.GrammarOn, v => Speller.GrammarOn = v));
         page.Add(Th.Check("Smart search: correct typos before searching (↩ search exactly as typed is shown under the box)", Speller.SmartSearch, v => Speller.SmartSearch = v));
         page.Add(Th.Section("My words (never marked)"));
-        Note("Your project words, names and codes. Words in About me → terms, names from your emails, and the vocabulary Nova learned are never marked either. Codes with numbers (CSU1095, EI 60) and short capitals (SLV, IFC) are always skipped.", Th.Muted);
+        Note("Your project words, names and codes. Words in About me → terms, names from your emails, and the vocabulary Nova learned are never marked either. Codes with numbers (CSU1095, EI 60) and short capitals (PRJ, IFC) are always skipped.", Th.Muted);
         var words = page.Add(Th.NoSpell(Th.Box(true, 5)), true);
         words.Text = Store.Str("win_my_words").Replace("|", "\r\n");
         var st = Th.L("", 9.5f, Th.Good);
@@ -1352,7 +1369,7 @@ class SettingsForm : NovaForm
         Note("What Nova learned from you — kept encrypted on this PC (your Windows account only) and inside your backup. Nothing here is sent anywhere unless it helps answer a question you ask.");
         Note($"🧠 {m.Cards.Count} remembered answers · {m.Vocab.Count} vocabulary words · {m.Boosts.Count} file hints · 👍 {m.Good} · 👎 {m.Bad} · writing style: {(string.IsNullOrWhiteSpace(m.Style) ? "not learned" : "learned " + m.StyleAt.ToString("dd MMM yyyy"))}", Th.AccentText);
         page.Add(Th.Check("Learn from my 👍 / 👎 and answer similar questions at once (then re-check the files)", Memory.On, v => Memory.On = v));
-        page.Add(Th.Check("Add 🎓 Architect's advice under answers (general knowledge, clearly kept apart from your documents)", Memory.AdviceOn, v => Memory.AdviceOn = v));
+        page.Add(Th.Check("Add 🎓 Expert advice under answers (general knowledge, clearly kept apart from your documents)", Memory.AdviceOn, v => Memory.AdviceOn = v));
 
         page.Add(Th.Section("Remembered answers"));
         if (m.Cards.Count == 0) Note("None yet — press 👍 under a good answer (folder Ask AI or the PDF panel).", Th.Muted);
@@ -1367,7 +1384,7 @@ class SettingsForm : NovaForm
         }
 
         page.Add(Th.Section("Project vocabulary"));
-        Note("One per line: ABBREVIATION = meaning. Nova uses these to search (SLV finds Sea La Vie too) and never marks them as spelling mistakes. Learned from passages you liked; edit freely.", Th.Muted);
+        Note("One per line: ABBREVIATION = meaning. Nova uses these to search (PRJ finds My Project too) and never marks them as spelling mistakes. Learned from passages you liked; edit freely.", Th.Muted);
         var vocab = page.Add(Th.NoSpell(Th.Box(true, 6)), true);
         vocab.Text = string.Join("\r\n", m.Vocab.OrderBy(x => x.Key).Select(x => x.Key + " = " + x.Value));
         var vs = Th.L("", 9.5f, Th.Good);
@@ -1622,7 +1639,7 @@ class SettingsForm : NovaForm
         br.Controls.Add(Th.B("⟳ Update the phone now", () => { st.Text = "⏳ preparing…"; _ = Task.Run(() => { PhoneLink.RunSafe("Update now"); BeginInvoke(Line); }); }, true));
         br.Controls.Add(Th.B("⟳ Make a new full copy", () => { Store.Set("win_pl_state", "{}"); st.Text = "⏳ preparing the full copy…"; _ = Task.Run(() => { PhoneLink.RunSafe("new full copy"); BeginInvoke(Line); }); }));
         br.Controls.Add(Th.B("📋 What was sent (Activity)", () => Go("🧪 Activity history")));
-        Note("⚠ With ☁ A, company emails (encrypted) are stored in your Google Drive — check MZA's IT policy. Untick A to keep everything inside the office network.", Th.Warn);
+        Note("⚠ With ☁ A, company emails (encrypted) are stored in your Google Drive — check your company's IT policy. Untick A to keep everything inside the office network.", Th.Warn);
     }
 
     /// <summary>🔌 Test connector: Claude (through the Claude desktop app) tests Nova on this PC with test tools only.</summary>
@@ -1941,6 +1958,13 @@ class SettingsForm : NovaForm
         Note($"Version {Program.Shown}", Th.Text);
         Note("Enhance text anywhere (Ctrl+Shift+E), 🔍 Search for email (Ctrl+Shift+F), 💬 Talk about this email (Ctrl+Alt+Q), morning brief and follow-ups. Works with the Nova Enhance phone app.");
         Note("All your files: " + Paths.Root, Th.Text);
+        page.Add(Th.Check("🧪 Advanced tools — show 🧪 Activity history and 🔌 Test connector in this list", Store.Bool("win_advanced", false), v =>
+        {
+            Store.SetBool("win_advanced", v);
+            Sections = Visible();
+            nav.Items.Clear(); nav.Items.AddRange(Sections);
+            nav.SelectedIndex = Array.IndexOf(Sections, "About");
+        }));
         page.Add(Th.L(Program.Sign, 11, Th.AccentText, true));
     }
 }

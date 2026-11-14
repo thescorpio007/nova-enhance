@@ -50,7 +50,17 @@ static class Backup
                 convs[Path.GetRelativePath(Conversations.Dir, f)] = File.ReadAllText(f);
         }
         catch { }
-        var extra = new JsonObject { ["secrets"] = winSecrets, ["originals"] = OriginalsText(), ["work"] = work, ["memory"] = Memory.Export(), ["conversations"] = convs };
+        // 📏 Rule books (Rules folder, with their history) and ✋ your email-project corrections.
+        var rules = new JsonObject();
+        try
+        {
+            var rd = Path.Combine(Paths.Root, "Rules");
+            if (Directory.Exists(rd))
+                foreach (var f in Directory.EnumerateFiles(rd, "*", SearchOption.AllDirectories))
+                    if (new FileInfo(f).Length < 2_000_000) rules[Path.GetRelativePath(rd, f)] = File.ReadAllText(f);
+        }
+        catch { }
+        var extra = new JsonObject { ["rules"] = rules, ["mfix"] = MailProjects.ExportFixes(), ["secrets"] = winSecrets, ["originals"] = OriginalsText(), ["work"] = work, ["memory"] = Memory.Export(), ["conversations"] = convs };
         root["windows_extra"] = Encrypt(extra.ToJsonString(), password);
         return root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
     }
@@ -177,7 +187,20 @@ static class Backup
                             nc++;
                         }
                         catch { }
-                extraNote = $" · {ns} sign-in(s) restored (Google Drive) · {no} original(s) restored · {nw} task(s) restored (My Work) · {nm} item(s) restored (🧠 Nova Memory) · {nc} conversation(s) restored";
+                int nr = 0;
+                if (x["rules"] is JsonObject rl)
+                    foreach (var (rel, v) in rl)
+                        try
+                        {
+                            if (v == null || rel.Contains("..")) continue;
+                            var file = Path.Combine(Paths.Root, "Rules", rel);
+                            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+                            File.WriteAllText(file, v.ToString(), new UTF8Encoding(false)); nr++;
+                        }
+                        catch { }
+                int nf = MailProjects.ImportFixes(x["mfix"] as JsonArray);
+                int nfAll = (x["mfix"] as JsonArray)?.Count ?? 0;
+                extraNote = $" · {nr} rule file(s) restored · {nfAll} email-project correction(s) restored ({nf} matched now, the rest when their emails are indexed)" + $" · {ns} sign-in(s) restored (Google Drive) · {no} original(s) restored · {nw} task(s) restored (My Work) · {nm} item(s) restored (🧠 Nova Memory) · {nc} conversation(s) restored";
             }
             catch { extraNote = " · Google Drive sign-in and originals NOT restored (wrong password)"; }
         }

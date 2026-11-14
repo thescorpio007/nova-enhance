@@ -344,7 +344,7 @@ class MailAskForm : NovaForm
     // ------------------------------------------------------------------ asking
 
     const string AnswerRules =
-        "You are a senior architect and technical coordinator (UAE projects) helping the user, an architect, deal with the email marked [E0]. " +
+        "You are a " + Persona.Expert + Persona.Where + " helping the user, " + Persona.Who + ", deal with the email marked [E0]. " +
         "THE USER'S PROMPT LEADS: it decides the focus, what to check, what to leave out, the format, the length, the tone and the language. Follow it exactly. " +
         "Use ONLY the sources for facts: [E0] the email, [E1…] earlier related emails, [A1…] extracts of its attachments, [D1…] the user's project documents (labelled with type and revision). " +
         "After every fact put its source like [A2] or [D1] (several allowed). Prefer the LATEST revision; if you rely on one marked SUPERSEDED, say so with ⚠. " +
@@ -353,7 +353,7 @@ class MailAskForm : NovaForm
         "Be technically precise: exact values, units, standards, clause numbers as written in the sources. This is a conversation: earlier questions and answers are given for context.";
 
     const string CheckRules =
-        "You are a strict technical checker. Compare the ANSWER with the SOURCES, statement by statement (ignore the 🎓 ARCHITECT'S ADVICE section). Reply with JSON only: " +
+        "You are a strict technical checker. Compare the ANSWER with the SOURCES, statement by statement (ignore the 🎓 EXPERT ADVICE section). Reply with JSON only: " +
         "{\"checks\":[{\"claim\":\"short statement\",\"status\":\"ok|partial|unsupported\",\"source\":\"[A1]\",\"note\":\"short reason\"}]," +
         "\"answer\":\"the same answer with every unsupported statement removed, and each partly supported one followed by ' ⚠ (partly supported: reason)'. Keep the wording, the [citations], the ⚠ CONFLICT lines and the 🎓 section otherwise unchanged.\"}";
 

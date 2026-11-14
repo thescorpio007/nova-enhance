@@ -202,7 +202,7 @@ class FileFinderForm : NovaForm
         box = Th.Box(false);
         if (box is SpellBox sb0) sb0.Off = true;
         box.Width = 480; box.Font = Th.F(12);
-        box.PlaceholderText = "Drawing number or words — e.g.  SLV-MZA-AR-DD-1203   ·   door schedule   ·   fire strategy";
+        box.PlaceholderText = (Packs.IsConstruction ? "Drawing number or words — e.g.  PRJ-ABC-AR-DD-1203   ·   door schedule   ·   fire strategy" : "File name, number or words — e.g.  " + (Packs.Current.ExDoc.Length > 0 ? Packs.Current.ExDoc + "   ·   " : "") + "budget   ·   contract");
         proj = Combo(230); proj.Font = Th.F(10);
         proj.Items.Add("All projects");
         foreach (var p in Projects.All()) proj.Items.Add($"{p.Code} · {p.Name}");
@@ -220,7 +220,7 @@ class FileFinderForm : NovaForm
         var rrow = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(10, 2, 10, 2), BackColor = Th.Bg, WrapContents = false };
         rrow.Controls.Add(Lbl("✦ Requirements"));
         req = Tb(780); req.Font = Th.F(10.5f);
-        req.PlaceholderText = "e.g.  latest IFC architectural plans for podium and level 02, PDF only, no submittals, sorted by drawing number";
+        req.PlaceholderText = "e.g.  " + Packs.Current.ExSearch;
         rrow.Controls.Add(req);
         rrow.Controls.Add(Th.B("✦ Apply", ApplyReq, true));
         rrow.Controls.Add(Th.B("⭐ Save", SaveReq));

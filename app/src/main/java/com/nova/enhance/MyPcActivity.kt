@@ -460,8 +460,8 @@ class MyPcActivity : BaseActivity() {
         say("⏳ Writing the reply with ${p.label}…")
         Thread {
             val r = runCatching {
-                val sys = "You write a reply email for an architect, in his own voice. Reply with the email text only (no subject line)." +
-                    (if (style.isNotBlank()) "\nHis writing style: $style" else "") + Profile.note(store) + PcLink.brainNote(c, h.body)
+                val sys = "You write a reply email for " + Profile.who(store) + ", in their own voice. Reply with the email text only (no subject line)." +
+                    (if (style.isNotBlank()) "\nTheir writing style: $style" else "") + Profile.note(store) + PcLink.brainNote(c, h.body)
                 Providers.chatSmart(p, store.key(p), store.model(p), sys, listOf(Msg("user", "Email to answer:\nFrom: ${h.from}\nSubject: ${h.subject}\n\n${h.body.take(8000)}"))) { say(it) }.text
             }
             main.post {

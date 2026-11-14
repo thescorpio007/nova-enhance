@@ -110,6 +110,7 @@ class NovaContext : ApplicationContext
         UiWatch.Start();
         Paths.Ensure();
         Store.Load();
+        try { Persona.Migrate(); } catch { }   // 🌐 universal Nova: an old install keeps its field (construction for an architecture profile)
         // 🛡 Two starts that never finished → safe mode (background jobs off, you switch them on one by one).
         Guard.BeginStart();
         Startup.Apply();
@@ -117,6 +118,8 @@ class NovaContext : ApplicationContext
 
         tray = new NotifyIcon { Icon = Th.AppIcon, Text = "Nova Enhance", Visible = true };
         Program.Tray = tray;
+        // 🌐 Universal Nova: old installs keep their field (construction for an architecture profile); a first start shows the welcome.
+        try { if (Persona.Fresh) new System.Windows.Forms.Timer { Interval = 1500, Enabled = true }.Tick += (s, _) => { ((System.Windows.Forms.Timer)s!).Stop(); new WelcomeForm().Show(); }; } catch { }
         Dots.Start();   // ● ○ ○ Nova is thinking — every "…" status in every window, and the tray icon
         // ⏳ Pointing at the tray icon shows the email index progress.
         if (!Guard.SafeMode) StartJobs();

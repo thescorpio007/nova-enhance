@@ -417,7 +417,7 @@ class PdfPanel : NovaForm
             var prov = Ai.Current() ?? throw new AiException("Add an AI key in Settings → AI & API keys");
             lastQuestion = "";
             status.Text = $"✦ Reading and checking with {prov.Label}…";
-            var sys = "You are an experienced architect checking a construction document for the user. From the page texts (each starts with [p.N]) write:\n" +
+            var sys = "You are a " + Persona.Expert + " checking a document for the user, " + Persona.Who + ". From the page texts (each starts with [p.N]) write:\n" +
                       "1. WHAT IT IS — document/drawing number, title, revision, date, scale, discipline, project (from the title block) [p.N].\n" +
                       "2. KEY CONTENT — what it shows or requires: main elements, materials, dimensions, ratings, standards, in short bullets with [p.N].\n" +
                       "3. NOTES & REFERENCES — referenced drawings, specs, RFIs, details.\n" +

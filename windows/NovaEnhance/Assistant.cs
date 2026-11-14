@@ -48,7 +48,7 @@ Rules:
 - Dates: relative to today. ""last month"" = the previous calendar month; ""this week"" = since Monday; leave empty when no date is mentioned.
 - groups: one group per idea the emails must be about, each with the forms people really write (abbreviation, full words, singular, plural, codes, the English form). Understand construction short forms (SS stainless steel, SSM material submittal, SDS shop drawing, WIR inspection request, MS method statement). Never put names or dates in groups.
 - folder: ""any"" unless the user clearly says received / inbox / sent / ""I sent"". Approvals and replies are often sent BY the user, so never limit to received by yourself.
-- Project codes (SLV, C7…) stay codes: never expand them into guessed names. ""approved"" is not a group (Nova checks approval codes itself).
+- Project codes (e.g. PRJ, A7…) stay codes: never expand them into guessed names. ""approved"" is not a group (Nova checks approval codes itself).
 - When a previous filter is given, the new request refines it: keep everything unless the request changes it.";
 
     /// <summary>📐 A document / drawing number in the question: its emails at once, no AI needed (subject, text and attachment names).</summary>

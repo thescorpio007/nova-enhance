@@ -217,7 +217,7 @@ class SearchSyntax
         ("\"block wall\"", "Exact phrase — must be in every result (spaces, hyphens, capitals, plurals forgiven)", "\"block wall\" shop drawing", true, true),
         ("AND / space", "All the words", "FHC AND approved", true, true),
         ("OR", "Either word", "blockwork OR \"block wall\"", true, true),
-        ("NOT  /  -word", "Leave out", "SDS -MEP", true, true),
+        ("NOT  /  -word", "Leave out", "report -draft", true, true),
         ("( )", "Group", "(FHC OR \"fire hose\") approved", true, true),
         ("*", "Wildcard", "SSM-001*", true, true),
         ("from:  to:  cc:", "A person (me = you)", "from:Mark", true, false),
@@ -225,7 +225,7 @@ class SearchSyntax
         ("hasattachment:yes", "With files", "hasattachment:yes SDS", true, false),
         ("attachment:", "In an attachment name", "attachment:SDS-00656", true, false),
         ("received:  date:", "Date: today · this week · last month · 2025 · >01/05/2026 · 01/01/2025..31/03/2025", "received:last week", true, true),
-        ("project:", "Nova: one project only", "project:SLV", true, true),
+        ("project:", "Nova: one project only", "project:PRJ", true, true),
         ("kind:  ext:", "File type: pdf · word · excel · cad · revit · picture", "kind:pdf", false, true),
         ("folder:", "Inside a folder name", "folder:\"Shop drawings\"", false, true),
         ("rev:", "Nova: a revision (or latest)", "rev:C0", false, true)

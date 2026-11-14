@@ -37,6 +37,16 @@ object Backup {
             .put("settings", settings)
             .put("history", Db.get(c).exportJson())
         if (keys.length() > 0) root.put("keys", encrypt(keys.toString(), password))
+        // 🖥 The PC pairing (PC name, address, the QR key) — locked with the same password, so a restored phone talks to the PC again.
+        val pc = JSONObject()
+        // Only the pairing — what was already copied (got, manifest, last sync) stays out, so a restored phone copies everything again.
+        for ((k, v) in c.getSharedPreferences("nova_pc", Context.MODE_PRIVATE).all.filterKeys { it !in setOf("got", "fullAt", "manifest") && !it.startsWith("last_") }) when (v) {
+            is Boolean -> pc.put(k, JSONObject().put("t", "b").put("v", v))
+            is Int -> pc.put(k, JSONObject().put("t", "i").put("v", v))
+            is Long -> pc.put(k, JSONObject().put("t", "l").put("v", v))
+            is String -> pc.put(k, JSONObject().put("t", "s").put("v", v))
+        }
+        if (pc.length() > 0) root.put("pc", encrypt(pc.toString(), password))
         return root.toString(1)
     }
 
@@ -66,8 +76,24 @@ object Backup {
             }
         }
         e.apply()
+        var pcNote = ""
+        root.optJSONObject("pc")?.let { enc ->
+            pcNote = try {
+                val pc = JSONObject(decrypt(enc, password))
+                val pe = c.getSharedPreferences("nova_pc", Context.MODE_PRIVATE).edit()
+                for (k in pc.keys()) {
+                    val o = pc.getJSONObject(k)
+                    when (o.optString("t")) {
+                        "b" -> pe.putBoolean(k, o.optBoolean("v")); "i" -> pe.putInt(k, o.optInt("v"))
+                        "l" -> pe.putLong(k, o.optLong("v")); "s" -> pe.putString(k, o.optString("v"))
+                    }
+                }
+                pe.apply()
+                " · 🖥 PC pairing restored (tap ↻ Sync in My PC)"
+            } catch (_: Exception) { " · PC pairing NOT restored (wrong password) — scan the QR again" }
+        }
         val added = Db.get(c).importJson(root.optJSONArray("history") ?: org.json.JSONArray())
-        return "Settings restored · $added conversation(s) added · $keysNote"
+        return "Settings restored · $added conversation(s) added · $keysNote$pcNote"
     }
 
     private fun keyFrom(password: String, salt: ByteArray): SecretKeySpec {

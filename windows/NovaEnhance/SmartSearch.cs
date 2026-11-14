@@ -10,7 +10,15 @@ namespace NovaEnhance;
 /// <summary>Short forms used in UAE construction emails and documents, both ways (FHC ↔ fire hose cabinet).</summary>
 static class Abbrev
 {
-    static readonly (string Short, string[] Long)[] List =
+    /// <summary>Construction short forms (field pack "Construction &amp; Architecture" only); everyone else uses the general list + their own vocabulary.</summary>
+    static (string Short, string[] Long)[] List => Packs.IsConstruction ? ConstructionList : GeneralList;
+    static string[][] Compounds => Packs.IsConstruction ? ConstructionCompounds : System.Array.Empty<string[]>();
+    static readonly (string Short, string[] Long)[] GeneralList =
+    {
+        ("ASAP", new[] { "as soon as possible" }), ("FYI", new[] { "for your information" }), ("ETA", new[] { "estimated time of arrival" }),
+        ("PO", new[] { "purchase order" }), ("INV", new[] { "invoice" }), ("NDA", new[] { "non disclosure agreement" }), ("MOM", new[] { "minutes of meeting" })
+    };
+    static readonly (string Short, string[] Long)[] ConstructionList =
     {
         ("FHC", new[] { "fire hose cabinet", "fire hose cabinets", "fire hose reel cabinet" }), ("FHR", new[] { "fire hose reel" }), ("FHRC", new[] { "fire hose reel cabinet" }), ("FLS", new[] { "fire and life safety", "fire life safety" }),
         ("FACP", new[] { "fire alarm control panel" }), ("SS", new[] { "stainless steel" }), ("MS", new[] { "mild steel", "method statement" }), ("GI", new[] { "galvanized iron", "galvanised" }),
@@ -32,7 +40,7 @@ static class Abbrev
     };
 
     /// <summary>Construction phrases that stay together (with the other ways people write them).</summary>
-    static readonly string[][] Compounds =
+    static readonly string[][] ConstructionCompounds =
     {
         new[] { "block wall", "blockwork", "block work", "masonry wall", "block masonry" },
         new[] { "curtain wall", "curtainwall", "CW" },

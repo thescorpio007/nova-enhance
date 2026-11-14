@@ -8,25 +8,9 @@ namespace NovaEnhance;
 /// </summary>
 static class DocCodes
 {
-    public static readonly Dictionary<string, string> Disciplines = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["AR"] = "Architecture", ["ID"] = "Interior design", ["LS"] = "Landscape", ["ST"] = "Structure", ["MS"] = "Mechanical",
-        ["ME"] = "MEP", ["MEP"] = "MEP", ["EL"] = "Electrical", ["PL"] = "Plumbing", ["FF"] = "Firefighting", ["FS"] = "Fire safety",
-        ["HV"] = "HVAC", ["CW"] = "Civil works", ["CV"] = "Civil", ["CI"] = "Civil", ["IN"] = "Infrastructure", ["PM"] = "Project management",
-        ["QA"] = "Quality", ["QC"] = "Quality", ["HS"] = "HSE", ["FA"] = "Façade", ["FC"] = "Façade", ["LT"] = "Lighting", ["LI"] = "Lighting",
-        ["AV"] = "Audio-visual", ["IT"] = "ICT", ["ICT"] = "ICT", ["SG"] = "Signage", ["VT"] = "Vertical transport", ["LF"] = "Lifts",
-        ["GE"] = "General", ["GN"] = "General", ["SU"] = "Survey", ["GT"] = "Geotechnical", ["WP"] = "Waterproofing", ["KT"] = "Kitchen"
-    };
-
-    public static readonly Dictionary<string, string> Types = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["SSM"] = "Sample", ["MAR"] = "Material approval", ["MAT"] = "Material", ["MIR"] = "Material inspection", ["WIR"] = "Work inspection",
-        ["RFI"] = "RFI", ["SDS"] = "Shop drawing", ["SD"] = "Shop drawing", ["DRW"] = "Drawing", ["MSS"] = "Method statement", ["MST"] = "Method statement",
-        ["MS"] = "Method statement", ["NCR"] = "Non-conformance", ["TQ"] = "Technical query", ["LTR"] = "Letter", ["TRN"] = "Transmittal",
-        ["SI"] = "Site instruction", ["EI"] = "Engineer's instruction", ["PQ"] = "Prequalification", ["CAL"] = "Calculation", ["RPT"] = "Report",
-        ["MOM"] = "Minutes", ["DET"] = "Detail", ["GEN"] = "General", ["COM"] = "Commercial", ["VO"] = "Variation", ["SUB"] = "Submittal",
-        ["TS"] = "Technical submittal", ["DS"] = "Design submittal", ["ASB"] = "As-built", ["SNG"] = "Snag", ["HO"] = "Handover", ["IR"] = "Inspection"
-    };
+    /// <summary>From the person's field pack (construction: AR · Architecture, SSM · Sample …; other fields: their own or none).</summary>
+    public static Dictionary<string, string> Disciplines => Packs.Current.Disciplines;
+    public static Dictionary<string, string> Types => Packs.Current.Types;
 
     static readonly Regex Num = new(@"\b[A-Z][A-Z0-9]{1,5}(?:-[A-Z0-9]{1,6}){2,7}-\d{3,6}", RegexOptions.Compiled);
     static readonly Dictionary<long, (string No, string Disc, string Type)> cache = new();

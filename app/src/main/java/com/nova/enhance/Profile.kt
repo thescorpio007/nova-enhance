@@ -20,9 +20,19 @@ object Profile {
     const val VOICE_REQ = 78
 
     val FIELDS = listOf(
-        "Architecture", "Structural", "MEP", "Construction / Site", "Project management",
-        "Interior design", "Civil", "Legal", "Medical", "IT", "Finance", "Education", "Marketing"
+        "General", "Architecture", "Structural", "MEP", "Construction / Site", "Project management", "Interior design", "Civil",
+        "Engineering", "Medical", "Legal", "Finance", "IT", "Education", "Student", "Business & Sales", "Government", "Marketing"
     )
+
+    /** Construction words, codes (SSM, SDS, RFI…) and document disciplines are used only for these fields. */
+    private val CONSTRUCTION = Regex("archit|structur|\\bmep\\b|construct|interior|civil engineer|civil works|landscape", RegexOption.IGNORE_CASE)
+    /** "a person working in Architecture, MEP" — for AI instructions (never a fixed job). */
+    fun who(s: Store): String {
+        val f = fields(s).filter { it != "General" }
+        return if (f.isEmpty()) "the user" else "a person working in " + f.joinToString(", ")
+    }
+
+    fun isConstruction(s: Store) = CONSTRUCTION.containsMatchIn(s.profileFields + " " + s.profileAbout)
 
     private var voiceBox: WeakReference<EditText>? = null
 
@@ -57,9 +67,10 @@ object Profile {
         val s = Store(act)
         val c = act
         val chosen = fields(s).toMutableSet()
+        val first = !s.profileAsked
         val root = Ui.col(c, 18)
-        root.addView(Ui.text(c, "Your field and role. Every enhancement will use the correct technical terms of your field.",
-            13f, Ui.MUTED))
+        root.addView(Ui.text(c, if (first) "✦ Nova works for anyone, in any field. Tell it about you — every correction, search and draft will follow your field. Already using Nova? Restore your backup instead."
+            else "Your field and role. Every enhancement will use the correct technical terms of your field.", 13f, Ui.MUTED))
 
         root.addView(Ui.section(c, "My field  · pick one or more"))
         val rows = FlowLayout(c, Ui.dp(c, 8), Ui.dp(c, 8))
@@ -86,7 +97,7 @@ object Profile {
 
         val aboutHead = Ui.row(c)
         aboutHead.addView(Ui.section(c, "About me"), Ui.lp(0, weight = 1f))
-        val about = Ui.input(c, "e.g. Senior site architect: Design Development and coordination with structural and MEP…", true, 4)
+        val about = Ui.input(c, "e.g. Pharmacist in a hospital · Math teacher · Sales manager · Site engineer…", true, 4)
             .apply { setText(s.profileAbout); textSize = 15f }
         aboutHead.addView(Ui.text(c, "🎤", 13f, android.graphics.Color.WHITE).apply {
             gravity = Gravity.CENTER; includeFontPadding = false
@@ -97,22 +108,39 @@ object Profile {
         root.addView(about, Ui.lp(top = Ui.dp(c, 6)))
 
         root.addView(Ui.section(c, "My terms  · kept exactly as written"))
-        val terms = Ui.input(c, "e.g. IFC, RFI, NY, PQP, PVRS, SLV", true, 2).apply { setText(s.profileTerms); textSize = 15f }
+        val terms = Ui.input(c, "e.g. names, product names, abbreviations you use", true, 2).apply { setText(s.profileTerms); textSize = 15f }
         root.addView(terms)
 
-        AlertDialog.Builder(c)
-            .setTitle("👤  Tell us about yourself")
+        // First start: the AI key (a free Gemini key works well).
+        val gem = Providers.byId("gemini")
+        var keyBox: EditText? = null
+        if (first && gem != null && !s.hasKey(gem)) {
+            root.addView(Ui.section(c, "Your AI  · a free Gemini key works well"))
+            keyBox = Ui.input(c, "Paste your Gemini API key (optional now)", false).apply {
+                textSize = 15f; inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+            }
+            root.addView(keyBox)
+            root.addView(Ui.text(c, "🔑 Get a free key (aistudio.google.com)", 13f, Ui.ACCENT, true).apply {
+                setPadding(0, Ui.dp(c, 8), 0, 0)
+                setOnClickListener { try { act.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://aistudio.google.com/apikey"))) } catch (_: Exception) { } }
+            })
+        }
+
+        val dlg = AlertDialog.Builder(c)
+            .setTitle(if (first) "✦  Welcome to Nova Enhance" else "👤  Tell us about yourself")
             .setView(ScrollView(c).apply { addView(root) })
             .setPositiveButton("Save") { _, _ ->
                 s.profileFields = chosen.joinToString("|")
                 s.profileAbout = about.text.toString().trim()
                 s.profileTerms = terms.text.toString().trim()
                 s.profileAsked = true
+                keyBox?.text?.toString()?.trim()?.takeIf { it.length > 10 && gem != null }?.let { s.setKey(gem!!, it) }
                 Ui.toast(c, "Saved — enhancements will use your field's terms")
                 onSaved()
             }
             .setNegativeButton(if (isSet(s)) "Cancel" else "Later") { _, _ -> s.profileAsked = true }
-            .show()
+        if (first) dlg.setNeutralButton("📂 Restore backup") { _, _ -> s.profileAsked = true; SettingsActivity.open(act, SettingsActivity.S_BACKUP) }
+        dlg.show()
     }
 
     private fun listen(act: Activity, box: EditText) {

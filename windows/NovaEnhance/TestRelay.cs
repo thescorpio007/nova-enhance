@@ -15,7 +15,7 @@ namespace NovaEnhance;
 static class Relay
 {
     public static bool On { get => Store.Bool("win_tc_relay", false); set { Store.SetBool("win_tc_relay", value); if (value) Start(); } }
-    public static string Repo { get => Store.Str("win_tc_relay_repo", "thescorpio007/nova-test-relay"); set => Store.Set("win_tc_relay_repo", value.Trim().Trim('/')); }
+    public static string Repo { get => Store.Str("win_tc_relay_repo", ""); set => Store.Set("win_tc_relay_repo", value.Trim().Trim('/')); }
     public static string Token { get => Store.Secret("win_tc_relay_token"); set => Store.SetSecret("win_tc_relay_token", value?.Trim()); }
     public static string Status = "", LastError = "";
     public static DateTime LastCheck = DateTime.MinValue;

@@ -21,8 +21,8 @@ class CompareActivity : BaseActivity() {
             c.startActivity(Intent(c, CompareActivity::class.java).putExtra("p", p.id))
 
         const val SAMPLE =
-            "hi ahmed, i hope your doing well. we was reviewed the drawings yesterday and their is some clashes " +
-            "between the ducts and the beams in level 3, please can you check it and revert back asap.\n\n" +
+            "hi sara, i hope your doing well. we was reviewed the report yesterday and their is some mistakes " +
+            "in the figures of page 3, please can you check it and revert back asap.\n\n" +
             "مرحبا، لقد ارسلنا المخططات امس ولكن لم نستلم اي رد منكم حتى الان، نرجو المراجعة والرد باسرع وقت."
 
         /** Main models only: previews, experiments and special-purpose variants are left out to save quota. */

@@ -65,7 +65,7 @@ class TalkPanel : Panel
         // Three lines to type in · Enter = send · Shift+Enter = new line.
         input = Th.Prose(Th.Box(true, 3));
         input.Dock = DockStyle.Fill; input.Margin = new Padding(0, 0, 8, 0);
-        input.PlaceholderText = "Ask Nova about this list or the emails you picked — e.g. which need my answer today? only SLV, hide meeting recaps · is their proposal compliant? (Enter = send · Shift+Enter = new line · 📎 drop files)";
+        input.PlaceholderText = "Ask Nova about this list or the emails you picked — e.g. which need my answer today? only one project, hide meeting recaps · is their proposal compliant? (Enter = send · Shift+Enter = new line · 📎 drop files)";
         input.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter && !e.Shift) { e.SuppressKeyPress = true; Ask(input.Text, false); } };
         btns = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, BackColor = Color.Transparent, Margin = new Padding(0), WrapContents = false };
         var send = Th.B("✦ Send", () => Ask(input.Text, false), true); send.Width = 96;
@@ -156,7 +156,7 @@ class TalkPanel : Panel
     {
         Conversations.DraftAction = "✦ Draft reply";
         var body = conv == null || conv.Msgs.Count == 0
-            ? "<p class=muted>💬 Talk with Nova about " + (kind == "brief" ? "your brief" : "these emails") + ". Ask to <b>filter or sort</b> the list (“only SLV and Nouran, hide meeting recaps, most urgent first”), " +
+            ? "<p class=muted>💬 Talk with Nova about " + (kind == "brief" ? "your brief" : "these emails") + ". Ask to <b>filter or sort</b> the list (“only one project, hide meeting recaps, most urgent first”), " +
               "or <b>pick emails</b> (click · Ctrl+click · Shift+click) and ask a <b>technical question</b> — Nova reads them with their attachments, the drawings they mention, your project files, 🧠 Memory and past answers. " +
               "📎 Attach, paste (Ctrl+V) or drop any file. Every conversation is saved in 🕘 Chat history.</p>"
             : Conversations.Body(conv, true);
@@ -171,7 +171,7 @@ class TalkPanel : Panel
     const string ListRule =
         " THE LIST: the emails the user sees are numbered [E1]…; the user may ask you to filter, hide, keep, sort, prioritise or group them. " +
         "ONLY when the request is about the list (which ones, only, hide, without, sort, most urgent, need my reply, group…), end your answer with ONE line exactly like " +
-        "[[LIST {\"show\":[\"E3\",\"E1\"],\"tags\":{\"E3\":\"answer today\",\"E1\":\"approval: proceed\"},\"chips\":[\"SLV, Nouran\",\"Needs my action\",\"Hide: meeting recaps\"],\"hidden\":\"4 meeting recaps, 3 other projects\"}]] " +
+        "[[LIST {\"show\":[\"E3\",\"E1\"],\"tags\":{\"E3\":\"answer today\",\"E1\":\"approval: proceed\"},\"chips\":[\"Project A\",\"Needs my action\",\"Hide: meeting recaps\"],\"hidden\":\"4 meeting recaps, 3 other projects\"}]] " +
         "— show = the ids to keep, most important first; tags = 2 to 4 words of reason for each; chips = 1 to 5 short labels of the filter; hidden = what you hid. " +
         "To show everything again: [[LIST {\"clear\":true}]]. Never put the [[LIST]] line when the question is not about the list. " +
         "In your text, number the emails in the same order as show (1., 2.…) and cite them [E3]. " +
@@ -335,7 +335,7 @@ class TalkPanel : Panel
             var text = sb.ToString();
             var max = Ai.MaxChars;
             if (max > 0 && text.Length > max) text = text[..max];
-            var sys = "You are Nova, the assistant of an architect / technical coordinator in the UAE, talking with him about his emails. Use ONLY the numbered sources for facts and cite them like [E3] [A1] [D2] [F1]; " +
+            var sys = "You are Nova, the assistant of " + Persona.Who + ", talking with them about their emails. Use ONLY the numbered sources for facts and cite them like [E3] [A1] [D2] [F1]; " +
                       "if something isn't in them, say so. Be clear and practical: short paragraphs or numbered points. When he asks for a reply text, put exactly the text between a line ✍ START and a line ✍ END." +
                       ListRule + (searchedNow ? " The list was just searched for this request: say briefly what it found (most relevant first, cite [E#] and [D#]) and what is missing." : Research != null && !silent ? SearchRule : "") + (files.Count > 0 ? FileTalk.Rules : "") + NovaSearch.SourceRule + FolderAsk.AdviceRule + Modes.ProfileNote();
             Draw("Nova is thinking…");

@@ -288,7 +288,7 @@ static class Ai
     /// </summary>
     public static async Task<string> Look(byte[] image, string mime, string question, CancellationToken ct = default)
     {
-        var ask = "You are a senior architect / technical coordinator looking at this picture or drawing for the user. " +
+        var ask = "You are a " + Persona.Expert + " looking at this picture or drawing for the user, " + Persona.Who + ". " +
                   (string.IsNullOrWhiteSpace(question) ? "" : $"The user's question: “{question}”. ") +
                   "Describe precisely what it shows that matters for the question: the kind of drawing or photo, elements and materials, dimensions, levels, notes, symbols, title block (number, revision, title), " +
                   "and anything wrong, missing, damaged or not as drawn (for site photos). Read every visible text and dimension that is relevant. Be factual; say when something is unclear.";
@@ -553,7 +553,7 @@ static class Modes
     public static readonly string[] Fields =
     {
         "Architecture", "Structural", "MEP", "Construction / Site", "Project management",
-        "Interior design", "Civil", "Legal", "Medical", "IT", "Finance", "Education", "Marketing"
+        "Interior design", "Civil", "Engineering", "Legal", "Medical", "IT", "Finance", "Education", "Student", "Business & Sales", "Government", "Marketing"
     };
 
     public static List<string> ChosenFields() => Store.ProfileFields.Split('|').Where(s => s.Trim().Length > 0).ToList();

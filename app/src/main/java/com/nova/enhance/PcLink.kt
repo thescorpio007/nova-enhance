@@ -325,20 +325,22 @@ object PcLink {
 
     fun search(c: Context, question: String, project: String = ""): Pair<List<Hit>, String> {
         val q = question.lowercase()
+        val construction = Profile.isConstruction(Store(c))
+        DocCodes.construction = construction
         val wantsApproved = Regex("\\bapprov").containsMatchIn(q)
         val wantsOld = Regex("\\b(old|older|oldest|earliest|first|history)\\b").containsMatchIn(q)
         val phrases = Regex("\"([^\"]+)\"").findAll(question).map { it.groupValues[1].trim() }.filter { it.isNotEmpty() }.toList()
         var rest = question.replace(Regex("\"[^\"]*\""), " ")
         // "fire hose cabinet(s)" anywhere = the FHC idea
-        if (Regex("fire\\s+hose", RegexOption.IGNORE_CASE).containsMatchIn(rest)) rest = rest.replace(Regex("fire\\s+hose(\\s+reel)?(\\s+cabinets?)?", RegexOption.IGNORE_CASE), " fhc ")
-        if (Regex("shop\\s+drawings?", RegexOption.IGNORE_CASE).containsMatchIn(rest)) rest = rest.replace(Regex("shop\\s+drawings?", RegexOption.IGNORE_CASE), " sds ")
+        if (construction && Regex("fire\\s+hose", RegexOption.IGNORE_CASE).containsMatchIn(rest)) rest = rest.replace(Regex("fire\\s+hose(\\s+reel)?(\\s+cabinets?)?", RegexOption.IGNORE_CASE), " fhc ")
+        if (construction && Regex("shop\\s+drawings?", RegexOption.IGNORE_CASE).containsMatchIn(rest)) rest = rest.replace(Regex("shop\\s+drawings?", RegexOption.IGNORE_CASE), " sds ")
         val words = Regex("[\\p{L}\\p{N}][\\p{L}\\p{N}\\-_.]*").findAll(rest).map { it.value }
             .filter { it.length > 1 && !instruction.matches(it) && !it.equals(project, true) }.distinct().take(8).toList()
         val groups = ArrayList<List<String>>()
         phrases.forEach { groups.add(listOf("\"" + it.replace("\"", "") + "\"")) }
         for (w in words) {
             val lw = w.lowercase().trimEnd('s').let { if (abbrev.containsKey(it)) it else w.lowercase() }
-            groups.add(abbrev[lw] ?: listOf(if (w.contains('-') || w.contains('_') || w.contains('.')) "\"" + w.replace(Regex("[\\-_.]"), " ") + "\"" else "$w*"))
+            groups.add((if (construction) abbrev[lw] else null) ?: listOf(if (w.contains('-') || w.contains('_') || w.contains('.')) "\"" + w.replace(Regex("[\\-_.]"), " ") + "\"" else "$w*"))
         }
         val db = Db.get(c)
         val where = ArrayList<String>(); val args = ArrayList<String>()
@@ -509,11 +511,15 @@ class PcSyncJob : JobService() {
 
 /** Discipline and type from a document number (SLV-ZUC-MS-SSM-00012 → MS · Mechanical, SSM · Sample) — as on the PC. */
 object DocCodes {
-    val disciplines = mapOf("AR" to "Architecture", "ID" to "Interior design", "LS" to "Landscape", "ST" to "Structure", "MS" to "Mechanical",
+    /** Construction codes only for a construction profile (other fields: the number and its type part, no disciplines). */
+    @Volatile var construction = true
+    val disciplines get() = if (construction) build else emptyMap()
+    private val build = mapOf("AR" to "Architecture", "ID" to "Interior design", "LS" to "Landscape", "ST" to "Structure", "MS" to "Mechanical",
         "ME" to "MEP", "MEP" to "MEP", "EL" to "Electrical", "PL" to "Plumbing", "FF" to "Firefighting", "FS" to "Fire safety", "HV" to "HVAC",
         "CW" to "Civil works", "CV" to "Civil", "IN" to "Infrastructure", "PM" to "Project management", "QA" to "Quality", "QC" to "Quality",
         "HS" to "HSE", "FA" to "Façade", "LT" to "Lighting", "SG" to "Signage", "VT" to "Vertical transport")
-    val types = mapOf("SSM" to "Sample", "MAR" to "Material approval", "MAT" to "Material", "MIR" to "Material inspection", "WIR" to "Work inspection",
+    val types get() = if (construction) buildTypes else emptyMap()
+    private val buildTypes = mapOf("SSM" to "Sample", "MAR" to "Material approval", "MAT" to "Material", "MIR" to "Material inspection", "WIR" to "Work inspection",
         "RFI" to "RFI", "SDS" to "Shop drawing", "DRW" to "Drawing", "MSS" to "Method statement", "NCR" to "Non-conformance", "TQ" to "Technical query",
         "LTR" to "Letter", "TRN" to "Transmittal", "SI" to "Site instruction", "RPT" to "Report", "MOM" to "Minutes", "DET" to "Detail")
     private val num = Regex("\\b[A-Z][A-Z0-9]{1,5}(?:-[A-Z0-9]{1,6}){2,7}-\\d{3,6}")

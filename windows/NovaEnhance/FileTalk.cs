@@ -213,7 +213,7 @@ static class FileTalk
         "one row per item compared (price, quantities, specification values, scope, exclusions, programme, dates, revisions, dimensions … whatever fits the files), " +
         "the exact value from each file in its column ('—' when the file doesn't say), and in Note: '✓ best', '⚠ different', '⚠ missing in F2' etc. " +
         "After the table: a short 'What changed / key differences' list, then a recommendation. For two revisions of the same document, list what was added, removed and changed. " +
-        "If the user asks for ADVICE or a check: answer as a senior architect / technical coordinator, citing [F1]… for every fact taken from the files. " +
+        "If the user asks for ADVICE or a check: answer as a " + Persona.Expert + ", citing [F1]… for every fact taken from the files. " +
         "Parts marked “👁 What Nova sees” are what a vision AI saw in the picture / drawing (use them like your own eyes, say when unsure); “🎙 Transcript” is what was said in a recording (with minutes); " +
         "“📐 CAD drawing” lists the layers, blocks, texts and dimensions found in a DWG/DXF. ";
 
