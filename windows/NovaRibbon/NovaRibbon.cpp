@@ -1,14 +1,12 @@
 // ✦ Nova ribbon tab for every desktop Office program (Word, Excel, PowerPoint, Outlook, Visio, Project, Access, Publisher).
 // A small native COM add-in (no .NET, no runtime to install), built for 64-bit and 32-bit Office.
-// Each button sends one word to Nova Enhance (named event + small request file); Nova does the work on the selection.
+// Each button only signals Nova Enhance (one named event per button); Nova does the work on the selection.
 // Registered per user by Nova (Settings → Office tab), no admin rights. Designed by A.HAMROUNI
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <ole2.h>
 #include <oleauto.h>
-#include <shlobj.h>
-#include <shellapi.h>
 #include <string>
 
 // {6E7A2D41-3C9B-4F1E-8A52-1D9C7B3E5F02}
@@ -36,32 +34,15 @@ static LONG g_objects = 0, g_locks = 0;
 
 // ------------------------------------------------------------------ talking to Nova
 
-static std::wstring Folder(int csidl, const wchar_t* sub)
+// One named event per button ("NovaEnhanceWindows-office-<button id>"), created by Nova when it runs.
+// The add-in only signals it: it never writes files and never starts a program from inside Office.
+static void Send(const std::wstring& id)
 {
-    wchar_t p[MAX_PATH] = {};
-    if (FAILED(SHGetFolderPathW(nullptr, csidl, nullptr, 0, p))) return L"";
-    std::wstring s = p; s += sub;
-    return s;
-}
-
-static void Send(const std::wstring& action)
-{
-    // 1 · the request (Nova's cache folder) · 2 · wake Nova; if Nova is not running, start it with the request.
-    std::wstring dir = Folder(CSIDL_LOCAL_APPDATA, L"\\Nova Enhance\\cache");
-    CreateDirectoryW(Folder(CSIDL_LOCAL_APPDATA, L"\\Nova Enhance").c_str(), nullptr);
-    CreateDirectoryW(dir.c_str(), nullptr);
-    std::string a;
-    for (wchar_t ch : action) a += (ch < 128 ? (char)ch : '?');
-    HANDLE f = CreateFileW((dir + L"\\office-request.txt").c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (f != INVALID_HANDLE_VALUE) { DWORD w = 0; WriteFile(f, a.data(), (DWORD)a.size(), &w, nullptr); CloseHandle(f); }
-    HANDLE e = OpenEventW(EVENT_MODIFY_STATE, FALSE, L"NovaEnhanceWindows-office");
+    std::wstring name = L"NovaEnhanceWindows-office-" + id;
+    HANDLE e = OpenEventW(EVENT_MODIFY_STATE, FALSE, name.c_str());
     if (e) { SetEvent(e); CloseHandle(e); return; }
-    // Where Nova is installed (written by Nova when it installs the tab).
-    wchar_t exe[MAX_PATH * 2] = {};
-    DWORD sz = sizeof(exe);
-    if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\Nova Enhance\\Ribbon", L"Exe", RRF_RT_REG_SZ, nullptr, exe, &sz) != ERROR_SUCCESS || !exe[0]) return;
-    std::wstring args = L"--office " + action;
-    ShellExecuteW(nullptr, L"open", exe, args.c_str(), nullptr, SW_SHOWNORMAL);
+    MessageBoxW(GetForegroundWindow(), L"Nova Enhance is not running.\n\nStart it from the Start menu (Nova Enhance), then click the button again.",
+                L"\x2726 Nova Enhance", MB_OK | MB_ICONINFORMATION);
 }
 
 // ------------------------------------------------------------------ the ribbon
@@ -165,7 +146,7 @@ public:
             if (FAILED(control->Invoke(did, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_PROPERTYGET, &none, &r, nullptr, nullptr)) || r.vt != VT_BSTR) { VariantClear(&r); return E_FAIL; }
             std::wstring cid = r.bstrVal ? r.bstrVal : L"";
             VariantClear(&r);
-            if (cid.rfind(L"mode_", 0) == 0) Send(L"mode:" + cid.substr(5)); else Send(cid);
+            Send(cid);
             return S_OK;
         }
         return DISP_E_MEMBERNOTFOUND;

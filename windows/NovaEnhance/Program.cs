@@ -58,10 +58,7 @@ static class Program
             try
             {
                 if (officeAct != null)
-                {
-                    File.WriteAllText(Path.Combine(Paths.Cache, "office-request.txt"), officeAct);
-                    EventWaitHandle.OpenExisting("NovaEnhanceWindows-office").Set();
-                }
+                    EventWaitHandle.OpenExisting("NovaEnhanceWindows-office-" + officeAct.Replace("mode:", "mode_")).Set();
                 else if (searchPath != null)
                 {
                     File.WriteAllText(Path.Combine(Paths.Cache, "search-request.txt"), searchPath);
@@ -102,7 +99,8 @@ class NovaContext : ApplicationContext
     readonly NotifyIcon tray;
     readonly HotkeyWindow hot;
     readonly System.Windows.Forms.Timer timer;
-    readonly EventWaitHandle showEvt, searchEvt, officeEvt;
+    readonly EventWaitHandle showEvt, searchEvt;
+    readonly List<EventWaitHandle> officeEvts = new();
     int ticks;
 
     public NovaContext(bool startedWithWindows)
@@ -198,14 +196,15 @@ class NovaContext : ApplicationContext
             Program.UiContext.Post(_ => Screens.FolderSearch(p), null);
         }, null, -1, false);
         // ✦ A button of the Nova tab in Word, Excel, PowerPoint, Outlook, Visio, Project, Access or Publisher.
-        officeEvt = new EventWaitHandle(false, EventResetMode.AutoReset, "NovaEnhanceWindows-office");
+        // One event per button: the add-in only signals it (no files, no program started from Office).
         OfficeRibbon.Refresh();
-        ThreadPool.RegisterWaitForSingleObject(officeEvt, (_, _) =>
+        foreach (var id in OfficeRibbon.Buttons)
         {
-            string a = null;
-            try { var f = Path.Combine(Paths.Cache, "office-request.txt"); a = File.ReadAllText(f).Trim(); File.Delete(f); } catch { }
-            if (!string.IsNullOrEmpty(a)) Program.UiContext.Post(_ => Screens.Office(a), null);
-        }, null, -1, false);
+            var ev = new EventWaitHandle(false, EventResetMode.AutoReset, "NovaEnhanceWindows-office-" + id);
+            officeEvts.Add(ev);
+            var act = id.StartsWith("mode_") ? "mode:" + id[5..] : id;
+            ThreadPool.RegisterWaitForSingleObject(ev, (_, _) => Program.UiContext.Post(_ => Screens.Office(act), null), null, -1, false);
+        }
 
         if (Store.Bool("win_addin", false) || Store.Bool("win_addin_it", false))
         {

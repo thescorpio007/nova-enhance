@@ -48,8 +48,9 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 [Files]
 Source: "{#SourceDir}\NovaEnhance.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; ✦ The Nova tab for every Office program (Office loads its own copy per build, so these are never locked).
-Source: "{#SourceDir}\NovaRibbon64.dll"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#SourceDir}\NovaRibbon32.dll"; DestDir: "{app}"; Flags: ignoreversion
+; Copied in [Code] after the install: if an antivirus holds one, Setup still finishes (only the Office tab waits).
+Source: "{#SourceDir}\NovaRibbon64.dll"; Flags: dontcopy
+Source: "{#SourceDir}\NovaRibbon32.dll"; Flags: dontcopy
 
 [Icons]
 Name: "{group}\Nova Enhance"; Filename: "{app}\NovaEnhance.exe"
@@ -69,7 +70,31 @@ Filename: "{app}\NovaEnhance.exe"; Parameters: "--tray"; Flags: nowait; Check: W
 [UninstallRun]
 Filename: "taskkill.exe"; Parameters: "/F /IM NovaEnhance.exe"; Flags: runhidden; RunOnceId: "StopNova"
 
+[UninstallDelete]
+Type: files; Name: "{app}\NovaRibbon64.dll"
+Type: files; Name: "{app}\NovaRibbon32.dll"
+
 [Code]
+procedure CopyRibbon(Name: String);
+begin
+  try
+    ExtractTemporaryFile(Name);
+    if not FileCopy(ExpandConstant('{tmp}\' + Name), ExpandConstant('{app}\' + Name), False) then
+      Log('Nova tab file not copied: ' + Name);
+  except
+    Log('Nova tab file skipped: ' + Name + ' — ' + GetExceptionMessage);
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+  begin
+    CopyRibbon('NovaRibbon64.dll');
+    CopyRibbon('NovaRibbon32.dll');
+  end;
+end;
+
 function InitializeSetup(): Boolean;
 var Code: Integer;
 begin

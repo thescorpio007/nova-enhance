@@ -70,7 +70,9 @@ jobs:
           $src = (Resolve-Path windows\NovaRibbon).Path; $o = (Resolve-Path out).Path
           foreach ($a in @(@("x64","64"), @("x86","32"))) {
             New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\rb$($a[1])" | Out-Null
-            cmd /c "call `"$vc`" $($a[0]) >nul && cd /d `"$env:RUNNER_TEMP\rb$($a[1])`" && cl /nologo /LD /O2 /MT /EHsc /W3 /DUNICODE /D_UNICODE `"$src\NovaRibbon.cpp`" /link /DEF:`"$src\NovaRibbon.def`" /OUT:`"$o\NovaRibbon$($a[1]).dll`" ole32.lib oleaut32.lib uuid.lib advapi32.lib shell32.lib"
+            $d = "$env:RUNNER_TEMP\rb$($a[1])"
+            Set-Content -Path "$d\novaver.h" -Encoding ascii -Value "#define NOVA_VER 2,0,${{ inputs.build }},0`r`n#define NOVA_VER_S `"2.0.${{ inputs.build }}.0`""
+            cmd /c "call `"$vc`" $($a[0]) >nul && cd /d `"$d`" && rc /nologo /i `"$d`" /fo NovaRibbon.res `"$src\NovaRibbon.rc`" && cl /nologo /LD /O2 /MT /EHsc /W3 /DUNICODE /D_UNICODE `"$src\NovaRibbon.cpp`" NovaRibbon.res /link /DEF:`"$src\NovaRibbon.def`" /OUT:`"$o\NovaRibbon$($a[1]).dll`" ole32.lib oleaut32.lib uuid.lib user32.lib"
             if ($LASTEXITCODE -ne 0) { Write-Host "::error title=Nova tab::the $($a[0]) add-in did not build"; exit 1 }
           }
           Get-ChildItem out\NovaRibbon*.dll | ForEach-Object { Write-Host ("::notice title=Nova tab::{0} {1:N0} KB" -f $_.Name, ($_.Length / 1KB)) }

@@ -18,6 +18,10 @@ static class OfficeRibbon
         ("Visio", "Visio"), ("MS Project", "Project"), ("Access", "Access"), ("Publisher", "Publisher")
     };
 
+    /// <summary>The ✦ Nova tab's buttons (ids in NovaRibbon.cpp); each one is a named event Nova listens to.</summary>
+    public static readonly string[] Buttons =
+        { "mode_grammar", "mode_shorten", "mode_professional", "mode_informal", "mode_expand", "mode_translate", "enhance", "mailask", "search", "hub", "brief", "files", "settings" };
+
     /// <summary>The files that come with Nova (next to NovaEnhance.exe).</summary>
     static string Src => AppContext.BaseDirectory;
     public static bool FilesThere => File.Exists(Path.Combine(Src, "NovaRibbon64.dll")) && File.Exists(Path.Combine(Src, "NovaRibbon32.dll"));
@@ -42,11 +46,11 @@ static class OfficeRibbon
     /// <summary>Registers the add-in for this user in every Office program (64- and 32-bit Office).</summary>
     public static void Install()
     {
-        if (!FilesThere) throw new FileNotFoundException("The Nova tab files are missing next to NovaEnhance.exe — reinstall Nova Enhance.");
+        if (!FilesThere) throw new FileNotFoundException("The Nova tab files are missing next to NovaEnhance.exe — your antivirus may have held them during Setup. Allow the Nova Enhance folder in the antivirus, then run Setup again.");
         Directory.CreateDirectory(Dir);
         foreach (var n in new[] { "NovaRibbon64.dll", "NovaRibbon32.dll" })
-            if (!File.Exists(Path.Combine(Dir, n)) || new FileInfo(Path.Combine(Dir, n)).Length != new FileInfo(Path.Combine(Src, n)).Length) File.Copy(Path.Combine(Src, n), Path.Combine(Dir, n), true);
-        using (var nk = Registry.CurrentUser.CreateSubKey(@"Software\Nova Enhance\Ribbon")) nk.SetValue("Exe", Environment.ProcessPath ?? Path.Combine(Src, "NovaEnhance.exe"));
+            if (!File.Exists(Path.Combine(Dir, n)) || new FileInfo(Path.Combine(Dir, n)).Length != new FileInfo(Path.Combine(Src, n)).Length) try { File.Copy(Path.Combine(Src, n), Path.Combine(Dir, n), true); }
+                catch (Exception e) { throw new IOException($"Windows or the antivirus refused to copy {n} ({e.Message}). Allow the Nova Enhance folders in the antivirus, then try again."); }
         foreach (var (view, dll) in new[] { (RegistryView.Registry64, Dll64), (RegistryView.Registry32, Dll32) })
         {
             using var hk = RegistryKey.OpenBaseKey(RegistryHive.CurrentUser, view);
