@@ -143,7 +143,10 @@ static class SendCheck
         var t = (body ?? "").Replace("\r\n", "\n");
         var q = Regex.Match(t, @"\n\s*(From|De|Von|Van|Da|من)\s*:\s|\n[\-_*=]{8,}", RegexOptions.IgnoreCase);
         if (q.Success) t = t[..q.Index];
-        return Sig.StripClosing(t).Trim().Replace("\n", "\r\n");
+        var lines = t.Split('\n');
+        var cut = OutlookBody.SigLine(lines);
+        if (cut >= 0) t = string.Join("\n", lines.Take(cut));
+        return t.Trim().Replace("\n", "\r\n");
     }
 
     // ------------------------------------------------------------------ the checks that need no AI
@@ -227,7 +230,7 @@ class SendCheckForm : NovaForm
     readonly RichTextBox mine, theirs;
     readonly FlowLayoutPanel checks;
     readonly Label status, count;
-    readonly Button sendChecked;
+    readonly Button sendChecked, anyway;
     string corrected = "";
     bool decided;
     CancellationTokenSource cts;
@@ -272,6 +275,9 @@ class SendCheckForm : NovaForm
         bottom.Controls.Add(Th.B("Send my original", () => Send(false)));
         bottom.Controls.Add(Th.B("✎ Back to Outlook to edit", Back));
         bottom.Controls.Add(Th.B("📎 Attach a file…", Attach));
+        anyway = Th.B("✦ Check with my AI anyway", async () => await RunAi(quick.Any(c => c.Level != "ok" && !c.Title.Contains("Private"))), true);
+        anyway.Visible = false;
+        bottom.Controls.Add(anyway);
         var hint = Th.L("Enter = send checked · Esc = back to edit · " + Program.Sign, 8.5f, Th.Muted); hint.Margin = new Padding(16, 10, 0, 0);
         bottom.Controls.Add(hint);
 
@@ -312,13 +318,28 @@ class SendCheckForm : NovaForm
         quick = SendCheck.Quick(snap);
         DrawChecks(Array.Empty<(string, string, string)>());
         var problems = quick.Any(c => c.Level != "ok");
-        if (SendCheck.What == "quick" || Projects.Private.IsMatch(snap.Own) || NovaEnhance.Ai.Active() == null)
+        if (SendCheck.What == "quick" || NovaEnhance.Ai.Active() == null)
         {
-            status.Text = SendCheck.What == "quick" ? "Quick checks only (no AI)." : NovaEnhance.Ai.Active() == null ? "No AI key — quick checks only." : "🔒 Private words — the text was not sent to the AI.";
+            status.Text = SendCheck.What == "quick" ? "Quick checks only (no AI)." : "No AI key — quick checks only.";
             sendChecked.Visible = false; count.Text = "";
             if (!problems && SendCheck.SkipClean) { Done("✓ Checked — no problems found. Sent."); }
             return;
         }
+        if (Projects.Private.IsMatch(snap.Own))
+        {
+            // 🔒 Private words: your choice, email by email.
+            status.Text = "🔒 Private words (password, bank…) — the text was not sent to the AI.";
+            sendChecked.Visible = false; count.Text = "";
+            anyway.Visible = true;
+            return;
+        }
+        await RunAi(problems);
+    }
+
+    async Task RunAi(bool problems)
+    {
+        anyway.Visible = false;
+        sendChecked.Visible = true;
         status.Text = "✦ Checking grammar, spelling and wording…";
         cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         try

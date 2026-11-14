@@ -44,16 +44,33 @@ static class OutlookBody
         var lines = head.Split('\r');
         var starts = new int[lines.Length];
         for (int i = 1; i < lines.Length; i++) starts[i] = starts[i - 1] + lines[i - 1].Length + 1;
-        int seen = 0;
-        for (int i = lines.Length - 1; i >= 0 && seen < 6; i--)
-        {
-            if (lines[i].Trim().Length == 0) continue;
-            seen++;
-            if (Sig.ClosingRx.IsMatch(lines[i])) { end = starts[i]; break; }
-        }
+        var cut = SigLine(lines);
+        if (cut >= 0) end = starts[cut];
         // Blank lines at the end stay as they are.
         while (end > 0 && char.IsWhiteSpace(all[end - 1])) end--;
         return end > 0 ? (0, end) : null;
+    }
+
+    static readonly Regex SigMark = new(@"^\s*(tel|t|fax|f|mob|mobile|m|phone|cell|direct|email|e-mail|e)\s*[.:]\s*[\d+(]|^\s*p\.?\s*o\.?\s*box\b|^\s*(www\.|https?://)\S+\s*$", RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// The first line of the closing / signature in your text (-1 = none): "Best Regards," within the last 20 lines; else your own
+    /// name on a line of its own; else the block (after the last empty line) holding tel. / fax. / P.O. Box / www.
+    /// </summary>
+    public static int SigLine(string[] lines)
+    {
+        var idx = Enumerable.Range(0, lines.Length).Reverse().Where(i => lines[i].Trim().Length > 0).Take(20).ToList();
+        foreach (var i in idx) if (Sig.ClosingRx.IsMatch(lines[i].Trim('\a', '\v', ' ', '\t'))) return i;
+        var me = (Me.Name ?? "").Trim();
+        if (me.Length > 3) foreach (var i in idx) if (string.Equals(lines[i].Trim(), me, StringComparison.OrdinalIgnoreCase)) return i;
+        foreach (var i in idx.OrderBy(i => i))
+            if (SigMark.IsMatch(lines[i]))
+            {
+                int b = i;
+                while (b > 0 && lines[b - 1].Trim().Length > 0 && lines[b - 1].Trim().Length < 60) b--;
+                return b;
+            }
+        return -1;
     }
 
     /// <summary>The Word editor of one email item (its open window, or the reply written inside the main window).</summary>
@@ -100,6 +117,15 @@ static class OutlookBody
             if (doc == null) return false;
             (int Start, int End)? sp = Span(doc);   // typed: through "dynamic" a null check would fail
             if (sp == null) return false;
+            // Last guard: if what would be replaced still looks like a signature (your name alone on a line, tel. / fax. / P.O. Box / www),
+            // Nova does not touch it.
+            string cur = doc.Range(sp.Value.Start, sp.Value.End).Text ?? "";
+            var me = (Me.Name ?? "").Trim();
+            if (cur.Split('\r', '\n', '\v').Any(l => SigMark.IsMatch(l) || me.Length > 3 && string.Equals(l.Trim(), me, StringComparison.OrdinalIgnoreCase)))
+            {
+                Log.Warn("Outlook body", "replace refused: the part to replace still looks like a signature");
+                return false;
+            }
             return Put(doc, sp.Value.Start, sp.Value.End, text);
         }
         catch (Exception e) { Log.Warn("Outlook body", "replace: " + e.Message); return false; }
