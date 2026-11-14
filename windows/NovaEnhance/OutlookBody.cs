@@ -100,9 +100,7 @@ static class OutlookBody
             if (doc == null) return false;
             (int Start, int End)? sp = Span(doc);   // typed: through "dynamic" a null check would fail
             if (sp == null) return false;
-            dynamic r = doc.Range(sp.Value.Start, sp.Value.End);
-            r.Text = (text ?? "").Replace("\r\n", "\n").TrimEnd().Replace("\n", "\r");
-            return true;
+            return Put(doc, sp.Value.Start, sp.Value.End, text);
         }
         catch (Exception e) { Log.Warn("Outlook body", "replace: " + e.Message); return false; }
     }
@@ -123,19 +121,55 @@ static class OutlookBody
     }
 
     /// <summary>Puts the new text in place of your text only — closing, signature and earlier emails untouched.</summary>
-    public static bool Replace(string text)
+    public static bool Replace(string text) => ReplaceIn(Editor(), text);
+
+    /// <summary>
+    /// Outlook's HTML emails are made of blocks; Word sometimes refuses to delete across them ("The range cannot be deleted").
+    /// So: 1 · the whole part at once · 2 · as if typed over the selection · 3 · paragraph by paragraph (each block keeps its place).
+    /// </summary>
+    static bool Put(dynamic doc, int start, int end, string text)
     {
+        var t = (text ?? "").Replace("\r\n", "\n").TrimEnd();
+        string why1 = "", why2 = "";
+        try { dynamic r = doc.Range(start, end); r.Text = t.Replace("\n", "\r"); return true; }
+        catch (Exception e) { why1 = e.Message; }
         try
         {
-            dynamic doc = Editor();
-            if (doc == null) return false;
-            (int Start, int End)? sp = Span(doc);   // typed: through "dynamic" a null check would fail
-            if (sp == null) return false;
-            dynamic r = doc.Range(sp.Value.Start, sp.Value.End);
-            r.Text = (text ?? "").Replace("\r\n", "\n").TrimEnd().Replace("\n", "\r");
+            dynamic r = doc.Range(start, end);
+            r.Select();
+            dynamic sel = doc.Application.Selection;
+            sel.TypeText(t.Replace("\n", "\r"));
+            Log.Write("Outlook body: replaced as typed (" + why1 + ")");
             return true;
         }
-        catch (Exception e) { Log.Warn("Outlook body", "replace: " + e.Message); return false; }
+        catch (Exception e) { why2 = e.Message; }
+        try
+        {
+            // Your paragraphs (with text) in order, and the new ones: each old one takes the matching new one.
+            var olds = new List<(int S, int E)>();
+            dynamic ps = doc.Range(start, end).Paragraphs;
+            int n = (int)ps.Count;
+            for (int i = 1; i <= n; i++)
+            {
+                dynamic pr = ps.Item(i).Range;
+                int ps0 = Math.Max(start, (int)pr.Start), pe = Math.Min(end, (int)pr.End);
+                string pt = doc.Range(ps0, pe).Text ?? "";
+                while (pe > ps0 && (pt.EndsWith("\r") || pt.EndsWith("\a"))) { pe--; pt = pt[..^1]; }
+                if (pt.Trim().Length > 0) olds.Add((ps0, pe));
+            }
+            var news = t.Split('\n').Select(x => x.TrimEnd()).Where(x => x.Trim().Length > 0).ToList();
+            if (olds.Count == 0) return false;
+            // Extra new paragraphs join the last old one (as new lines); extra old ones are emptied.
+            if (news.Count > olds.Count) { var tail = string.Join("\r", news.Skip(olds.Count - 1)); news = news.Take(olds.Count - 1).Append(tail).ToList(); }
+            for (int i = olds.Count - 1; i >= 0; i--)                 // from the end, so the earlier positions stay right
+            {
+                dynamic r = doc.Range(olds[i].S, olds[i].E);
+                r.Text = i < news.Count ? news[i] : "";
+            }
+            Log.Write($"Outlook body: replaced paragraph by paragraph ({why1} · {why2})");
+            return true;
+        }
+        catch (Exception e) { Log.Warn("Outlook body", $"replace refused 3 ways: {why1} · {why2} · {e.Message}"); return false; }
     }
 
     /// <summary>The window in front is Outlook.</summary>
