@@ -30,7 +30,7 @@ static class Program
         return true;
     }
     public static NotifyIcon Tray;
-    public static string StartSearch;
+    public static string StartSearch, StartOffice;
 
     [STAThread]
     static int Main(string[] args)
@@ -48,13 +48,21 @@ static class Program
         // Right-click a folder → "Search inside with Nova" starts NovaEnhance.exe --search "<folder>".
         var searchIdx = Array.IndexOf(args, "--search");
         var searchPath = searchIdx >= 0 && searchIdx + 1 < args.Length ? args[searchIdx + 1] : null;
+        // ✦ Nova tab in Office: NovaEnhance.exe --office <action> (the add-in starts Nova with it when Nova was closed).
+        var officeIdx = Array.IndexOf(args, "--office");
+        var officeAct = officeIdx >= 0 && officeIdx + 1 < args.Length ? args[officeIdx + 1] : null;
 
         using var mutex = new Mutex(true, "NovaEnhanceWindows-single", out bool first);
         if (!first)
         {
             try
             {
-                if (searchPath != null)
+                if (officeAct != null)
+                {
+                    File.WriteAllText(Path.Combine(Paths.Cache, "office-request.txt"), officeAct);
+                    EventWaitHandle.OpenExisting("NovaEnhanceWindows-office").Set();
+                }
+                else if (searchPath != null)
                 {
                     File.WriteAllText(Path.Combine(Paths.Cache, "search-request.txt"), searchPath);
                     EventWaitHandle.OpenExisting("NovaEnhanceWindows-search").Set();
@@ -65,6 +73,7 @@ static class Program
             return 0;
         }
         StartSearch = searchPath;
+        StartOffice = officeAct;
 
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         Application.EnableVisualStyles();
@@ -75,7 +84,7 @@ static class Program
         Microsoft.Win32.SystemEvents.SessionEnding += (_, _) => Guard.CleanExit();
         TaskScheduler.UnobservedTaskException += (_, e) => { Log.Error("task", e.Exception); e.SetObserved(); };
 
-        Application.Run(new NovaContext(args.Contains("--tray") || StartSearch != null));
+        Application.Run(new NovaContext(args.Contains("--tray") || StartSearch != null || StartOffice != null));
         return 0;
     }
 
@@ -93,7 +102,7 @@ class NovaContext : ApplicationContext
     readonly NotifyIcon tray;
     readonly HotkeyWindow hot;
     readonly System.Windows.Forms.Timer timer;
-    readonly EventWaitHandle showEvt, searchEvt;
+    readonly EventWaitHandle showEvt, searchEvt, officeEvt;
     int ticks;
 
     public NovaContext(bool startedWithWindows)
@@ -188,6 +197,15 @@ class NovaContext : ApplicationContext
             try { var f = Path.Combine(Paths.Cache, "search-request.txt"); p = File.ReadAllText(f); File.Delete(f); } catch { }
             Program.UiContext.Post(_ => Screens.FolderSearch(p), null);
         }, null, -1, false);
+        // ✦ A button of the Nova tab in Word, Excel, PowerPoint, Outlook, Visio, Project, Access or Publisher.
+        officeEvt = new EventWaitHandle(false, EventResetMode.AutoReset, "NovaEnhanceWindows-office");
+        OfficeRibbon.Refresh();
+        ThreadPool.RegisterWaitForSingleObject(officeEvt, (_, _) =>
+        {
+            string a = null;
+            try { var f = Path.Combine(Paths.Cache, "office-request.txt"); a = File.ReadAllText(f).Trim(); File.Delete(f); } catch { }
+            if (!string.IsNullOrEmpty(a)) Program.UiContext.Post(_ => Screens.Office(a), null);
+        }, null, -1, false);
 
         if (Store.Bool("win_addin", false) || Store.Bool("win_addin_it", false))
         {
@@ -203,6 +221,7 @@ class NovaContext : ApplicationContext
         Program.UiContext.Post(_ =>
         {
             if (Program.StartSearch != null) Screens.FolderSearch(Program.StartSearch);
+            if (Program.StartOffice != null) Screens.Office(Program.StartOffice);
             // 🛡 Restarted by the Guardian: say so, keep the report, reopen the window you had.
             if (Program.Restored)
             {
@@ -391,15 +410,35 @@ static class Screens
         folder.Begin(path);
     }
 
-    public static async void Enhance()
+    public static async void Enhance() => await EnhanceWith(null);
+
+    /// <summary>The Enhance window with the selected text, started in one mode (✦ Nova tab buttons: Fix grammar, Shorten…).</summary>
+    public static async Task EnhanceWith(string mode)
     {
         try
         {
             var (h, text) = await Selection.Grab();
             if (enh == null || enh.IsDisposed) enh = new EnhanceForm();
-            enh.Start(h, text);
+            enh.Start(h, text, mode);
         }
         catch (Exception e) { Log.Error("enhance window", e); }
+    }
+
+    /// <summary>✦ A button of the Nova tab in an Office program.</summary>
+    public static void Office(string action)
+    {
+        Log.Write("Office tab: " + action);
+        switch (action)
+        {
+            case var m when m.StartsWith("mode:"): _ = EnhanceWith(m[5..]); break;
+            case "enhance": Enhance(); break;
+            case "mailask": MailAsk(null); break;
+            case "search": Ask(); break;
+            case "hub": HubSelection(); break;
+            case "brief": Brief(); break;
+            case "files": FindFile(""); break;
+            default: Settings(); break;
+        }
     }
 
     static MailAskForm mailAsk;

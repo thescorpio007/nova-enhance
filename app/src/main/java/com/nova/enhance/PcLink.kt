@@ -61,6 +61,7 @@ object PcLink {
             .putInt("port", o.optInt("port", 47323)).putString("relay", o.optString("relay")).putString("rt", o.optString("rt"))
             .putLong("paired_at", System.currentTimeMillis()).apply()
         if (old != o.getString("key")) wipe(c)
+        GDrive.learn(c, o.optJSONObject("gd"))      // ☁ how to read Google Drive by itself
         schedule(c)   // safe: never throws
         return "✓ Paired with ${o.optString("pc")}"
     }
@@ -174,11 +175,21 @@ object PcLink {
         if (busy) return "Already updating…"
         busy = true
         try {
-            progress("Looking for your PC on this Wi-Fi…")
-            val base = wifi(c)
-            val way = if (base != null) "📶 office Wi-Fi" else if (hasRelay(c)) "🔁 relay" else throw Exception("Your PC is not on this Wi-Fi and no relay is set up")
+            // ☁ Google Drive first (the PC can be off), then 📶 the office Wi-Fi, then 🔁 the relay.
+            var drive: Map<String, String>? = null
+            var driveErr = ""
+            if (GDrive.signedIn(c)) {
+                progress("☁ Reading Google Drive…")
+                try { drive = GDrive.syncFiles(c).takeIf { it.containsKey("manifest.nes") } ?: run { driveErr = "the PC copy is not in Google Drive yet"; null } }
+                catch (e: Exception) { driveErr = e.message ?: "failed" }
+            }
+            val base = if (drive == null) { progress("Looking for your PC on this Wi-Fi…"); wifi(c) } else null
+            val way = if (drive != null) "☁ Google Drive" else if (base != null) "📶 office Wi-Fi" else if (hasRelay(c)) "🔁 relay"
+                else throw Exception(if (driveErr.isNotEmpty()) "Google Drive: $driveErr · and your PC is not on this Wi-Fi" else "Your PC is not on this Wi-Fi and no relay is set up")
+            val drv = drive
             fun fetch(name: String): ByteArray? =
-                if (base != null) {
+                if (drv != null) drv[name]?.let { GDrive.download(c, it) }
+                else if (base != null) {
                     val (code, b) = http("$base/nes/" + name.split('/').joinToString("/") { java.net.URLEncoder.encode(it, "UTF-8").replace("+", "%20") },
                         headers = mapOf("X-Nova-Pair" to pairToken(c)), readMs = 300000)
                     if (code == 200) b else null
@@ -188,6 +199,7 @@ object PcLink {
                 }
             progress("Reading what your PC has ($way)…")
             val man = JSONObject(text(c, fetch("manifest.nes") ?: throw Exception("Your PC has not prepared the phone copy yet — Nova on the PC: Settings → 📱 Phone link → ⟳ Update the phone now")))
+            GDrive.learn(c, man.optJSONObject("gd"))
             val p = sp(c)
             val got = try { JSONObject(p.getString("got", "{}")!!) } catch (_: Exception) { JSONObject() }
             if (p.getString("fullAt", "") != man.optString("fullAt")) {
@@ -230,10 +242,11 @@ object PcLink {
                 .putString("last_way", way)
                 .putString("last_note", when {
                     left == 0 -> ""
+                    drive != null -> "📥 $pct% of the copy · $left file(s) not in Google Drive yet — continues by itself"
                     base == null -> "📥 $pct% of the copy · $left file(s) wait for the office Wi-Fi (too big for the relay)"
                     else -> "📥 $pct% of the copy · $left file(s) left — continues by itself"
                 }).apply()
-            if (left > 0 && base != null) scheduleSoon(c)
+            if (left > 0 && (base != null || drive != null)) scheduleSoon(c)
             return "✓ $copied file(s) copied via $way" + (if (left > 0) " · $pct% done, $left left" else " · complete")
         } catch (e: Exception) {
             sp(c).edit().putString("last_note", "⚠ " + (e.message ?: "failed")).apply()

@@ -47,6 +47,9 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 
 [Files]
 Source: "{#SourceDir}\NovaEnhance.exe"; DestDir: "{app}"; Flags: ignoreversion
+; ✦ The Nova tab for every Office program (Office loads its own copy per build, so these are never locked).
+Source: "{#SourceDir}\NovaRibbon64.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceDir}\NovaRibbon32.dll"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Nova Enhance"; Filename: "{app}\NovaEnhance.exe"

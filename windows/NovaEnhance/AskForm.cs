@@ -379,6 +379,8 @@ class ReadPane : Panel
         finally { fitting = false; }
     }
 
+    public void Clear() => Empty();
+
     void Empty()
     {
         s.Controls.Clear();
@@ -750,7 +752,7 @@ class AskForm : NovaForm
         fbtn.Margin = new Padding(16, 2, 0, 0);
         head.Controls.Add(fbtn);
 
-        var qrow = stack.Add(new TableLayoutPanel { ColumnCount = 7, RowCount = 1, AutoSize = false, Height = 40, BackColor = Color.Transparent, Margin = new Padding(0, 4, 0, 6) }, true);
+        var qrow = stack.Add(new TableLayoutPanel { ColumnCount = 8, RowCount = 1, AutoSize = false, Height = 40, BackColor = Color.Transparent, Margin = new Padding(0, 4, 0, 6) }, true);
         qrow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         qrow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         qrow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -768,21 +770,27 @@ class AskForm : NovaForm
         new ToolTip().SetToolTip(projBtn, "Search only the emails, files and drawings of one project (Nova sorts every email per project)");
         qrow.Controls.Add(projBtn, 0, 0);
         qrow.Controls.Add(question, 1, 0);
+        // ✕ Clear: right at the end of the question box — everything goes, back to a clean fresh page (the project and "Search in" stay).
+        var clearBtn = Th.B("✕", ClearAll);
+        clearBtn.Margin = new Padding(4, 0, 0, 0); clearBtn.Width = 40; clearBtn.ForeColor = Color.FromArgb(0xC9, 0xCE, 0xD8);
+        new ToolTip().SetToolTip(clearBtn, "Clear everything — the question, the results, the reading pane and the conversation — back to a fresh page");
+        qrow.Controls.Add(clearBtn, 2, 0);
         // ⏸ Pause / ■ Stop: for a search that takes long (a slow AI, a big mailbox).
         pauseBtn = Th.B("⏸ Pause", TogglePause);
         pauseBtn.Margin = new Padding(8, 0, 0, 0); pauseBtn.Enabled = false; pauseBtn.ForeColor = Color.FromArgb(0xFF, 0xD2, 0x7A);
-        qrow.Controls.Add(pauseBtn, 2, 0);
+        qrow.Controls.Add(pauseBtn, 3, 0);
         stopBtn = Th.B("■ Stop", StopSearch);
         stopBtn.Margin = new Padding(6, 0, 0, 0); stopBtn.Enabled = false; stopBtn.ForeColor = Color.FromArgb(0xFF, 0x9A, 0xA0);
-        qrow.Controls.Add(stopBtn, 3, 0);
+        qrow.Controls.Add(stopBtn, 4, 0);
         micBtn = Th.B("🎤", ToggleMic);
         micBtn.Margin = new Padding(8, 0, 0, 0);
-        qrow.Controls.Add(micBtn, 4, 0);
+        qrow.Controls.Add(micBtn, 5, 0);
         var askBtn = Th.B("Ask", () => Run(question.Text, false), true);
         askBtn.Margin = new Padding(8, 0, 0, 0);
-        qrow.Controls.Add(askBtn, 5, 0);
+        qrow.Controls.Add(askBtn, 6, 0);
         qrow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        qrow.Controls.Add(SearchSyntax.HelpButton(question, true, () => Run(question.Text, false)), 6, 0);
+        qrow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        qrow.Controls.Add(SearchSyntax.HelpButton(question, true, () => Run(question.Text, false)), 7, 0);
 
         // ✎ More instructions for my AI · filter level · ⭐ My prompts
         var prow = stack.Add(Th.Row(false));
@@ -832,27 +840,10 @@ class AskForm : NovaForm
         examples = stack.Add(Th.Row());
         examples.FlowDirection = FlowDirection.TopDown;
         examples.WrapContents = false;
-        examples.Controls.Add(Th.Section("Try asking"));
-        foreach (var ex in Packs.IsConstruction ? new[]
-                 {
-                     "Which emails addressed to me this week are still awaiting my reply?",
-                     "Emails from the consultant about the façade drawings last month, not answered",
-                     "Find the RFI where structural asked about the slab openings",
-                     "Which of my emails got no answer after 3 days?"
-                 } : new[]
-                 {
-                     "Which emails addressed to me this week are still awaiting my reply?",
-                     "Emails from my manager last month that I didn't answer",
-                     "Find the email with the " + (Packs.Current.ExSearch.Length > 0 ? Packs.Current.ExSearch : "latest report"),
-                     "Which of my emails got no answer after 3 days?"
-                 })
-        {
-            var b = Th.B("“" + ex + "”", () => { question.Text = ex; Run(ex, false); });
-            b.Font = Th.F(9.5f);
-            b.ForeColor = Color.FromArgb(0xC9, 0xCE, 0xD8);
-            b.BackColor = Th.Card;
-            examples.Controls.Add(b);
-        }
+        DrawExamples();
+        // A click on an empty part of the page ends the edit of a quick question (it is saved).
+        foreach (var surf in new Control[] { stack, examples })
+            surf.MouseDown += (_, _) => { if (QuickEditing >= 0) question.Focus(); };
 
         understood = stack.Add(Th.Wrap("", 9.5f, Th.Text));
         planBox = stack.Add(new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, BackColor = Color.Transparent, Margin = new Padding(0, 2, 0, 2), Visible = false });
@@ -875,8 +866,9 @@ class AskForm : NovaForm
         message.BackColor = Th.Card;
         message.Padding = new Padding(8);
         message.Visible = false;
-        filesBox = listHost.Add(new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = Color.Transparent, Margin = new Padding(0, 0, 0, 6), Visible = false });
         list = listHost.Add(new MailList());
+        // 📁 Project files & drawings: always BELOW the emails (the emails come first).
+        filesBox = listHost.Add(new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = Color.Transparent, Margin = new Padding(0, 10, 0, 6), Visible = false });
         list.OnSummary = Summary;
         list.OnDraft = Draft;
         list.OnHandled = MarkHandled;
@@ -1180,7 +1172,7 @@ class AskForm : NovaForm
             {
                 try { fileRows = await filesTask; } catch { fileRows = new(); }
                 DrawFiles();
-                if (fileRows.Count > 0) info.Text += $" · 📁 {fileRows.Count} file(s) / note(s) above the emails";
+                if (fileRows.Count > 0) info.Text += $" · 📁 {fileRows.Count} file(s) / note(s) below the emails";
             }
             else
             {
@@ -1267,7 +1259,7 @@ class AskForm : NovaForm
         if (my.IsCancellationRequested || cts != my || IsDisposed) return;
         fileRows = rows;
         DrawFiles();
-        info.Text = info.Text.Replace(" · 📁 files still being searched…", "") + (rows.Count > 0 ? $" · 📁 {rows.Count} file(s) / note(s) above the emails" : "");
+        info.Text = info.Text.Replace(" · 📁 files still being searched…", "") + (rows.Count > 0 ? $" · 📁 {rows.Count} file(s) / note(s) below the emails" : "");
     }
 
     static string Short(string t) { t = Regex.Replace(t ?? "", @"\s+", " ").Trim(); return t.Length > 140 ? t[..140] + "…" : t; }
@@ -1483,6 +1475,118 @@ class AskForm : NovaForm
     }
 
     int ListWidth() => Math.Max(300, (wide ? split.Panel1.ClientSize.Width : listHost.ClientSize.Width) - listHost.Padding.Horizontal - 24);
+
+    // ------------------------------------------------------------------ ✕ Clear · ✦ Try asking (your own quick questions)
+
+    void ClearAll()
+    {
+        cts?.Cancel();
+        try { SearchGate.Resume(); } catch { }
+        Searching(false);
+        question.Text = ""; follow.Text = ""; instr.Text = "";
+        hits = new(); rawHits = new(); hidden = new(); showHidden = false; list.Nova = null; filterVal = "";
+        lastQuestion = ""; lastInstr = ""; lastIntent = ""; lastExport = null;
+        fileRows = new(); filesAll = false; DrawFiles();
+        understood.Text = ""; info.Text = ""; message.Visible = false;
+        planBox.Visible = resultRow.Visible = false; hiddenLink.Visible = false;
+        ShowList();
+        countBar.Visible = false; sortBar.Visible = filterBar.Visible = false;
+        filePreview.Visible = false; pane.Visible = true; pane.Clear();
+        try { list.ClearPicks(); pickBar.Refresh2(); } catch { }
+        try { talk.Fresh(); } catch { }
+        DrawExamples();
+        examples.Visible = true;
+        stack.FitAll(); listHost.FitAll();
+        try { listHost.AutoScrollPosition = new Point(0, 0); } catch { }
+        question.Focus();
+    }
+
+    /// <summary>Your quick questions / tasks (Settings backup keeps them). First time: the two everyday ones.</summary>
+    static List<string> QuickList
+    {
+        get
+        {
+            var raw = Store.Str("win_ask_quick", "\u0001");
+            if (raw == "\u0001") return new() { "Which emails addressed to me this week are still awaiting my reply?", "Which of my emails got no answer after 3 days?" };
+            try { return System.Text.Json.JsonSerializer.Deserialize<List<string>>(raw) ?? new(); } catch { return new(); }
+        }
+        set => Store.Set("win_ask_quick", System.Text.Json.JsonSerializer.Serialize(value.Where(s => s.Trim().Length > 0).Select(s => s.Trim()).ToList()));
+    }
+
+    /// <summary>The list as stored, empty lines kept (one being typed).</summary>
+    static List<string> QuickList0()
+    {
+        var raw = Store.Str("win_ask_quick", "\u0001");
+        if (raw == "\u0001") return QuickList;
+        try { return System.Text.Json.JsonSerializer.Deserialize<List<string>>(raw) ?? new(); } catch { return new(); }
+    }
+
+    void DrawExamples()
+    {
+        examples.SuspendLayout();
+        foreach (Control c in examples.Controls.Cast<Control>().ToList()) c.Dispose();
+        var head = Th.Row(false);
+        head.Margin = new Padding(0);
+        head.Controls.Add(Th.Section("Try asking"));
+        var add = Th.B("＋ Add", () =>
+        {
+            var l = QuickList0(); l.Add(""); QuickEditing = l.Count - 1;
+            Store.Set("win_ask_quick", System.Text.Json.JsonSerializer.Serialize(l));   // keep the empty line while it is typed
+            DrawExamples();
+        });
+        add.Font = Th.F(9); add.Margin = new Padding(10, 4, 0, 0);
+        new ToolTip().SetToolTip(add, "Add your own quick question or task — click outside to save");
+        head.Controls.Add(add);
+        examples.Controls.Add(head);
+        var list0 = QuickList0();
+        for (int i = 0; i < list0.Count; i++)
+        {
+            var ii = i; var ex = list0[i];
+            var row = Th.Row(false); row.Margin = new Padding(0, 1, 0, 1);
+            if (QuickEditing == i)
+            {
+                var box = Th.Prose(Th.Box(false));
+                box.Width = Math.Max(420, Math.Min(900, examples.Parent?.Width - 120 ?? 600));
+                box.Text = ex;
+                box.PlaceholderText = "Your question or task, e.g. emails from the client this month not answered";
+                bool saved = false;
+                void Save()
+                {
+                    if (saved) return; saved = true;
+                    var l = QuickList0();
+                    if (ii < l.Count) { if (box.Text.Trim().Length == 0) l.RemoveAt(ii); else l[ii] = box.Text.Trim(); }
+                    QuickList = l; QuickEditing = -1;
+                    if (IsHandleCreated) BeginInvoke(DrawExamples);
+                }
+                // Saved while typing too, so nothing is lost; leaving the box (a click anywhere else) finishes it.
+                box.TextChanged += (_, _) => { var l = QuickList0(); if (ii < l.Count) { l[ii] = box.Text; Store.Set("win_ask_quick", System.Text.Json.JsonSerializer.Serialize(l)); } };
+                box.Leave += (_, _) => Save();
+                box.KeyDown += (_, e) =>
+                {
+                    if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; Save(); }
+                    else if (e.KeyCode == Keys.Escape) { e.SuppressKeyPress = true; box.Text = ex; Save(); }
+                };
+                row.Controls.Add(box);
+                examples.Controls.Add(row);
+                if (IsHandleCreated) BeginInvoke(() => { try { box.Focus(); box.SelectionStart = box.Text.Length; } catch { } });
+                continue;
+            }
+            var b = Th.B("“" + ex + "”", () => { question.Text = ex; Run(ex, false); });
+            b.Font = Th.F(9.5f);
+            b.ForeColor = Color.FromArgb(0xC9, 0xCE, 0xD8);
+            b.BackColor = Th.Card;
+            row.Controls.Add(b);
+            var ed = Th.B("✎", () => { QuickEditing = ii; DrawExamples(); });
+            ed.Font = Th.F(9); ed.Margin = new Padding(6, 0, 0, 0);
+            new ToolTip().SetToolTip(ed, "Edit — click outside to save (empty = remove)");
+            row.Controls.Add(ed);
+            examples.Controls.Add(row);
+        }
+        examples.ResumeLayout();
+        stack.FitAll();
+    }
+
+    int QuickEditing = -1;
 
     void ShowList()
     {

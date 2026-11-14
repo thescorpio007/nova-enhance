@@ -112,7 +112,7 @@ class EnhanceForm : NovaForm
         foreach (var (id, b) in modeBtns) Th.SetChip(b, id == Store.Mode);
     }
 
-    public void Start(IntPtr h, string text)
+    public void Start(IntPtr h, string text, string mode = null)
     {
         target = h;
         targetName = h == IntPtr.Zero ? "" : Selection.AppName(h);
@@ -129,7 +129,7 @@ class EnhanceForm : NovaForm
         PlaceNearCursor();
         Screens.Show(this);
         if (Ai.Active() == null) { Status("⚠ Add an AI key first: ⚙ → AI & API keys", Th.Warn); return; }
-        if (text.Trim().Length > 0) Run("grammar"); else orig.Focus();
+        if (text.Trim().Length > 0) Run(mode != null && Modes.All.Any(m => m.Id == mode) ? mode : "grammar"); else orig.Focus();
     }
 
     void PlaceNearCursor()

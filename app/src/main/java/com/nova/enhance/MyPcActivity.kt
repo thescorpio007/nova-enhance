@@ -438,6 +438,23 @@ class MyPcActivity : BaseActivity() {
 
     /** An email (.msg with attachments) or a project file, through the relay — then it opens. */
     private fun fetch(args: JSONObject) {
+        // ☁ A project file that is also in Google Drive (FreeFileSync copy): straight from Drive, the PC can be off.
+        val path = args.optString("path")
+        if (path.isNotEmpty() && GDrive.canOpen(this, path)) {
+            say("⏳ Opening from Google Drive…")
+            Thread {
+                val r = runCatching { GDrive.fetchWork(applicationContext, path) { say(it) } }
+                main.post {
+                    r.onSuccess { status.text = "✓ ${it.name} · from Google Drive"; openFile(it) }
+                        .onFailure { status.text = "⚠ Google Drive: ${it.message} — asking your PC instead…"; fetchFromPc(args) }
+                }
+            }.start()
+            return
+        }
+        fetchFromPc(args)
+    }
+
+    private fun fetchFromPc(args: JSONObject) {
         say("⏳ Asking your PC for the file (30–60 s)…")
         Thread {
             val r = runCatching {
@@ -571,8 +588,22 @@ class MyPcActivity : BaseActivity() {
             sp.edit().putInt("every_min", m).apply(); PcLink.schedule(c); show("settings")
         }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
         body.addView(sv)
-        body.addView(Ui.text(c, "Ways: 📶 office Wi-Fi first (fast, the full copy) · 🔁 relay when away (small updates and questions to the PC).\n" +
-            "☁ Google Drive: your PC writes the encrypted copy to Google Drive; reading it on the phone needs a Google sign-in set up — coming next.", 12.5f, Ui.MUTED), Ui.lp(top = Ui.dp(c, 8)))
+        body.addView(Ui.text(c, "Ways: ☁ Google Drive first (from anywhere, the PC can be off) · 📶 office Wi-Fi · 🔁 relay when away (small updates and questions to the PC).", 12.5f, Ui.MUTED), Ui.lp(top = Ui.dp(c, 8)))
+        // ☁ Google Drive on this phone
+        body.addView(Ui.section(c, "☁ Google Drive"))
+        val gdLine = when {
+            GDrive.signedIn(c) -> "✓ Signed in" + GDrive.account(c).let { if (it.isNotBlank()) " as $it" else "" } + " — the copy and your project files come straight from Google Drive."
+            GDrive.configured(c) -> "Not signed in yet. One Google sign-in (read-only) and the phone updates from Google Drive by itself, even when the PC is off."
+            else -> "Your PC has not shared its Google sign-in yet: on the PC set up Settings → Google Drive, then ⟳ update once over the office Wi-Fi (or scan the QR code again)."
+        }
+        body.addView(Ui.text(c, gdLine, 13f, if (GDrive.signedIn(c)) Ui.TEXT else Ui.MUTED), Ui.lp(top = Ui.dp(c, 4)))
+        if (GDrive.configured(c)) body.addView(Ui.button(c, if (GDrive.signedIn(c)) "Sign out of Google Drive" else "☁ Sign in to Google Drive") {
+            if (GDrive.signedIn(c)) { GDrive.signOut(c); show("settings") }
+            else Thread {
+                val r = runCatching { GDrive.signIn(this) { say(it) } }
+                main.post { status.text = r.fold({ "✓ Google Drive connected" + (if (it.isNotBlank()) " ($it)" else "") + " — updating…" }, { "⚠ " + it.message }); show("settings"); if (r.isSuccess) syncNow() }
+            }.start()
+        }, Ui.lp(top = Ui.dp(c, 8)))
         body.addView(Ui.text(c, "On this phone: ${mb(PcLink.sizeOnPhone(c))} · %,d emails · %,d files".format(PcLink.count(c, "mail"), PcLink.count(c, "files")), 13f, Ui.TEXT), Ui.lp(top = Ui.dp(c, 8)))
         body.addView(Ui.button(c, "📷 Pair again (scan the QR code)") { scan() }, Ui.lp(top = Ui.dp(c, 14)))
         body.addView(Ui.button(c, "Unpair and delete the copy") {

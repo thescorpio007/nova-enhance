@@ -482,7 +482,8 @@ static class PhoneLink
         var o = new JsonObject
         {
             ["v"] = 2, ["pc"] = Environment.MachineName, ["build"] = Program.Shown, ["at"] = DateTime.Now.ToString("o"), ["fullAt"] = s.FullAt.ToString("o"),
-            ["last12"] = Last12, ["files"] = files, ["counts"] = JsonNode.Parse(JsonSerializer.Serialize(s.Counts)), ["oldest"] = MailIndex.OldestText
+            ["last12"] = Last12, ["files"] = files, ["counts"] = JsonNode.Parse(JsonSerializer.Serialize(s.Counts)), ["oldest"] = MailIndex.OldestText,
+            ["gd"] = PhoneDrive()     // ☁ the phone learns how to read Google Drive by itself (no new QR needed)
         };
         Write("manifest.nes", o.ToJsonString());
         File.WriteAllText(Path.Combine(Dir, "README.txt"),
@@ -721,13 +722,60 @@ static class PhoneLink
         });
     }
 
+    // ------------------------------------------------------------------ ☁ the phone reads Google Drive itself (no PC needed)
+
+    /// <summary>The sync folder's path inside My Drive ("Nova Enhance Sync", or "Work/Nova Enhance Sync" when a sub-folder was picked).</summary>
+    static string InMyDrive(string full)
+    {
+        var parts = full.Replace('/', '\\').TrimEnd('\\').Split('\\');
+        var i = Array.FindLastIndex(parts, p => p is "My Drive" or "Mon Drive" or "Meine Ablage" or "Mein Ablage" or "Mi unidad" or "Il mio Drive");
+        return i >= 0 ? string.Join("/", parts.Skip(i + 1)) : parts[^1];
+    }
+
+    /// <summary>Where the work folder is copied in My Drive (FreeFileSync or Drive itself): "" = My Drive root, "_MZA" = a folder, null = not found.
+    /// Settings → 📱 Phone link can set it; "auto" checks the project folders' names.</summary>
+    public static string Mirror
+    {
+        get
+        {
+            var set = Store.Str("win_pl_mirror", "auto");
+            if (set != "auto") return set == "-" ? null : set.Trim('/', '\\');
+            try
+            {
+                var work = Projects.WorkFolder; var root = DriveRoot;
+                if (work.Length == 0 || root.Length == 0 || !Directory.Exists(work)) return null;
+                var names = Directory.GetDirectories(work).Select(Path.GetFileName).Where(n => !n.StartsWith('.')).Take(40).ToList();
+                if (names.Count == 0) return null;
+                foreach (var cand in new[] { "", Path.GetFileName(work.TrimEnd('\\')) })
+                {
+                    var b = cand.Length == 0 ? root : Path.Combine(root, cand);
+                    if (Directory.Exists(b) && names.Count(n => Directory.Exists(Path.Combine(b, n))) * 2 >= names.Count) return cand;
+                }
+            }
+            catch { }
+            return null;
+        }
+    }
+
+    /// <summary>What the phone needs to read Google Drive by itself: the Google sign-in app (yours, Settings → Google Drive), the folder, the mirror.</summary>
+    static JsonObject PhoneDrive()
+    {
+        if (!DriveOn || !GDrive.Configured) return null;
+        var root = DriveRoot;
+        return new JsonObject
+        {
+            ["id"] = GDrive.ClientId, ["secret"] = GDrive.ClientSecret, ["folder"] = root.Length > 0 ? InMyDrive(Dir) : "Nova Enhance Sync",
+            ["work"] = Projects.WorkFolder, ["mirror"] = Mirror
+        };
+    }
+
     // ------------------------------------------------------------------ pairing QR
 
     /// <summary>What the QR code holds: the key, this PC's office addresses, and the relay (repository + key) for questions away from the office.</summary>
     public static string PairPayload() => new JsonObject
     {
         ["nova"] = 2, ["pc"] = Environment.MachineName, ["key"] = Convert.ToBase64String(Key), ["ip"] = new JsonArray(Addresses().Select(a => (JsonNode)a).ToArray()),
-        ["port"] = WifiPort, ["relay"] = Relay.Repo, ["rt"] = Relay.Token, ["drive"] = DriveOn ? "Nova Enhance Sync" : ""
+        ["port"] = WifiPort, ["relay"] = Relay.Repo, ["rt"] = Relay.Token, ["drive"] = DriveOn ? "Nova Enhance Sync" : "", ["gd"] = PhoneDrive()
     }.ToJsonString();
 
     /// <summary>The QR code: a link the phone's camera opens in Nova Enhance (novaenhance://pair?d=…).</summary>

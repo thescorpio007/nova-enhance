@@ -63,6 +63,18 @@ jobs:
           $f = Get-Item out\NovaEnhance.exe
           Write-Host ("::notice title=App::NovaEnhance.exe {0:N1} MB" -f ($f.Length / 1MB))
 
+      - name: ✦ Nova tab for Office (native add-in, 64-bit and 32-bit)
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $vc = Join-Path $vs "VC\Auxiliary\Build\vcvarsall.bat"
+          $src = (Resolve-Path windows\NovaRibbon).Path; $o = (Resolve-Path out).Path
+          foreach ($a in @(@("x64","64"), @("x86","32"))) {
+            New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\rb$($a[1])" | Out-Null
+            cmd /c "call `"$vc`" $($a[0]) >nul && cd /d `"$env:RUNNER_TEMP\rb$($a[1])`" && cl /nologo /LD /O2 /MT /EHsc /W3 /DUNICODE /D_UNICODE `"$src\NovaRibbon.cpp`" /link /DEF:`"$src\NovaRibbon.def`" /OUT:`"$o\NovaRibbon$($a[1]).dll`" ole32.lib oleaut32.lib uuid.lib advapi32.lib shell32.lib"
+            if ($LASTEXITCODE -ne 0) { Write-Host "::error title=Nova tab::the $($a[0]) add-in did not build"; exit 1 }
+          }
+          Get-ChildItem out\NovaRibbon*.dll | ForEach-Object { Write-Host ("::notice title=Nova tab::{0} {1:N0} KB" -f $_.Name, ($_.Length / 1KB)) }
+
       - name: Short test (storage, backup, phone backup, encrypted index, search, every window)
         run: |
           $o = "$env:RUNNER_TEMP\smoke.txt"

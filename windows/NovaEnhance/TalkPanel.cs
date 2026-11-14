@@ -111,6 +111,8 @@ class TalkPanel : Panel
         input.Focus(); input.SelectionStart = input.TextLength;
     }
 
+    public void Fresh() => NewChat();
+
     void NewChat()
     {
         cts?.Cancel(); conv = null; attach.Clear(); status.Text = "";

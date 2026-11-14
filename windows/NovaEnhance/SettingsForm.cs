@@ -1617,6 +1617,29 @@ class SettingsForm : NovaForm
             page.FitAll();
         }
         DriveLine();
+        // ☁ The phone reads Google Drive itself (no PC needed): your Google sign-in app + where the work folder is copied in Drive.
+        var phNote = Note(GDrive.Configured
+            ? "📱 The phone reads this folder from Google Drive by itself (one Google sign-in on the phone: 🖥 My PC → ⚙ → Sign in to Google Drive). The PC can be off."
+            : "📱 For the phone to read Google Drive by itself, set up the Google sign-in first (Settings → Google Drive → Client ID and secret).", GDrive.Configured ? Th.Text : Th.Warn);
+        var mrow = page.Add(Th.Row(false));
+        mrow.Controls.Add(Th.L("📂 Work folder copied to Google Drive (FreeFileSync…) at  My Drive /", 9.5f, Th.Text));
+        var mbox = Th.NoSpell(Th.Box(false)); mbox.Width = 200;
+        var mset = Store.Str("win_pl_mirror", "auto");
+        mbox.Text = mset == "auto" ? "" : mset == "-" ? "" : mset;
+        mbox.PlaceholderText = "auto";
+        mbox.Leave += (_, _) => Store.Set("win_pl_mirror", mbox.Text.Trim().Length == 0 ? "auto" : mbox.Text.Trim() == "/" ? "" : mbox.Text.Trim());
+        mrow.Controls.Add(mbox);
+        var mNote = Note("Checking…", Th.Muted);
+        async void MirrorLine()
+        {
+            var m = await Task.Run(() => PhoneLink.Mirror);
+            if (mNote.IsDisposed) return;
+            mNote.Text = m == null ? $"⚠ {Projects.WorkFolder} was not found in Google Drive — the phone opens files through the PC (Wi-Fi / relay). Type the folder above if it is copied elsewhere (/ = My Drive itself)."
+                : $"✓ {Projects.WorkFolder} = My Drive{(m.Length > 0 ? "/" + m : "")} — tapping a file on the phone opens it straight from Google Drive.";
+            mNote.ForeColor = m == null ? Th.Warn : Th.Good;
+            page.FitAll();
+        }
+        MirrorLine();
         var dpick = page.Add(Th.Row(false));
         dpick.Controls.Add(Th.B("📁 Pick the Google Drive folder…", () =>
         {
@@ -1899,6 +1922,22 @@ class SettingsForm : NovaForm
     // ------------------------------------------------------------------ Office tab
     void OfficeTab()
     {
+        // ✦ The Nova tab in EVERY desktop Office program (like Classic Menu) — recommended.
+        page.Add(Th.Section("✦ Nova tab in all Office programs (recommended)"));
+        Note("A real ✦ Nova tab in Word, Excel, PowerPoint, Outlook, Visio, Project, Access and Publisher: Fix grammar · Shorten · Professional · Informal · Expand · Translate the selected text, the Nova window, Search email, Ask Nova, Morning brief, Find a file — and in Outlook “Talk about this email”. For this Windows user only: no admin rights, no certificate, 32- and 64-bit Office.");
+        var rst = Th.L("", 9.5f, Th.Good);
+        Note(OfficeRibbon.Installed ? "✓ Installed — the ✦ Nova tab appears when an Office program starts (close and reopen the ones already open)." :
+             OfficeRibbon.FilesThere ? "Not installed yet." : "⚠ The Nova tab files are missing — reinstall Nova Enhance.", OfficeRibbon.Installed ? Th.Good : Th.Warn);
+        var rr = page.Add(Th.Row());
+        rr.Controls.Add(Th.B(OfficeRibbon.Installed ? "↻ Install again" : "✦ Install the Nova tab", () =>
+        {
+            try { OfficeRibbon.Install(); rst.Text = "✓ Installed — close and reopen Word, Excel, PowerPoint, Outlook… to see the ✦ Nova tab."; rst.ForeColor = Th.Good; }
+            catch (Exception e) { rst.Text = "⚠ " + e.Message; rst.ForeColor = Th.Bad; Log.Error("Office tab · install", e); }
+        }, true));
+        if (OfficeRibbon.Installed) rr.Controls.Add(Th.B("Remove the Nova tab", () => { OfficeRibbon.Uninstall(); Draw("Office tab"); }));
+        page.Add(rst);
+        Note("If the tab doesn't show: File → Options → Add-ins → Manage: COM Add-ins → Go… → tick “✦ Nova Enhance”. A company policy may block add-ins — the side panel below still works.", Th.Muted);
+        page.Add(Th.Section("Side panel (Word, Excel, PowerPoint and Outlook)"));
         Note("A ✦ Nova Enhance button inside Word, Excel, PowerPoint and Outlook: fix grammar, shorten, rewrite, translate, keep the original — and in Outlook summarise and draft replies. The panel runs from Nova on this PC, so keep Nova running (it starts with Windows).");
         page.Add(Th.Section("Status"));
         var reg = OfficeAddin.RegisteredForOffice();
