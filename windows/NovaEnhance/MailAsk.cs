@@ -17,6 +17,7 @@ class AskSource
 /// <summary>Your signature stays as it is: the AI's own closing is removed when Outlook already adds yours.</summary>
 static class Sig
 {
+    public static Regex ClosingRx => Closing;
     static readonly Regex Closing = new(@"^\s*((best|kind|warm|warmest|with best|many)\s+regards|regards|thanks?( you)?( and regards| & regards)?|thank you( very much)?|sincerely|yours (sincerely|faithfully)|cordialement|bien à vous|مع (خالص )?التحية|وتفضلوا)\b[\s,.!]*$", RegexOptions.IgnoreCase);
 
     public static string StripClosing(string text)
@@ -75,6 +76,9 @@ class MailAskForm : NovaForm
         hr.Controls.Add(Th.L("💬 Talk about this email", 13, Th.Text, true));
         hr.Controls.Add(Th.B("🕘 Chat history", Screens.ChatHistory));
         hr.Controls.Add(Th.B("＋ New chat", NewChat));
+        InitSide("mailask");
+        hr.Controls.Add(SideButton());
+        hr.Controls.Add(Th.B("🧹 Clear", () => { NewChat(); status.Text = "🧹 Cleared — this email stays the reference."; }));
         hr.Controls.Add(Th.B("⇩ Word", SaveWord));
         head = top.Add(Th.Wrap("", 11, Th.Text), true);
         head.Font = Th.F(11, true);
@@ -350,6 +354,7 @@ class MailAskForm : NovaForm
         "After every fact put its source like [A2] or [D1] (several allowed). Prefer the LATEST revision; if you rely on one marked SUPERSEDED, say so with ⚠. " +
         "When sources disagree (spec vs BOQ vs drawing vs email), write a line starting with ⚠ CONFLICT: naming both values and both sources. " +
         "If something the prompt asks for is not in the sources, write 'Not found in your documents' for it — never invent values, clauses, dates or names. " +
+        "Never bring in people, emails, projects or facts that are not in these sources (other email threads, earlier chats). " +
         "Be technically precise: exact values, units, standards, clause numbers as written in the sources. This is a conversation: earlier questions and answers are given for context.";
 
     const string CheckRules =
@@ -452,7 +457,7 @@ class MailAskForm : NovaForm
                 var already = new HashSet<string>(sources.Where(s => s.Path is { Length: > 0 }).Select(s => s.Path), StringComparer.OrdinalIgnoreCase);
                 var exclude = new HashSet<string>(sources.Where(s => s.Mail != null).Select(s => s.Mail.Entry ?? ""));
                 var ui = SynchronizationContext.Current;
-                var nsOpts = new NovaSearch.Opts { Folders = listed, Project = proj, Docs = listed.Count > 0, Drawings = false, ExcludeConv = anchor.Conv ?? "", ExcludeEntries = exclude, MaxEmails = 4 };
+                var nsOpts = new NovaSearch.Opts { Hist = false, Folders = listed, Project = proj, Docs = listed.Count > 0, Drawings = false, ExcludeConv = anchor.Conv ?? "", ExcludeEntries = exclude, MaxEmails = 4 };
                 var ns = await Task.Run(() => NovaSearch.Run(p + " " + Outstanding.NormSubject(anchor.Subject ?? ""), terms, nsOpts,
                     stMsg => ui?.Post(_ => { if (!status.IsDisposed) status.Text = stMsg; }, null), my.Token), my.Token);
                 foreach (var x in ns.Docs.Where(x => !already.Contains(x.Path) || (x.Loc ?? "").Length > 0))

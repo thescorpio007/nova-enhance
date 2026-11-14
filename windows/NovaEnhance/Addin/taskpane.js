@@ -108,6 +108,19 @@
     it.subject.getAsync(function (r) { var s = r.status === Office.AsyncResultStatus.Succeeded ? (r.value || "") : ""; cb("mail|" + conv + "|" + s, s); });
   }
 
+  // 💬 The key of the chat about this email: a brand-new email (no conversation yet) gets its own,
+  // so it never continues another email's chat.
+  function askKey(cb) {
+    draftKey(function (key, subj) {
+      var it = Office.context.mailbox && Office.context.mailbox.item;
+      if (it && !it.conversationId) {
+        if (!window.__novaNewKey) window.__novaNewKey = "new-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+        key = "mail|" + window.__novaNewKey + "|";
+      }
+      cb(key, subj);
+    });
+  }
+
   function snapshot(label, cb) {
     if (host !== "compose") { if (cb) cb(); return; }
     draftKey(function (key, subj) {
@@ -505,7 +518,7 @@
     function dAdd(cls, text) { var d = document.createElement("div"); d.className = cls; d.appendChild(document.createTextNode(text)); $("dlog").appendChild(d); $("dlog").scrollTop = 1e6; show("dlog", true); return d; }
     function readDraft(cb) {
       var it = Office.context.mailbox.item, out = { conv: it.conversationId || "" };
-      draftKey(function (key, subj) {
+      askKey(function (key, subj) {
         out.key = key; out.subject = subj;
         var names = function (r) { var v = r && r.value || []; var a = []; for (var i = 0; i < v.length; i++) a.push(v[i].displayName || v[i].emailAddress); return a.join("; "); };
         var getTo = function (next) { if (it.to && it.to.getAsync) it.to.getAsync(function (r) { out.to = names(r); next(); }); else next(); };
@@ -556,12 +569,12 @@
       document.body.removeChild(ta);
     };
     $("dfull").onclick = function () {
-      draftKey(function (key, subj) {
+      askKey(function (key, subj) {
         api("open", { what: "askdraft", key: key, subject: subj }, function () { status("↗ The conversation continues in Nova's window on your desktop", "good"); });
       });
     };
-    $("dnew").onclick = function () { $("dlog").innerHTML = ""; show("dlog", false); show("dacts", false); show("dnew", false); dLast = dLastDraft = "";
-      draftKey(function (key) { api("askdraft/new", { key: key }, function () { }); }); };
+    $("dnew").onclick = function () { $("dlog").innerHTML = ""; show("dlog", false); show("dacts", false); dLast = dLastDraft = ""; status("🧹 Cleared — a new conversation about this email", "good");
+      askKey(function (key) { api("askdraft/new", { key: key }, function () { }); }); };
     $("insert").onclick = function () { putText($("result").value, false, true, function (ok, err) { status(ok ? "✓ Inserted" : "⚠ " + err, ok ? "good" : "bad"); }); };
     $("copy").onclick = function () { var t = $("result"); t.select(); try { document.execCommand("copy"); status("⧉ Copied", "good"); } catch (e) { status("Press Ctrl + C to copy"); } };
     $("putback").onclick = function () {

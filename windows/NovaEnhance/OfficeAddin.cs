@@ -717,7 +717,7 @@ static class Server
                     var nums = Revisions.Numbers(q + "\n" + own + "\n" + quoted).Take(6);
                     var qx = q + " " + subject + " " + string.Join(" ", nums);
                     var docsOk = FolderAsk.Sees != "never" || ConfirmSend.LocalHandlesPrivate;
-                    var ns = await Task.Run(() => NovaSearch.Run(qx, FolderAsk.LocalTerms(q + " " + subject), new NovaSearch.Opts { Project = proj, ExcludeConv = convId, MaxEmails = 4, MaxDocs = 10, MaxFiles = 5, Docs = docsOk, Drawings = docsOk }, null, CancellationToken.None));
+                    var ns = await Task.Run(() => NovaSearch.Run(qx, FolderAsk.LocalTerms(q + " " + subject), new NovaSearch.Opts { Hist = false, Project = proj, ExcludeConv = convId, MaxEmails = 4, MaxDocs = 10, MaxFiles = 5, Docs = docsOk, Drawings = docsOk }, null, CancellationToken.None));
                     foreach (var px in ns.Drawings.Concat(ns.Docs)) src.Add(("D" + d++, FolderAsk.Label(px), px.Text.Length > 1400 ? px.Text[..1400] : px.Text, px.Path));
                     foreach (var px in ns.Emails) src.Add(("E" + e++, px.Loc, px.Text, ""));
                     int mi = 1, hi = 1;

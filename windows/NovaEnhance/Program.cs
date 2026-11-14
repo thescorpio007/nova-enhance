@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -196,6 +197,8 @@ class NovaContext : ApplicationContext
             Program.UiContext.Post(_ => Screens.FolderSearch(p), null);
         }, null, -1, false);
         // ✦ A button of the Nova tab in Word, Excel, PowerPoint, Outlook, Visio, Project, Access or Publisher.
+        // 🛡 Check before sending: listens to Outlook's Send (again every minute — Outlook may open later or restart).
+        try { SendCheck.Ensure(); } catch (Exception e) { Log.Warn("check before sending", e.Message); }
         // One event per button: the add-in only signals it (no files, no program started from Office).
         OfficeRibbon.Refresh();
         foreach (var id in OfficeRibbon.Buttons)
@@ -269,6 +272,7 @@ class NovaContext : ApplicationContext
             UiWatch.Step("minute check: calendar"); Calendar.Tick();
             UiWatch.Step("minute check: my work"); Work.Tick();
             UiWatch.Step("minute check: prompts"); Prompts.Tick();
+            UiWatch.Step("minute check: send check"); SendCheck.Ensure();
             UiWatch.Step("idle");
             if (ticks++ % 60 == 0 && Updater.Due) { await Updater.Check(); Updater.Offer(false); }
         }
@@ -417,11 +421,25 @@ static class Screens
         try
         {
             var (h, text) = await Selection.Grab();
+            // ✉ Outlook: nothing selected (or the whole email selected) = your text only — closing, signature and earlier emails stay untouched.
+            bool body = false, all = false;
+            if (h != IntPtr.Zero && OutlookBody.IsOutlook(h))
+            {
+                var own = OutlookBody.Read();
+                if (own.Length > 0 && (string.IsNullOrWhiteSpace(text) || Norm(text).StartsWith(Norm(own)) || Norm(text).Length > Norm(own).Length + 20 && Norm(text).Contains(Norm(own))))
+                { text = own; body = true; }
+            }
+            // Nothing selected anywhere else: all the text of the box / document in front.
+            // (Writing programs only — in a web page, Ctrl+A would take the whole page.)
+            if (!body && string.IsNullOrWhiteSpace(text) && h != IntPtr.Zero && Regex.IsMatch(Selection.AppName(h), @"Word|PowerPoint|OneNote|Notepad|WordPad|Publisher|Visio|Project|Access|Teams", RegexOptions.IgnoreCase))
+            { text = await Selection.GrabAll(h); all = text.Trim().Length > 0; }
             if (enh == null || enh.IsDisposed) enh = new EnhanceForm();
-            enh.Start(h, text, mode);
+            enh.Start(h, text, mode, body, all);
         }
         catch (Exception e) { Log.Error("enhance window", e); }
     }
+
+    static string Norm(string s) => Regex.Replace(s ?? "", @"\s+", " ").Trim();
 
     /// <summary>✦ A button of the Nova tab in an Office program.</summary>
     public static void Office(string action)
@@ -607,6 +625,28 @@ static class Selection
         }
         try { if (old != null) Clipboard.SetText(old); } catch { }
         return (h, got);
+    }
+
+    /// <summary>Nothing selected: selects all the text of the box / document in front (Ctrl+A) and copies it.</summary>
+    public static async Task<string> GrabAll(IntPtr h)
+    {
+        if (h == IntPtr.Zero || IsOwn(h)) return "";
+        string old = null;
+        try { if (Clipboard.ContainsText()) old = Clipboard.GetText(); } catch { }
+        try { Clipboard.Clear(); } catch { }
+        SetForegroundWindow(h);
+        await Task.Delay(80);
+        CtrlPlus(0x41);
+        await Task.Delay(120);
+        CtrlPlus(0x43);
+        string got = "";
+        for (int i = 0; i < 25; i++)
+        {
+            await Task.Delay(30);
+            try { if (Clipboard.ContainsText()) { got = Clipboard.GetText(); break; } } catch { }
+        }
+        try { if (old != null) Clipboard.SetText(old); } catch { }
+        return got;
     }
 
     public static async Task<bool> Paste(IntPtr h, string text)

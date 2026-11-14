@@ -35,6 +35,8 @@ class EnhanceForm : NovaForm
         aiBox.SelectedIndexChanged += (_, _) => { if (aiBox.SelectedItem is AiItem a) Store.Target = a.P.Id; };
         head.Controls.Add(aiBox);
         head.Controls.Add(Th.B("⚙", () => Screens.Settings()));
+        InitSide("enhance");
+        head.Controls.Add(SideButton());
 
         from = stack.Add(Th.Wrap("", 9.5f));
 
@@ -112,21 +114,26 @@ class EnhanceForm : NovaForm
         foreach (var (id, b) in modeBtns) Th.SetChip(b, id == Store.Mode);
     }
 
-    public void Start(IntPtr h, string text, string mode = null)
+    bool outlookBody, wholeText;
+
+    public void Start(IntPtr h, string text, string mode = null, bool outlookBody = false, bool wholeText = false)
     {
         target = h;
+        this.outlookBody = outlookBody; this.wholeText = wholeText;
         targetName = h == IntPtr.Zero ? "" : Selection.AppName(h);
         FillAi();
         DrawModes();
         text ??= "";
         from.Text = text.Trim().Length > 0
-            ? $"Selected in {targetName} · {Words(text)} words"
+            ? (outlookBody ? $"✉ Your email in {targetName} · {Words(text)} words · the closing, your signature and earlier emails stay untouched"
+               : wholeText ? $"All the text in {targetName} · {Words(text)} words (nothing was selected)"
+               : $"Selected in {targetName} · {Words(text)} words")
             : (targetName.Length > 0 ? $"Nothing was selected in {targetName} — type or paste text here" : "Type or paste text here");
         replaceBtn.Text = targetName.Length > 0 ? "⇄ Replace in " + Short(targetName) : "⇄ Copy result";
         orig.Text = Crlf(text);
         result.Text = "";
         Status("", Th.Muted);
-        PlaceNearCursor();
+        if (!SideOn) PlaceNearCursor();
         Screens.Show(this);
         if (Ai.Active() == null) { Status("⚠ Add an AI key first: ⚙ → AI & API keys", Th.Warn); return; }
         if (text.Trim().Length > 0) Run(mode != null && Modes.All.Any(m => m.Id == mode) ? mode : "grammar"); else orig.Focus();
@@ -185,8 +192,14 @@ class EnhanceForm : NovaForm
         if (t.Trim().Length == 0) { Status("Nothing to put back yet", Th.Warn); return; }
         if (target == IntPtr.Zero) { Clipboard.SetText(t); Status("⧉ Copied — paste it where you need it", Th.Good); return; }
         Hide();
+        if (outlookBody)
+        {
+            // ✉ Only your text in the email — closing, signature and earlier emails untouched.
+            if (OutlookBody.Replace(t)) { Program.Balloon("✓ Replaced in your email", "Only your text changed — the signature is untouched. Ctrl+Z in Outlook to undo."); return; }
+            Status("⚠ Outlook did not accept the change — select the text and try again", Th.Warn); Show(); return;
+        }
         await Selection.Paste(target, t);
-        Program.Balloon("✓ Replaced in " + targetName, "Press Ctrl+Z there to undo. The original is saved in 📄 Originals.");
+        Program.Balloon("✓ Replaced in " + targetName, (wholeText ? "All the text was replaced (as plain text). " : "") + "Press Ctrl+Z there to undo. The original is saved in 📄 Originals.");
     }
 
     ContextMenuStrip LangMenu()

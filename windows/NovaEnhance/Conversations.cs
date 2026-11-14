@@ -150,6 +150,7 @@ static class Conversations
         "details{margin-top:4px}summary{cursor:pointer;color:#B9B0FF}li.ok{color:#BFEAD6}li.part{color:#FFC27A}li.no{color:#FF9A9A;text-decoration:line-through}" +
         ".acts{margin-top:8px}.acts a{font-size:12.5px;color:#B9B0FF;margin-right:14px;text-decoration:none}.acts a:hover{color:#fff}" +
         "mark{background:#5A4A00;color:#FFE08A;border-radius:2px}.srcs{font-size:12px;color:#9AA3B5;margin-top:8px}.muted{color:#9AA3B5}.wait{color:#B9B0FF;font-style:italic}" +
+        ".refs{margin-top:10px;padding:8px 10px;border:1px solid #2A3142;border-radius:8px;background:#151A24;font-size:13px}.refs div{margin-top:4px}.refs a.rl{color:#C9CEFF;text-decoration:none}.refs a.rl:hover{text-decoration:underline}" +
         ".head{border-bottom:1px solid #2A3040;padding-bottom:10px;margin-bottom:16px}.sign{text-align:right;color:#7C6CFF;font-weight:bold;font-size:12px;margin-top:20px}" + FileTalk.TableCss;
 
     /// <summary>The label of the draft link under answers ("✍ Put into my draft" while you are writing an email).</summary>
@@ -203,6 +204,14 @@ static class Conversations
             }
             sb.Append("</div>");
         }
+        // 📎 References used: the emails, attachments and documents the answer cites — open, one click each.
+        var cited = Regex.Matches(m.Text ?? "", @"\[([EADFMH]\d{1,2})(?:\s*,\s*([EADFMH]\d{1,2}))*\]").SelectMany(x => x.Groups.Cast<Group>().Skip(1).SelectMany(g => g.Captures.Cast<Capture>()).Select(c => c.Value))
+            .Where(ids.Contains).Distinct().ToList();
+        if (cited.Count > 0)
+            sb.Append("<div class=refs><b>📎 References used</b>")
+              .Append(string.Join("", cited.Select(id => m.Src.First(s => s.Id == id)).Select(s =>
+                  $"<div><a class=src href=\"https://nova.src/{index}/{s.Id}\">{s.Id}</a> {(s.Id[0] switch { 'E' => "✉", 'A' => "📎", 'D' or 'F' => "📄", 'M' => "🧠", _ => "🕘" })} <a class=rl href=\"https://nova.src/{index}/{s.Id}\">{Esc(s.Title)}</a></div>")))
+              .Append("</div>");
         if (m.Src.Count > 0)
             sb.Append("<details class=srcs><summary>").Append(m.Src.Count).Append(" sources</summary>")
               .Append(string.Join("", m.Src.Select(s => $"<div><a class=src href=\"https://nova.src/{index}/{s.Id}\">{s.Id}</a> {Esc(s.Title)}</div>"))).Append("</details>");

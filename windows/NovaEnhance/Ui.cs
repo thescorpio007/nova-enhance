@@ -180,6 +180,125 @@ class NovaForm : Form
     }
 
     protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); Th.DarkTitle(this); Th.SetIcons(this); }
+
+    // ------------------------------------------------------------------ ⇥ Side window (like Copilot) or ⇤ floating window
+
+    string sideKey;
+    bool sideOn, placing, wasTopMost;
+    Rectangle floatBounds;
+    readonly List<Button> sideButtons = new();
+    public bool SideOn => sideOn;
+
+    /// <summary>This window can be a side panel on the right of the screen (Windows keeps the strip free) or a floating window.</summary>
+    protected void InitSide(string key)
+    {
+        sideKey = key;
+        sideOn = Store.Bool("win_side_" + key, false);
+    }
+
+    /// <summary>The ⇥ Side / ⇤ Float button for the window's header.</summary>
+    protected Button SideButton()
+    {
+        var b = Th.B(sideOn ? "⇤ Float" : "⇥ Side", () => SetSide(!sideOn));
+        new ToolTip().SetToolTip(b, "⇥ Side: a panel on the right of the screen (other windows make room) · ⇤ Float: a window you can move");
+        sideButtons.Add(b);
+        return b;
+    }
+
+    int SideWidth
+    {
+        get => Math.Max(380, Store.Int("win_side_w_" + sideKey, (int)(520 * DeviceDpi / 96f)));
+        set => Store.SetInt("win_side_w_" + sideKey, value);
+    }
+
+    public void SetSide(bool on)
+    {
+        if (sideKey == null || on == sideOn) return;
+        sideOn = on;
+        Store.SetBool("win_side_" + sideKey, on);
+        foreach (var b in sideButtons) b.Text = on ? "⇤ Float" : "⇥ Side";
+        if (on)
+        {
+            floatBounds = Bounds; wasTopMost = TopMost;
+            if (Visible) AppBar.Dock(this, SideWidth, ref placing);
+        }
+        else
+        {
+            AppBar.Undock(this);
+            if (floatBounds.Width > 0) Bounds = floatBounds;
+            TopMost = wasTopMost;
+        }
+    }
+
+    protected override void OnVisibleChanged(EventArgs e)
+    {
+        base.OnVisibleChanged(e);
+        if (!sideOn) return;
+        if (Visible) { if (floatBounds.Width == 0) { floatBounds = Bounds; wasTopMost = TopMost; } BeginInvoke(() => AppBar.Dock(this, SideWidth, ref placing)); }
+        else AppBar.Undock(this);
+    }
+
+    protected override void OnFormClosed(FormClosedEventArgs e) { AppBar.Undock(this); base.OnFormClosed(e); }
+
+    protected override void OnResizeEnd(EventArgs e)
+    {
+        base.OnResizeEnd(e);
+        if (sideOn && !placing) { SideWidth = Width; AppBar.Dock(this, SideWidth, ref placing); }
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        base.WndProc(ref m);
+        if (sideOn && m.Msg == (int)AppBar.CallbackMsg && m.WParam.ToInt32() == 1 && !placing) BeginInvoke(() => AppBar.Dock(this, SideWidth, ref placing));
+    }
+}
+
+/// <summary>A window that Windows treats like the taskbar: a strip on the right of the screen that other windows leave free.</summary>
+static class AppBar
+{
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    struct RECT { public int left, top, right, bottom; }
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    struct APPBARDATA { public int cbSize; public IntPtr hWnd; public uint uCallbackMessage; public uint uEdge; public RECT rc; public IntPtr lParam; }
+    [System.Runtime.InteropServices.DllImport("shell32.dll")] static extern UIntPtr SHAppBarMessage(uint msg, ref APPBARDATA d);
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)] static extern uint RegisterWindowMessage(string s);
+    const uint NEW = 0, REMOVE = 1, QUERYPOS = 2, SETPOS = 3, RIGHT = 2;
+    public static readonly uint CallbackMsg = RegisterWindowMessage("NovaEnhance.AppBar");
+    static readonly HashSet<IntPtr> on = new();
+
+    static APPBARDATA Data(Form f) => new() { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<APPBARDATA>(), hWnd = f.Handle, uCallbackMessage = CallbackMsg, uEdge = RIGHT };
+
+    public static void Dock(Form f, int width, ref bool placing)
+    {
+        if (f.IsDisposed || !f.Visible) return;
+        placing = true;
+        try
+        {
+            var d = Data(f);
+            if (on.Add(f.Handle)) SHAppBarMessage(NEW, ref d);
+            var scr = Screen.FromHandle(f.Handle).Bounds;
+            d.rc = new RECT { left = scr.Right - width, top = scr.Top, right = scr.Right, bottom = scr.Bottom };
+            SHAppBarMessage(QUERYPOS, ref d);
+            d.rc.left = d.rc.right - width;
+            SHAppBarMessage(SETPOS, ref d);
+            if (f.WindowState != FormWindowState.Normal) f.WindowState = FormWindowState.Normal;
+            f.TopMost = true;
+            f.Bounds = Rectangle.FromLTRB(d.rc.left, d.rc.top, d.rc.right, d.rc.bottom);
+        }
+        catch (Exception e) { Log.Warn("side window", e.Message); }
+        finally { placing = false; }
+    }
+
+    public static void Undock(Form f)
+    {
+        try
+        {
+            if (!f.IsHandleCreated || !on.Remove(f.Handle)) return;
+            var d = Data(f);
+            SHAppBarMessage(REMOVE, ref d);
+        }
+        catch { }
+    }
 }
 
 /// <summary>Top-to-bottom panel. Controls tagged "s" stretch to the width; "w" wrap at the width.</summary>

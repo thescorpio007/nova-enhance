@@ -353,6 +353,22 @@ class SettingsForm : NovaForm
     // ------------------------------------------------------------------ Email & AI
     void EmailAi()
     {
+        // 🛡 Check before sending (anti-oops)
+        page.Add(Th.Section("🛡 Check before sending (anti-oops)"));
+        page.Add(Th.Check("Check every email I send from Outlook before it leaves", SendCheck.On, v => { SendCheck.On = v; Draw("Email & AI"); }));
+        Note("When you press Send, the email waits in a large Nova window — your text next to the checked one (signature untouched), with checks for attachments, people outside your company, dates and private words — until you choose. Your AI reads the email text. If Nova is closed, or the AI doesn't answer within 30 s and nothing else needs a look, the email is sent as written.", Th.Muted);
+        if (SendCheck.On) Note("Status: " + SendCheck.Status, SendCheck.Status.StartsWith("✓") ? Th.Good : Th.Warn);
+        var scw = page.Add(Th.Row());
+        scw.Controls.Add(Th.L("Check:", 9.5f, Th.Text));
+        foreach (var (v, l) in new[] { ("all", "Everything"), ("grammar", "Grammar & spelling only"), ("quick", "Attachments, people & dates only (no AI)") })
+        { var vv = v; scw.Controls.Add(Th.Chip(l, SendCheck.What == v, () => { SendCheck.What = vv; Draw("Email & AI"); })); }
+        var scn = page.Add(Th.Row());
+        scn.Controls.Add(Th.L("When:", 9.5f, Th.Text));
+        foreach (var (v, l) in new[] { ("all", "Every email"), ("external", "Only to people outside my company"), ("noforward", "New emails and replies, not forwards") })
+        { var vv = v; scn.Controls.Add(Th.Chip(l, SendCheck.When == v, () => { SendCheck.When = vv; Draw("Email & AI"); })); }
+        page.Add(Th.Check("Skip the window when nothing needs a look (sends at once, shows “✓ checked”)", SendCheck.SkipClean, v => SendCheck.SkipClean = v));
+        page.Add(Th.Check("Check even one-line emails (“Noted”, “Thanks”)", SendCheck.Short, v => SendCheck.Short = v));
+
         page.Add(Th.Section("Email source"));
         Opt("Outlook on this PC  (default)", "Uses the classic Outlook installed and signed in here — no extra login. Keep Outlook open; the index updates every 10 minutes.", Store.EmailSource == "pc", () => { Store.EmailSource = "pc"; MailIndex.Now(); });
         Opt("Microsoft 365 (company server)", "All mail, any age — your IT admin approves the app once. Coming in build 2.", Store.EmailSource == "m365", () => Store.EmailSource = "m365");
