@@ -107,11 +107,15 @@ object PhoneSearch {
     /** The built-in rules (no internet needed). */
     fun rules(question: String, construction: Boolean): Plan {
         val p = Plan(); var q = " $question "
-        fun take(rx: Regex): Boolean { if (!rx.containsMatchIn(q)) return false; q = rx.replace(q, " "); return true }
+        // The whole word goes ("architecture", not just "architect"), so no left-over becomes a search word.
+        fun take(rx: Regex): Boolean {
+            if (!rx.containsMatchIn(q)) return false
+            q = Regex("[\\p{L}]*(?:${rx.pattern})[\\p{L}]*", RegexOption.IGNORE_CASE).replace(q, " "); return true
+        }
         if (construction) {
             for ((k, rx) in STAGE) if (take(rx)) { p.stage = k; break }
             for ((k, v) in DOC) if (take(v.second)) { p.doc = k; break }
-            for ((k, v) in DISC) if (take(v.second) || take(Regex("\\b${k}\\b"))) { p.disc = k; break }
+            for ((k, v) in DISC) if (take(v.second) || Regex("\\b${k}\\b").containsMatchIn(q).also { hit -> if (hit) q = q.replace(Regex("\\b${k}\\b"), " ") }) { p.disc = k; break }
             // The level: "first floor", "level 3", "L03", "3rd floor", "basement 2", "roof".
             Regex("\\b(${ORD.joinToString("|")})\\s+(floor|level)\\b", RegexOption.IGNORE_CASE).find(q)?.let { p.level = ORD.indexOf(it.groupValues[1].lowercase()).toString(); q = q.replace(it.value, " ") }
             if (p.level.isEmpty()) Regex("\\b(?:level|lvl|floor)\\s*0*(\\d{1,2})\\b|(?<![A-Za-z0-9])L0*(\\d{1,2})\\b|\\b(\\d{1,2})(?:st|nd|rd|th)\\s*(?:floor|level)\\b", RegexOption.IGNORE_CASE).find(q)?.let { m ->
@@ -300,7 +304,13 @@ object PhoneSearch {
 
         // 📂 Files and 📐 drawings
         if (p.kind != "emails" && !p.waiting) {
-            val files: List<PcLink.FileHit> = if (query.isNotBlank()) PcLink.searchFiles(c, query, 1500) else PcLink.allFiles(c, 40000)
+            // Every file whose NAME or folder has all the words, plus the files that have them inside (with the line found).
+            val all = PcLink.allFiles(c, 60000)
+            val files: List<PcLink.FileHit> = if (query.isBlank()) all else {
+                val inside = try { PcLink.searchFiles(c, query, 1500) } catch (_: Exception) { emptyList() }
+                val seen = inside.map { it.id }.toHashSet()
+                inside + all.filter { f -> f.id !in seen && wordRx.all { it.containsMatchIn(f.path) } }
+            }
             for (f in files) {
                 val it = ofFile(f, construction)
                 val stem = it.name.substringBeforeLast('.')
