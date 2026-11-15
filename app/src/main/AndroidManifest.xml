@@ -110,6 +110,15 @@
         </service>
 
         <service
+            android:name=".GdSignInService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the app awake for the few minutes the user signs in to Google Drive in the browser" />
+        </service>
+
+        <service
             android:name=".BubbleService"
             android:exported="false"
             android:foregroundServiceType="specialUse">

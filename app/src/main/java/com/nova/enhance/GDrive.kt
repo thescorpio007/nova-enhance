@@ -1,6 +1,5 @@
 package com.nova.enhance
 
-import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -64,53 +63,81 @@ object GDrive {
     private fun b64(b: ByteArray) = Base64.encodeToString(b, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
     private fun enc(s: String) = URLEncoder.encode(s, "UTF-8")
 
-    /** Opens Google's page; waits up to 5 minutes for the answer. Run on a background thread. Returns the account. */
-    fun signIn(act: Activity, progress: (String) -> Unit): String {
-        val c = act.applicationContext
-        if (!configured(c)) throw Exception("This copy of Nova has no Google sign-in built in yet — update Nova Enhance, or set it up on the PC (Settings → Google Drive) and ⟳ update once over Wi-Fi")
-        val rnd = SecureRandom()
-        val verifier = b64(ByteArray(48).also { rnd.nextBytes(it) })
-        val challenge = b64(MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray(Charsets.US_ASCII)))
-        val state = b64(ByteArray(16).also { rnd.nextBytes(it) })
-        val server = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
-        server.soTimeout = 300_000
-        val redirect = "http://127.0.0.1:${server.localPort}"
-        val url = "https://accounts.google.com/o/oauth2/v2/auth?response_type=code&access_type=offline&prompt=consent" +
-            "&client_id=${enc(clientId(c))}&redirect_uri=${enc(redirect)}&scope=${enc("https://www.googleapis.com/auth/drive.readonly email")}" +
-            "&code_challenge=$challenge&code_challenge_method=S256&state=$state"
-        act.runOnUiThread { try { act.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } catch (_: Exception) { } }
-        progress("⏳ Sign in with Google in the browser, then come back to Nova…")
-        var code: String? = null; var error: String? = null
+    /** The sign-in is running (kept awake by GdSignInService) · the last error, kept until the next try. */
+    @Volatile var pending = false
+    @Volatile var progressNote = ""
+    fun lastError(c: Context) = sp(c).getString("gd_last_err", "").orEmpty()
+
+    /**
+     * Opens Google's page and waits up to 5 minutes for the answer on 127.0.0.1. The sign-in is SAVED before the browser gets its
+     * result page, so that page tells the truth (connected as … / the exact reason). Run on a background thread, inside the
+     * foreground service (Android puts a background app to sleep). Returns the account.
+     */
+    fun signIn(c0: Context, open: (String) -> Unit): String {
+        val c = c0.applicationContext
+        sp(c).edit().remove("gd_last_err").apply()
         try {
-            while (code == null && error == null) {
-                val s = server.accept()
-                s.use { sock ->
-                    val line = sock.getInputStream().bufferedReader().readLine() ?: ""
-                    val path = Regex("GET (\\S+) HTTP").find(line)?.groupValues?.get(1) ?: ""
-                    val q = Uri.parse("http://x$path")
-                    if (q.getQueryParameter("state") == state) { code = q.getQueryParameter("code"); if (code == null) error = q.getQueryParameter("error") ?: "cancelled" }
-                    val ok = code != null
-                    val html = "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><body style='font-family:sans-serif;background:#12151C;color:#ECEEF3;text-align:center;padding-top:60px'>" +
-                        "<h2>${if (ok) "✓ Nova Enhance can read your Google Drive" else "Google sign-in was not completed"}</h2><p>${if (ok) "Go back to the Nova Enhance app." else (error ?: "")}</p><p style='color:#6B7385'>${Ui.SIGNATURE}</p>"
-                    val body = html.toByteArray()
-                    sock.getOutputStream().apply {
-                        write("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n".toByteArray()); write(body); flush()
+            if (!configured(c)) throw Exception("This copy of Nova has no Google sign-in built in yet — update Nova Enhance")
+            val rnd = SecureRandom()
+            val verifier = b64(ByteArray(48).also { rnd.nextBytes(it) })
+            val challenge = b64(MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray(Charsets.US_ASCII)))
+            val state = b64(ByteArray(16).also { rnd.nextBytes(it) })
+            val server = ServerSocket(0, 4, InetAddress.getByName("127.0.0.1"))
+            server.soTimeout = 300_000
+            val redirect = "http://127.0.0.1:${server.localPort}"
+            val url = "https://accounts.google.com/o/oauth2/v2/auth?response_type=code&access_type=offline&prompt=consent" +
+                "&client_id=${enc(clientId(c))}&redirect_uri=${enc(redirect)}&scope=${enc("https://www.googleapis.com/auth/drive.readonly email")}" +
+                "&code_challenge=$challenge&code_challenge_method=S256&state=$state"
+            open(url)
+            progressNote = "⏳ Sign in with Google in the browser, then come back to Nova…"
+            var email: String? = null; var error: String? = null
+            try {
+                while (email == null && error == null) {
+                    val s = server.accept()
+                    s.use { sock ->
+                        sock.soTimeout = 15000
+                        val line = try { sock.getInputStream().bufferedReader().readLine() ?: "" } catch (_: Exception) { "" }
+                        val path = Regex("GET (\\S+) HTTP").find(line)?.groupValues?.get(1) ?: ""
+                        val q = Uri.parse("http://x$path")
+                        var mine = false
+                        if (q.getQueryParameter("state") == state) {
+                            mine = true
+                            val code = q.getQueryParameter("code")
+                            if (code == null) error = "Google: " + (q.getQueryParameter("error") ?: "cancelled")
+                            else try {
+                                progressNote = "⏳ Connecting to Google Drive…"
+                                val tok = form("https://oauth2.googleapis.com/token", mapOf("code" to code, "client_id" to clientId(c), "client_secret" to secret(c),
+                                    "redirect_uri" to redirect, "grant_type" to "authorization_code", "code_verifier" to verifier))
+                                val r = tok.optString("refresh_token")
+                                if (r.isBlank()) throw Exception("Google did not give a lasting sign-in — remove Nova Enhance in your Google account (Security → Third-party access) and sign in again")
+                                sp(c).edit().putString("gd_refresh", r).apply()
+                                access = tok.optString("access_token"); accessUntil = System.currentTimeMillis() + (tok.optLong("expires_in", 3600) - 120) * 1000
+                                val em = try { get(c, "$API/about?fields=user(emailAddress)").optJSONObject("user")?.optString("emailAddress").orEmpty() } catch (_: Exception) { "" }
+                                sp(c).edit().putString("gd_email", em).apply()
+                                email = em
+                            } catch (e: Exception) { error = e.message ?: e.javaClass.simpleName }
+                        }
+                        val ok = email != null
+                        val esc = { t: String -> t.replace("&", "&amp;").replace("<", "&lt;") }
+                        val html = "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><body style='font-family:sans-serif;background:#12151C;color:#ECEEF3;text-align:center;padding:60px 20px'>" +
+                            (if (!mine) "<p>Nova Enhance</p>" else if (ok) "<h2>✓ Nova Enhance is connected to your Google Drive</h2><p>${esc(email ?: "")}</p><p>Go back to the Nova Enhance app.</p>"
+                            else "<h2>⚠ Not connected</h2><p>${esc(error ?: "")}</p><p>Go back to the Nova Enhance app and try again.</p>") + "<p style='color:#6B7385'>${Ui.SIGNATURE}</p>"
+                        val body = html.toByteArray()
+                        try {
+                            sock.getOutputStream().apply {
+                                write("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n".toByteArray()); write(body); flush()
+                            }
+                        } catch (_: Exception) { }
                     }
                 }
-            }
-        } catch (_: java.net.SocketTimeoutException) { throw Exception("Google sign-in took more than 5 minutes — try again") }
-        finally { try { server.close() } catch (_: Exception) { } }
-        if (code == null) throw Exception("Google sign-in was not completed: $error")
-        progress("⏳ Connecting to Google Drive…")
-        val tok = form("https://oauth2.googleapis.com/token", mapOf("code" to code!!, "client_id" to clientId(c), "client_secret" to secret(c),
-            "redirect_uri" to redirect, "grant_type" to "authorization_code", "code_verifier" to verifier))
-        val r = tok.optString("refresh_token")
-        if (r.isBlank()) throw Exception("Google did not give a lasting sign-in — remove Nova Enhance in your Google account (Security → Third-party access) and sign in again")
-        sp(c).edit().putString("gd_refresh", r).apply()
-        access = tok.optString("access_token"); accessUntil = System.currentTimeMillis() + (tok.optLong("expires_in", 3600) - 120) * 1000
-        val email = try { get(c, "$API/about?fields=user(emailAddress)").optJSONObject("user")?.optString("emailAddress").orEmpty() } catch (_: Exception) { "" }
-        sp(c).edit().putString("gd_email", email).apply()
-        return email
+            } catch (_: java.net.SocketTimeoutException) { throw Exception("Google sign-in took more than 5 minutes — try again") }
+            finally { try { server.close() } catch (_: Exception) { } }
+            if (email == null) throw Exception(error ?: "not completed")
+            return email!!
+        } catch (e: Exception) {
+            sp(c).edit().putString("gd_last_err", e.message ?: e.javaClass.simpleName).apply()
+            throw e
+        }
     }
 
     // ------------------------------------------------------------------ HTTP

@@ -119,16 +119,31 @@ class MyPcActivity : BaseActivity() {
                 if (GDrive.configured(c)) Ui.button(c, "☁ Sign in with Google — then the PC can be off") { googleSignIn() }
                 else Ui.text(c, "☁ Google Drive: this copy of Nova has no Google sign-in built in yet.", 12f, Ui.MUTED),
                 Ui.lp(top = Ui.dp(c, 6)))
+        // The last sign-in error stays here until the next try.
+        if (!GDrive.signedIn(c) && !GDrive.pending && GDrive.lastError(c).isNotEmpty())
+            sourceBar.addView(Ui.text(c, "⚠ Last try: " + GDrive.lastError(c), 12f, Ui.MUTED), Ui.lp(top = Ui.dp(c, 4)))
     }
 
     private fun googleSignIn() {
-        Thread {
-            val r = runCatching { GDrive.signIn(this) { say(it) } }
-            main.post {
-                status.text = r.fold({ "✓ Google Drive connected" + (if (it.isNotBlank()) " ($it)" else "") + " — updating…" }, { "⚠ " + it.message })
-                drawSource(); if (page == "settings") show("settings"); if (r.isSuccess) syncNow()
-            }
-        }.start()
+        val c = this
+        if (GDrive.pending) { say("⏳ Sign-in already open in the browser — finish it there"); return }
+        // Android 13+: the small "signing in" notification needs the permission (the sign-in works without it too).
+        if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
+            try { requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 41) } catch (_: Exception) { }
+        GDrive.progressNote = "⏳ Opening Google's sign-in page…"
+        GdSignInService.start(c)
+        watchSignIn(0)
+    }
+
+    /** Follows the sign-in (it runs in GdSignInService, so it survives while the browser is in front). */
+    private fun watchSignIn(n: Int) {
+        main.postDelayed({
+            if (isFinishing) return@postDelayed
+            if (GDrive.pending || n < 3 && !GDrive.signedIn(this) && GDrive.lastError(this).isEmpty()) { status.text = GDrive.progressNote; watchSignIn(n + 1); return@postDelayed }
+            drawSource(); if (page == "settings") show("settings")
+            if (GDrive.signedIn(this)) { status.text = "✓ Google Drive connected" + GDrive.account(this).let { if (it.isNotBlank()) " ($it)" else "" } + " — updating…"; syncNow() }
+            else status.text = "⚠ Google sign-in: " + GDrive.lastError(this).ifBlank { "not completed" }
+        }, 1000)
     }
 
     private fun say(s: String) = main.post { status.text = s }
