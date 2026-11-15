@@ -53,6 +53,8 @@ jobs:
           GD_ID: ${{ secrets.NOVA_GD_ID }}
           GD_SECRET: ${{ secrets.NOVA_GD_SECRET }}
         run: |
+          # Pasted values often carry a line break, a space or quotes: removed here.
+          GD_ID=$(printf '%s' "$GD_ID" | tr -d ' \t\r\n"'); GD_SECRET=$(printf '%s' "$GD_SECRET" | tr -d ' \t\r\n"')
           if [ -n "$GD_ID" ] && [ -n "$GD_SECRET" ]; then
             if ! printf '%s%s' "$GD_ID" "$GD_SECRET" | grep -Eq '^[A-Za-z0-9._-]+$'; then echo "::error title=Google sign-in::NOVA_GD_ID / NOVA_GD_SECRET contain unexpected characters"; exit 1; fi
             printf 'package com.nova.enhance\n\nobject GdBuiltIn {\n    const val ID = "%s"\n    const val SECRET = "%s"\n}\n' "$GD_ID" "$GD_SECRET" > app/src/main/java/com/nova/enhance/GdBuiltIn.kt

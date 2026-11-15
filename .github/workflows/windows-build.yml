@@ -58,6 +58,8 @@ jobs:
           GD_ID: ${{ secrets.NOVA_GD_ID }}
           GD_SECRET: ${{ secrets.NOVA_GD_SECRET }}
         run: |
+          # Pasted values often carry a line break, a space or quotes: removed here.
+          $env:GD_ID = "$env:GD_ID" -replace '[\s"]', ''; $env:GD_SECRET = "$env:GD_SECRET" -replace '[\s"]', ''
           if ($env:GD_ID -and $env:GD_SECRET) {
             if (("$env:GD_ID$env:GD_SECRET") -notmatch '^[A-Za-z0-9._-]+$') { Write-Host "::error title=Google sign-in::NOVA_GD_ID / NOVA_GD_SECRET contain unexpected characters"; exit 1 }
             Set-Content -Path windows/NovaEnhance/GdBuiltIn.cs -Encoding utf8 -Value "namespace NovaEnhance;`nstatic class GdBuiltIn { public static readonly string Id = `"$env:GD_ID`"; public static readonly string Secret = `"$env:GD_SECRET`"; }"
