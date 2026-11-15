@@ -190,6 +190,7 @@ class MyPcActivity : BaseActivity() {
         Thread {
             val r = PcLink.sync(applicationContext) { say(it) }
             main.post { headerStatus(); status.text = r + "\n" + status.text; if (page == "home") show("home") }
+            if (PcLink.queued(applicationContext).length() > 0) { val n = PcLink.flushQueue(applicationContext); if (n > 0) say("✓ $n “handled” mark(s) sent to your PC") }
         }.start()
     }
 
@@ -567,6 +568,8 @@ class MyPcActivity : BaseActivity() {
         say("⏳ Asking your PC…")
         Thread {
             val r = runCatching { PcLink.ask(applicationContext, op, args) { say(it) } }
+            // The PC is off: a "handled" mark is kept and sent when the PC answers again.
+            if (r.isFailure && op == "handled") { PcLink.queue(applicationContext, args); main.post { status.text = "✓ Marked here — your PC gets it when it is on again (${PcLink.queued(applicationContext).length()} waiting)" }; return@Thread }
             main.post { status.text = r.fold({ ok }, { "⚠ " + it.message }) }
         }.start()
     }

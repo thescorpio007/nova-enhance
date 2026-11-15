@@ -34,6 +34,12 @@ object OutlookFiles {
 
     private fun esc(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
+    /** Puts [add] right after the first match of [tag] (case-insensitive); unchanged when there is none. */
+    private fun after(s: String, tag: String, add: String): String {
+        val m = Regex(tag, RegexOption.IGNORE_CASE).find(s) ?: return s
+        return s.substring(0, m.range.last + 1) + add + s.substring(m.range.last + 1)
+    }
+
     /** The whole email as one page: a small header, then the body with its pictures inside. */
     fun page(m: Mail): String {
         var body = if (m.html.isNotBlank()) m.html else "<pre style='white-space:pre-wrap;font-family:Calibri,Segoe UI,Arial,sans-serif;font-size:15px'>" + esc(m.text) + "</pre>"
@@ -51,9 +57,9 @@ object OutlookFiles {
             (if (m.cc.isNotBlank()) "<b>Cc</b> ${esc(m.cc)}<br>" else "") + (if (when0.isNotBlank()) esc(when0) else "") + "</div>"
         val css = "<meta charset='utf-8'><style>html{background:#fff}body{font-family:Calibri,'Segoe UI',Arial,sans-serif;font-size:14.5px;margin:14px 16px;color:#222}img{max-width:100%;height:auto}</style>"
         return if (Regex("<body[^>]*>", RegexOption.IGNORE_CASE).containsMatchIn(body)) {
-            val withHead = if (Regex("<head[^>]*>", RegexOption.IGNORE_CASE).containsMatchIn(body)) body.replaceFirst(Regex("<head[^>]*>", RegexOption.IGNORE_CASE)) { it.value + css }
-                else body.replaceFirst(Regex("<html[^>]*>", RegexOption.IGNORE_CASE)) { it.value + "<head>$css</head>" }
-            withHead.replaceFirst(Regex("<body[^>]*>", RegexOption.IGNORE_CASE)) { it.value + head }
+            val withHead = if (Regex("<head[^>]*>", RegexOption.IGNORE_CASE).containsMatchIn(body)) after(body, "<head[^>]*>", css)
+                else after(body, "<html[^>]*>", "<head>$css</head>")
+            after(withHead, "<body[^>]*>", head)
         } else "<html><head>$css</head><body>$head$body</body></html>"
     }
 

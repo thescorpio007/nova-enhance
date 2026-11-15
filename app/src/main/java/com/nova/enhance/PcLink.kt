@@ -100,6 +100,25 @@ object PcLink {
 
     fun gunzip(b: ByteArray): ByteArray = GZIPInputStream(ByteArrayInputStream(b)).use { it.readBytes() }
     fun gzip(b: ByteArray): ByteArray = ByteArrayOutputStream().also { o -> GZIPOutputStream(o).use { it.write(b) } }.toByteArray()
+    // ✓ "Handled" marks made while the PC was off: kept, and sent when the PC answers again.
+    fun queued(c: Context): JSONArray = try { JSONArray(sp(c).getString("handled_queue", "[]")) } catch (_: Exception) { JSONArray() }
+    fun queue(c: Context, args: JSONObject) { val q = queued(c); q.put(args); sp(c).edit().putString("handled_queue", q.toString()).apply() }
+
+    /** Sends the kept marks (stops at the first one the PC does not answer). Returns how many went. */
+    @Synchronized fun flushQueue(c: Context): Int {
+        val q = queued(c); if (q.length() == 0) return 0
+        var sent = 0
+        while (sent < q.length()) {
+            try { ask(c, "handled", q.getJSONObject(sent)) } catch (_: Exception) { break }
+            sent++
+        }
+        if (sent > 0) {
+            val rest = JSONArray(); for (i in sent until q.length()) rest.put(q.get(i))
+            sp(c).edit().putString("handled_queue", rest.toString()).apply()
+        }
+        return sent
+    }
+
     /** A sync file opened: unlocked with the pairing key and unpacked. */
     fun unbox(c: Context, box: ByteArray): ByteArray = gunzip(open(key(c), box))
     private fun text(c: Context, box: ByteArray) = String(gunzip(open(key(c), box)), Charsets.UTF_8)

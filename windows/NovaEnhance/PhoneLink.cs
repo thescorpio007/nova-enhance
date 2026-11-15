@@ -475,7 +475,7 @@ static class PhoneLink
         foreach (var f in Directory.GetFiles(Dir, "*.nes", SearchOption.AllDirectories).OrderBy(f => f))
         {
             var rel = Path.GetRelativePath(Dir, f).Replace('\\', '/');
-            if (rel == "manifest.nes") continue;
+            if (rel == "manifest.nes" || rel.StartsWith("full/")) continue;     // ☁ the real emails stay in Drive: the phone takes one only when you open it
             var fi = new FileInfo(f);
             files.Add(new JsonObject { ["n"] = rel, ["b"] = fi.Length, ["m"] = new DateTimeOffset(fi.LastWriteTime).ToUnixTimeMilliseconds() });
         }
