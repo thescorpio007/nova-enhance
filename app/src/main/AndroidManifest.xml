@@ -83,6 +83,27 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="novaenhance" android:host="pair" />
             </intent-filter>
+            <!-- ✉ Outlook files opened with Nova or shared to it: .msg .eml .ics .vcf -->
+            <intent-filter android:label="Nova Enhance">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="application/vnd.ms-outlook" />
+                <data android:mimeType="message/rfc822" />
+                <data android:mimeType="text/calendar" />
+                <data android:mimeType="text/vcard" />
+                <data android:mimeType="text/x-vcard" />
+            </intent-filter>
+            <intent-filter android:label="Open in Nova Enhance">
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/vnd.ms-outlook" />
+                <data android:mimeType="message/rfc822" />
+                <data android:mimeType="text/calendar" />
+                <data android:mimeType="text/vcard" />
+                <data android:mimeType="text/x-vcard" />
+            </intent-filter>
         </activity>
         <activity android:name=".QrScanActivity" android:exported="false" android:screenOrientation="portrait" />
         <provider android:name=".PcFiles" android:authorities="com.nova.enhance.pcfiles" android:exported="false" android:grantUriPermissions="true" />

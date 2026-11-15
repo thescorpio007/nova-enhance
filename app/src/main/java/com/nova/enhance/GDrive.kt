@@ -232,13 +232,22 @@ object GDrive {
         fun scan(id: String, prefix: String, depth: Int) {
             for (f in children(c, id)) {
                 val n = f.optString("name")
-                if (f.optString("mimeType") == FOLDER) { if (depth < 3) scan(f.optString("id"), "$prefix$n/", depth + 1) }
+                if (f.optString("mimeType") == FOLDER) { if (depth < 3 && !(depth == 0 && n == "full")) scan(f.optString("id"), "$prefix$n/", depth + 1) }
                 else map.putIfAbsent(prefix + n, f.optString("id"))
             }
         }
         scan(top, "", 0)
         return map
     }
+
+    /** One file of the sync folder by its path ("full/m/735.nes"), or null when it is not in Drive (yet). */
+    fun fetchSync(c: Context, rel: String): ByteArray? {
+        val id = walk(c, folderPath(c) + "/" + rel, lastIsFile = true) ?: return null
+        return download(c, id)
+    }
+
+    /** Drive can be used now (signed in, and "Get my data from" allows it). */
+    fun usable(c: Context) = signedIn(c) && source(c).let { it == "auto" || it == "drive" }
 
     // ------------------------------------------------------------------ 📂 a project file, straight from Drive
 

@@ -66,6 +66,7 @@ class MyPcActivity : BaseActivity() {
         handle(intent)
         if (PcLink.paired(c)) PcLink.schedule(c)   // the hourly update (again after a restart of the phone)
         show(if (PcLink.paired(c)) "home" else "pair")
+        pendingFile?.let { pendingFile = null; openShared(it) }
     }
 
     /** 📷 Nova's own QR scanner. */
@@ -81,10 +82,20 @@ class MyPcActivity : BaseActivity() {
         if (r.isSuccess) { show("home"); syncNow() }
     }
 
-    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); handle(intent); show(if (PcLink.paired(this)) "home" else "pair") }
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent); handle(intent); show(if (PcLink.paired(this)) "home" else "pair")
+        pendingFile?.let { pendingFile = null; openShared(it) }
+    }
 
     /** The pairing QR (novaenhance://pair?d=…) opened from the camera. */
     private fun handle(i: Intent?) {
+        // ✉ An Outlook file opened with Nova or shared to it (WhatsApp, Files, Gmail…).
+        val shared: Uri? = when {
+            i?.action == Intent.ACTION_SEND -> i?.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+            i?.action == Intent.ACTION_VIEW && i?.data?.scheme in listOf("content", "file") -> i?.data
+            else -> null
+        }
+        if (shared != null) { pendingFile = shared; return }
         val d = i?.data ?: return
         if (d.scheme != "novaenhance") return
         val r = runCatching { PcLink.pair(this, d.toString()) }
@@ -144,6 +155,23 @@ class MyPcActivity : BaseActivity() {
             if (GDrive.signedIn(this)) { status.text = "✓ Google Drive connected" + GDrive.account(this).let { if (it.isNotBlank()) " ($it)" else "" } + " — updating…"; syncNow() }
             else status.text = "⚠ Google sign-in: " + GDrive.lastError(this).ifBlank { "not completed" }
         }, 1000)
+    }
+
+    private var pendingFile: Uri? = null
+
+    /** Copies the shared file into Nova's folder and opens it. */
+    private fun openShared(u: Uri) {
+        try {
+            var name = ""
+            try { contentResolver.query(u, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { if (it.moveToFirst()) name = it.getString(0) ?: "" } } catch (_: Exception) { }
+            if (name.isBlank()) name = u.lastPathSegment?.substringAfterLast('/') ?: "file"
+            val bytes = contentResolver.openInputStream(u)?.use { it.readBytes() } ?: throw Exception("the file could not be read")
+            if (!name.contains('.') || name.substringAfterLast('.').lowercase() !in OutlookFiles.EXT)
+                name += if (bytes.size > 8 && bytes[0] == 0xD0.toByte() && bytes[1] == 0xCF.toByte()) ".msg" else if (String(bytes, 0, minOf(bytes.size, 20)).startsWith("BEGIN:VCARD")) ".vcf" else if (String(bytes, 0, minOf(bytes.size, 20)).startsWith("BEGIN:VCALENDAR")) ".ics" else ".eml"
+            val out = File(File(PcLink.dir(this), "fetched").apply { mkdirs() }, name.replace(Regex("[\\\\/:*?\"<>|]"), "_"))
+            out.writeBytes(bytes)
+            openFile(out)
+        } catch (e: Exception) { Ui.toast(this, "Could not open the file: " + e.message) }
     }
 
     private fun say(s: String) = main.post { status.text = s }
@@ -430,15 +458,26 @@ class MyPcActivity : BaseActivity() {
     private fun getAttachment(h: PcLink.Hit, name: String) {
         val local = File(File(PcLink.dir(this), "fetched"), name.replace(Regex("[\\\\/:*?\"<>|]"), "_"))
         if (local.exists() && local.length() > 0) { openFile(local); return }
-        say("⏳ Getting “$name” from your PC…")
+        say(if (GDrive.usable(this)) "⏳ Getting “$name” from Google Drive…" else "⏳ Getting “$name” from your PC…")
         Thread {
             val r = runCatching {
-                val o = PcLink.ask(applicationContext, "att", JSONObject().put("i", h.id).put("name", name)) { say(it) }
                 local.parentFile?.mkdirs()
-                local.writeBytes(PcLink.gunzip(android.util.Base64.decode(o.getString("data"), android.util.Base64.DEFAULT)))
+                // ☁ Google Drive first (attachments of the last 3 months), then the PC.
+                val fromDrive = if (GDrive.usable(applicationContext)) try {
+                    val sha = java.security.MessageDigest.getInstance("SHA-1").digest(name.lowercase().toByteArray()).joinToString("") { "%02x".format(it) }.take(16)
+                    GDrive.fetchSync(applicationContext, "full/a/${h.id / 1000}/${h.id}-$sha.nes")?.let { PcLink.unbox(applicationContext, it) }
+                } catch (_: Exception) { null } else null
+                if (fromDrive != null) local.writeBytes(fromDrive)
+                else {
+                    val o = PcLink.ask(applicationContext, "att", JSONObject().put("i", h.id).put("name", name)) { say(it) }
+                    local.writeBytes(PcLink.gunzip(android.util.Base64.decode(o.getString("data"), android.util.Base64.DEFAULT)))
+                }
                 local
             }
-            main.post { r.onSuccess { status.text = "✓ ${it.name}"; openFile(it) }.onFailure { status.text = "⚠ " + it.message } }
+            main.post {
+                r.onSuccess { status.text = "✓ ${it.name}"; openFile(it) }
+                    .onFailure { status.text = "⚠ " + (if (GDrive.usable(this)) "Not in Google Drive (older than 3 months or over 25 MB) and your PC can't be reached: " else "") + it.message }
+            }
         }.start()
     }
 
@@ -446,21 +485,66 @@ class MyPcActivity : BaseActivity() {
     private fun formatted(h: PcLink.Hit) {
         val cache = File(File(PcLink.dir(this), "formatted").apply { mkdirs() }, "${h.id}.html")
         if (cache.exists()) { showHtml(h.subject, cache.readText()); return }
-        say("⏳ Getting the formatted email from your PC…")
+        say(if (GDrive.usable(this)) "⏳ Getting the formatted email from Google Drive…" else "⏳ Getting the formatted email from your PC…")
         Thread {
-            val r = runCatching { PcLink.ask(applicationContext, "html", JSONObject().put("i", h.id)) { say(it) } }
+            // ☁ Google Drive first (the PC can be off), then the PC.
+            val r = runCatching {
+                driveMail(h.id)?.optString("h")?.takeIf { it.isNotBlank() }
+                    ?: PcLink.ask(applicationContext, "html", JSONObject().put("i", h.id)) { say(it) }.optString("html")
+            }
             main.post {
-                r.onSuccess { o -> val html = o.optString("html"); cache.writeText(html); status.text = "✓ Formatted"; showHtml(h.subject, html) }
-                    .onFailure { status.text = "⚠ " + it.message }
+                r.onSuccess { html -> cache.writeText(html); status.text = "✓ Formatted"; showHtml(h.subject, html) }
+                    .onFailure { status.text = "⚠ " + (if (GDrive.usable(this)) "Not in Google Drive yet (the PC copies the newest first) and your PC can't be reached: " else "") + it.message }
             }
         }.start()
     }
 
-    private fun showHtml(title: String, html: String) {
+    /** ☁ One email of the PC's copy in Google Drive ({h: page, a: attachment names}) — null when Drive is off or it is not there yet. */
+    private fun driveMail(id: Long): JSONObject? {
+        val c = applicationContext
+        if (!GDrive.usable(c)) return null
+        return try {
+            val bucket = id / 200
+            val f = File(File(PcLink.dir(c), "full").apply { mkdirs() }, "$bucket.json")
+            fun pick(): JSONObject? = if (!f.exists()) null else JSONObject(f.readText()).let { o ->
+                val m = o.optJSONObject("m")?.optJSONObject(id.toString()) ?: return@let null
+                val img = o.optJSONObject("img")
+                val page = Regex("nimg:([0-9a-f]{20})").replace(m.optString("h")) { img?.optString(it.groupValues[1])?.takeIf { d -> d.isNotBlank() } ?: it.value }
+                JSONObject().put("h", page).put("a", m.optJSONArray("a") ?: org.json.JSONArray())
+            }
+            pick() ?: run {
+                // Not kept yet (or a newer email of a bundle kept earlier): get the bundle again, at most every 10 minutes.
+                if (f.exists() && System.currentTimeMillis() - f.lastModified() < 600_000) return null
+                val box = GDrive.fetchSync(c, "full/m/$bucket.nes") ?: return null
+                f.writeBytes(PcLink.unbox(c, box))
+                pick()
+            }
+        } catch (_: Exception) { null }
+    }
+
+    /** ✉ An Outlook file opened by Nova: the page, and its attachments to tap (an email inside an email opens the same way). */
+    private fun showOutlook(m: OutlookFiles.Mail, fallbackTitle: String) {
+        showHtml(m.subject.ifBlank { fallbackTitle }, OutlookFiles.page(m)) { c ->
+            val list = OutlookFiles.listed(m)
+            if (list.isEmpty()) return@showHtml
+            val box = FlowLayout(c, Ui.dp(c, 6), Ui.dp(c, 6))
+            for (a in list) box.addView(Ui.chip(c, (if (a.nested != null) "✉ " else "📎 ") + a.name, false) {
+                if (a.nested != null) showOutlook(a.nested, a.name)
+                else try {
+                    val out = File(File(PcLink.dir(this), "fetched").apply { mkdirs() }, a.name.replace(Regex("[\\\\/:*?\"<>|]"), "_"))
+                    out.writeBytes(a.data!!); openFile(out)
+                } catch (e: Exception) { Ui.toast(this, "Could not open: " + e.message) }
+            })
+            body.addView(box, Ui.lp(top = Ui.dp(c, 8)))
+        }
+    }
+
+    private fun showHtml(title: String, html: String, extra: ((Context) -> Unit)? = null) {
         page = "web"
         body.removeAllViews()
         val c = this
         body.addView(Ui.text(c, title, 16f, Ui.TEXT, true))
+        extra?.invoke(c)
         val w = android.webkit.WebView(c).apply {
             settings.javaScriptEnabled = false
             settings.loadWithOverviewMode = true; settings.useWideViewPort = true
@@ -618,6 +702,12 @@ class MyPcActivity : BaseActivity() {
 
     private fun openFile(f: File) {
         if (f.extension.lowercase() in listOf("html", "htm")) { showHtml(f.nameWithoutExtension, f.readText()); return }
+        // ✉ Outlook files (.msg .oft .eml .ics .vcf): Nova reads them itself.
+        if (f.extension.lowercase() in OutlookFiles.EXT && f.length() < 60_000_000) {
+            val m = try { OutlookFiles.read(f.name, f.readBytes()) } catch (e: Exception) { null }
+            if (m != null) { showOutlook(m, f.nameWithoutExtension); return }
+            Ui.toast(this, "Nova could not read this ${f.extension} file — choose another app")
+        }
         val uri = Uri.parse("content://${PcFiles.AUTH}/" + Uri.encode(f.relativeTo(PcLink.dir(this)).path, "/"))
         val type = MimeTypeMap.getSingleton().getMimeTypeFromExtension(f.extension.lowercase())
         // Only apps that really open this type; otherwise 📤 Share.

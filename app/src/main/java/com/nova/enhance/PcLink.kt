@@ -100,6 +100,8 @@ object PcLink {
 
     fun gunzip(b: ByteArray): ByteArray = GZIPInputStream(ByteArrayInputStream(b)).use { it.readBytes() }
     fun gzip(b: ByteArray): ByteArray = ByteArrayOutputStream().also { o -> GZIPOutputStream(o).use { it.write(b) } }.toByteArray()
+    /** A sync file opened: unlocked with the pairing key and unpacked. */
+    fun unbox(c: Context, box: ByteArray): ByteArray = gunzip(open(key(c), box))
     private fun text(c: Context, box: ByteArray) = String(gunzip(open(key(c), box)), Charsets.UTF_8)
 
     private fun pairToken(c: Context): String {

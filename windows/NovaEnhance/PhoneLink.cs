@@ -199,7 +199,7 @@ static class PhoneLink
         var sw = System.Diagnostics.Stopwatch.StartNew();
         if (full)
         {
-            foreach (var f in Directory.GetFiles(Dir, "*.nes", SearchOption.AllDirectories)) if (!f.Contains(Path.DirectorySeparatorChar + "starred" + Path.DirectorySeparatorChar)) try { File.Delete(f); } catch { }
+            foreach (var f in Directory.GetFiles(Dir, "*.nes", SearchOption.AllDirectories)) if (!f.Contains(Path.DirectorySeparatorChar + "starred" + Path.DirectorySeparatorChar) && !f.Contains(Path.DirectorySeparatorChar + "full" + Path.DirectorySeparatorChar)) try { File.Delete(f); } catch { }
             s.Deltas.Clear(); s.LastMail = 0; s.LastFile = 0; s.ProjHash = ""; s.BrainHash = "";
             s.Sizes.Clear();
         }
@@ -483,6 +483,7 @@ static class PhoneLink
         {
             ["v"] = 2, ["pc"] = Environment.MachineName, ["build"] = Program.Shown, ["at"] = DateTime.Now.ToString("o"), ["fullAt"] = s.FullAt.ToString("o"),
             ["last12"] = Last12, ["files"] = files, ["counts"] = JsonNode.Parse(JsonSerializer.Serialize(s.Counts)), ["oldest"] = MailIndex.OldestText,
+            ["full"] = MailFull.On ? new JsonObject { ["months"] = MailFull.Months, ["att"] = MailFull.AttMonths, ["mails"] = MailFull.Progress.Mails } : null,   // ☁ the real emails are in Drive too
             ["gd"] = PhoneDrive()     // ☁ the phone learns how to read Google Drive by itself (no new QR needed)
         };
         Write("manifest.nes", o.ToJsonString());

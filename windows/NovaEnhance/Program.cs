@@ -293,7 +293,7 @@ class NovaContext : ApplicationContext
         Guard.Stage("activity auto-save"); Activity.StartAuto();
         Guard.Stage("test connector"); TestConnector.Start();
         // (2.0) The night check of moved emails was removed: it crashed Nova (build 75–76). Moved emails are found when you open them.
-        Guard.Stage("phone link"); PhoneLink.Start();
+        Guard.Stage("phone link"); PhoneLink.Start(); MailFull.Start();
         Guard.Stage("started");
     }
 

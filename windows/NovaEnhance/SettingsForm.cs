@@ -1656,6 +1656,37 @@ class SettingsForm : NovaForm
             page.FitAll();
         }
         MirrorLine();
+        // ☁ The real emails in Drive: formatted pages (24 months) + attachments (3 months) — the phone needs no PC for them.
+        page.Add(Th.Check($"✉ Also copy the real emails to Google Drive — formatted view for {MailFull.Months} months + attachments for {MailFull.AttMonths} months (each up to 25 MB)", MailFull.On, v =>
+        {
+            if (v && MessageBox.Show(this, "Nova will copy your emails (encrypted with the phone's key) into Google Drive, newest first, in the background.\n\n" +
+                $"It stops at the size limit ({MailFull.LimitGb} GB) and never copies 🔒 private emails or files.\n\nThe first copy can take many hours — Outlook must be open. Start?",
+                "Nova Enhance · emails for the phone", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) { Go("📱 Phone link"); return; }
+            MailFull.On = v; Go("📱 Phone link");
+        }));
+        var fNote = Note("Counting…", Th.Muted);
+        async void FullLine()
+        {
+            try
+            {
+                var (m, a, mb) = await Task.Run(() => MailFull.Estimate());
+                var pr = MailFull.Progress;
+                if (fNote.IsDisposed) return;
+                fNote.Text = (MailFull.On ? (MailFull.Status.Length > 0 ? MailFull.Status : "⏳ Starting in a moment…") + "\n" : "") +
+                    $"To copy: {m:N0} emails (formatted pages about {mb / 1024.0:0.0} GB) and the attachments of {a:N0} emails — their size is counted as they are copied." +
+                    (pr.Mails > 0 ? $"\nIn Google Drive now: {pr.Mails:N0} emails · {pr.Atts:N0} attachments · {pr.Bytes / 1e9:0.00} GB" : "");
+                fNote.ForeColor = MailFull.On ? Th.Text : Th.Muted;
+                page.FitAll();
+            }
+            catch { }
+        }
+        FullLine();
+        var frow = page.Add(Th.Row(false));
+        frow.Controls.Add(Th.L("Stop at", 9.5f, Th.Text));
+        foreach (var g in new[] { 5, 10, 20, 50 }) { var gg = g; frow.Controls.Add(Th.Radio(g + " GB", MailFull.LimitGb == g, () => MailFull.LimitGb = gg)); }
+        frow.Controls.Add(Th.B("↻ Refresh", FullLine));
+        if (MailFull.Progress.Mails > 0 && !MailFull.On)
+            frow.Controls.Add(Th.B("🗑 Remove the emails from Drive", () => { MailFull.Forget(); Go("📱 Phone link"); }));
         var dpick = page.Add(Th.Row(false));
         dpick.Controls.Add(Th.B("📁 Pick the Google Drive folder…", () =>
         {
