@@ -55,6 +55,8 @@ jobs:
         run: |
           # Pasted values often carry a line break, a space or quotes: removed here.
           GD_ID=$(printf '%s' "$GD_ID" | tr -d ' \t\r\n"'); GD_SECRET=$(printf '%s' "$GD_SECRET" | tr -d ' \t\r\n"')
+          # More of the file pasted after the code (…","redirect_uris":…): only the code itself is kept.
+          GD_ID=$(printf '%s' "$GD_ID" | grep -oE '^[A-Za-z0-9._-]+' || true); GD_SECRET=$(printf '%s' "$GD_SECRET" | grep -oE '^[A-Za-z0-9._-]+' || true)
           if [ -n "$GD_ID" ] && [ -n "$GD_SECRET" ]; then
             for v in GD_ID GD_SECRET; do
               val="${!v}"
