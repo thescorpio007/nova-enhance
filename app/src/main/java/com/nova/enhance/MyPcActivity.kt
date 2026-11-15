@@ -105,7 +105,7 @@ class MyPcActivity : BaseActivity() {
 
     override fun onBackPressed() {
         if (page == "web" && lastMail != null) { openMail(lastMail!!); return }
-        if (page != "home" && page != "pair") show(if (page == "mail" && hits.isNotEmpty()) "search" else "home") else super.onBackPressed()
+        if (page != "home" && page != "pair") show(if (page == "mail" && items.isNotEmpty()) "find" else if (page == "mail" && hits.isNotEmpty()) "search" else "home") else super.onBackPressed()
     }
     private var lastMail: PcLink.Hit? = null
 
@@ -205,6 +205,7 @@ class MyPcActivity : BaseActivity() {
             "pair" -> pairPage()
             "home" -> homePage()
             "search" -> searchPage()
+            "find" -> findPage()
             "brief" -> briefPage()
             "files" -> filesPage()
             "starred" -> starredPage()
@@ -254,12 +255,12 @@ class MyPcActivity : BaseActivity() {
     private fun homePage() {
         val c = this
         val sr = Ui.row(c)
-        val q = Ui.input(c, "🔍 Search all your emails…", false).apply {
+        val q = Ui.input(c, "🔍 Search emails, files and drawings…", false).apply {
             imeOptions = EditorInfo.IME_ACTION_SEARCH
-            setOnEditorActionListener { v, _, _ -> runSearch(v.text.toString(), false); true }
+            setOnEditorActionListener { v, _, _ -> runFind(v.text.toString()); true }
         }
         sr.addView(q, Ui.lp(0, weight = 1f, end = Ui.dp(c, 8)))
-        sr.addView(Ui.button(c, "🔍", true) { runSearch(q.text.toString(), false) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT))
+        sr.addView(Ui.button(c, "🔍", true) { runFind(q.text.toString()) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT))
         body.addView(sr)
         projectChips()
         Thread {
@@ -275,9 +276,9 @@ class MyPcActivity : BaseActivity() {
                 card("🌅 Brief", if (brief == null) "not received yet" else "🔴 $red overdue · 🟠 $or this week · ${needs?.length() ?: 0} waiting",
                     brief?.optString("at")?.take(16)?.replace('T', ' ') ?: "") { show("brief") }
                 card("📥 Email", "%,d emails".format(n) + (if (old > 0) " · ${SimpleDateFormat("MMM yyyy", Locale.UK).format(Date(old))} → today · full text" else ""),
-                    mb(size)) { runSearch("", false) }
+                    mb(size)) { runFind("", "emails") }
                 card("📁 Projects", projs?.let { a -> (0 until a.length()).joinToString(" · ") { a.getJSONObject(it).optString("code") } } ?: "") { }
-                card("📂 Project files", "%,d files · names and text inside".format(f)) { show("files") }
+                card("📂 Project files", "%,d files · names and text inside".format(f)) { runFind("", "files") }
                 card("⭐ Starred", "$stars file(s) on the phone · open offline") { show("starred") }
                 card("🧠 Same brain as your PC", if (PcLink.brainNote(c).isBlank()) "not received yet" else "your words, project vocabulary and names are used by every correction") { }
                 card("⚙ Phone link", "update every ${getSharedPreferences("nova_pc", MODE_PRIVATE).getInt("every_min", 60)} min · unpair") { show("settings") }
@@ -384,6 +385,192 @@ class MyPcActivity : BaseActivity() {
         k.addView(Ui.text(c, "📁 ${h.project.ifBlank { "—" }} · ${if (h.sent) "Me (sent)" else h.from} · ${fmt.format(Date(h.date))}" +
             (if (h.att.isNotBlank()) " · 📎 ${h.att.split(';', '|').count { it.isNotBlank() }}" else ""), 12f, Ui.MUTED))
         if (h.why.isNotBlank()) k.addView(Ui.text(c, "✦ " + h.why, 12f, Ui.GOOD))
+        body.addView(k, Ui.lp(top = Ui.dp(c, 6)))
+    }
+
+    // ------------------------------------------------------------------ 🔍 one search: emails + files + drawings, understood, with filter chips
+
+    private var plan = PhoneSearch.Plan()
+    private var items: List<PhoneSearch.Item> = emptyList()
+    private var fKind = ""; private var fWhen = ""; private var fSort = "best"; private var latestOnly = true
+    private val fStage = HashSet<String>(); private val fDisc = HashSet<String>(); private val fDoc = HashSet<String>(); private val fExt = HashSet<String>()
+    private var findNote = ""
+
+    private fun runFind(q: String, kind: String = "") {
+        lastQuery = q
+        say("⏳ Understanding the question…")
+        val c = applicationContext
+        val t0 = System.currentTimeMillis()
+        Thread {
+            val r = runCatching {
+                val p = PhoneSearch.plan(c, q)
+                if (kind.isNotEmpty() && p.kind.isEmpty()) p.kind = kind
+                say("⏳ Searching on the phone…")
+                p to PhoneSearch.run(c, p, project)
+            }
+            main.post {
+                r.onSuccess { (p, l) ->
+                    plan = p; items = l
+                    // The AI's ticks — you can change them.
+                    fKind = p.kind; fWhen = if (p.since > 0) p.whenLabel else ""; fSort = if (p.waiting || q.isBlank()) "new" else "best"
+                    fStage.clear(); fDisc.clear(); fDoc.clear(); fExt.clear()
+                    if (p.stage.isNotEmpty()) fStage.add(p.stage); if (p.disc.isNotEmpty()) fDisc.add(p.disc); if (p.doc.isNotEmpty()) fDoc.add(p.doc); if (p.ext.isNotEmpty()) fExt.add(p.ext)
+                    // A tick that leaves nothing is taken off again (said in the note).
+                    val off = ArrayList<String>()
+                    if (shown().isEmpty() && fExt.isNotEmpty()) { off.add(fExt.first()); fExt.clear() }
+                    if (shown().isEmpty() && fStage.isNotEmpty()) { off.add(fStage.first()); fStage.clear() }
+                    if (shown().isEmpty() && fDoc.isNotEmpty()) { off.add(fDoc.first()); fDoc.clear() }
+                    if (shown().isEmpty() && fDisc.isNotEmpty()) { off.add(fDisc.first()); fDisc.clear() }
+                    if (shown().isEmpty() && fWhen.isNotEmpty()) { off.add(fWhen); fWhen = "" }
+                    if (shown().isEmpty() && fKind.isNotEmpty()) { off.add(fKind); fKind = "" }
+                    findNote = "%.1f s · on this phone".format((System.currentTimeMillis() - t0) / 1000.0) + (if (off.isNotEmpty()) " · nothing with ${off.joinToString(", ")} — shown without" else "")
+                }.onFailure { items = emptyList(); plan = PhoneSearch.Plan(); findNote = "⚠ " + (it.message ?: "failed") }
+                show("find")
+            }
+        }.start()
+    }
+
+    private fun sinceOf(label: String): Long {
+        val cal = java.util.Calendar.getInstance()
+        cal.set(java.util.Calendar.HOUR_OF_DAY, 0); cal.set(java.util.Calendar.MINUTE, 0); cal.set(java.util.Calendar.SECOND, 0); cal.set(java.util.Calendar.MILLISECOND, 0)
+        return when (label) {
+            "today" -> cal.timeInMillis
+            "this week" -> System.currentTimeMillis() - 7L * 86400000
+            "this month" -> { cal.set(java.util.Calendar.DAY_OF_MONTH, 1); cal.timeInMillis }
+            "since last month" -> System.currentTimeMillis() - 62L * 86400000
+            "this year" -> { cal.set(java.util.Calendar.DAY_OF_YEAR, 1); cal.timeInMillis }
+            else -> 0L
+        }
+    }
+
+    /** The results after the chips; [skip] leaves one row out (for that row's own counts). */
+    private fun shown(skip: String = ""): List<PhoneSearch.Item> {
+        val since = sinceOf(fWhen)
+        return items.filter { x ->
+            (skip == "kind" || fKind.isEmpty() || x.kind == fKind) &&
+            (skip == "stage" || fStage.isEmpty() || x.stage in fStage) &&
+            (skip == "disc" || fDisc.isEmpty() || x.disc in fDisc) &&
+            (skip == "doc" || fDoc.isEmpty() || x.doc in fDoc) &&
+            (skip == "ext" || fExt.isEmpty() || x.ext in fExt) &&
+            (skip == "when" || since == 0L || x.date >= since) &&
+            (project.isEmpty() || x.isMail && (x.project == project || x.project.isEmpty()) || !x.isMail) &&
+            (!latestOnly || x.isMail || x.latest)
+        }
+    }
+
+    private fun findPage() {
+        val c = this
+        val construction = Profile.isConstruction(Store(c))
+        val sr = Ui.row(c)
+        val q = Ui.input(c, "🔍 Search emails, files and drawings…", false).apply {
+            setText(lastQuery); imeOptions = EditorInfo.IME_ACTION_SEARCH
+            setOnEditorActionListener { v, _, _ -> runFind(v.text.toString()); true }
+        }
+        sr.addView(q, Ui.lp(0, weight = 1f, end = Ui.dp(c, 8)))
+        sr.addView(Ui.button(c, "🔍", true) { runFind(q.text.toString()) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT))
+        body.addView(sr)
+        body.addView(Ui.text(c, plan.understood(construction), 12.5f, if (plan.ai) Ui.ACCENT else Ui.MUTED), Ui.lp(top = Ui.dp(c, 6)))
+        if (findNote.isNotBlank()) body.addView(Ui.text(c, findNote, 11.5f, Ui.MUTED))
+        projectChips()
+
+        fun row(label: String, build: (LinearLayout) -> Int) {
+            val (sv, r) = Ui.chipRow(c)
+            if (build(r) == 0) return
+            body.addView(Ui.text(c, label, 10.5f, Ui.MUTED).apply { letterSpacing = 0.07f }, Ui.lp(top = Ui.dp(c, 8)))
+            body.addView(sv, Ui.lp(top = Ui.dp(c, 3)))
+        }
+        fun chip(r: LinearLayout, text: String, on: Boolean, tap: () -> Unit) =
+            r.addView(Ui.chip(c, text, on) { tap(); show("find") }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+        /** A row of values that exist in the results (ticked ones always stay), with their counts. */
+        fun facet(r: LinearLayout, key: String, sel: HashSet<String>, order: Collection<String>, of: (PhoneSearch.Item) -> String): Int {
+            val counts = shown(key).groupingBy(of).eachCount()
+            var n = 0
+            for (v in order) {
+                val k = counts[v] ?: 0
+                if (k == 0 && v !in sel) continue
+                chip(r, "$v $k", v in sel) { if (!sel.add(v)) sel.remove(v) }; n++
+            }
+            return n
+        }
+        row("KIND") { r ->
+            val k = shown("kind")
+            chip(r, "All ${k.size}", fKind.isEmpty()) { fKind = "" }
+            for ((id, label) in listOf("drawings" to "📐 Drawings", "files" to "📂 Files", "emails" to "✉ Emails"))
+                chip(r, "$label ${k.count { it.kind == id }}", fKind == id) { fKind = if (fKind == id) "" else id }
+            4
+        }
+        if (construction) {
+            row("STAGE · DISCIPLINE") { r -> facet(r, "stage", fStage, PhoneSearch.STAGE.keys) { it.stage } + facet(r, "disc", fDisc, PhoneSearch.DISC.keys) { it.disc } }
+            row("DOCUMENT") { r -> facet(r, "doc", fDoc, PhoneSearch.DOC.keys) { it.doc } }
+        }
+        row("FILE TYPE · WHEN") { r ->
+            val n = facet(r, "ext", fExt, PhoneSearch.EXT.keys) { it.ext }
+            val w = shown("when")
+            var m = 0
+            for (label in listOf("this week", "this month", "this year")) {
+                val k = w.count { it.date >= sinceOf(label) }
+                if (k == 0 && fWhen != label) continue
+                chip(r, label.replaceFirstChar { it.uppercase() } + " $k", fWhen == label) { fWhen = if (fWhen == label) "" else label }; m++
+            }
+            n + m
+        }
+        // Sort · latest revision only
+        val (ssv, srow) = Ui.chipRow(c)
+        srow.addView(Ui.text(c, "Sort", 12f, Ui.MUTED), Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 8)))
+        for ((k, l) in listOf("best" to "✦ Best", "new" to "Newest", "doc" to "Doc no."))
+            chip(srow, l, fSort == k) { fSort = k }
+        if (items.any { !it.isMail }) chip(srow, (if (latestOnly) "✓ " else "") + "Latest revision only", latestOnly) { latestOnly = !latestOnly }
+        body.addView(ssv, Ui.lp(top = Ui.dp(c, 8)))
+
+        val v = shown()
+        fun sorted(l: List<PhoneSearch.Item>) = when (fSort) {
+            "new" -> l.sortedByDescending { it.date }
+            "doc" -> l.sortedWith(compareBy<PhoneSearch.Item> { it.docNo.ifEmpty { "~" + it.name.lowercase() } }.thenByDescending { it.date })
+            else -> l.sortedWith(compareByDescending<PhoneSearch.Item> { it.score }.thenByDescending { it.date })
+        }
+        if (v.isEmpty()) { body.addView(Ui.text(c, "Nothing found — take a filter off, or use fewer words.", 14f, Ui.MUTED), Ui.lp(top = Ui.dp(c, 14))); return }
+        val groups = listOf("drawings" to "📐 Drawings", "files" to "📂 Files", "emails" to "✉ Emails")
+        for ((id, label) in groups) {
+            val g = sorted(v.filter { it.kind == id })
+            if (g.isEmpty()) continue
+            body.addView(Ui.section(c, "$label · ${g.size}"))
+            val max = if (fKind == id) 120 else 4
+            for (x in g.take(max)) if (x.isMail) findMail(x) else findFile(x)
+            if (g.size > max) body.addView(Ui.text(c, if (fKind == id) "…${g.size - max} more — add a filter or a word" else "▾ show all ${g.size}", 13f, Ui.ACCENT).apply {
+                setPadding(Ui.dp(c, 4), Ui.dp(c, 6), 0, Ui.dp(c, 2))
+                if (fKind != id) setOnClickListener { fKind = id; show("find") }
+            })
+        }
+        if (PcLink.hasRelay(c) && lastQuery.isNotBlank()) body.addView(Ui.smallButton(c, "🖥 Ask the PC instead (newest emails)") { runSearch(lastQuery, true) }, Ui.lp(top = Ui.dp(c, 10)))
+    }
+
+    private fun tags(x: PhoneSearch.Item): String = listOfNotNull(
+        x.stage.takeIf { it.isNotEmpty() }, x.disc.takeIf { it.isNotEmpty() }, x.doc.takeIf { it.isNotEmpty() },
+        ("Level " + plan.level).takeIf { x.levelHit && plan.level.isNotEmpty() },
+        (if (x.latest) "latest" + (if (x.rev.isNotEmpty()) " · ${x.rev}" else "") else "rev ${x.rev}").takeIf { !x.isMail && x.rev.isNotEmpty() }).joinToString("  ·  ")
+
+    private fun findFile(x: PhoneSearch.Item) {
+        val c = this
+        val f = x.file ?: return
+        val k = Ui.card(c).apply { setOnClickListener { fetch(JSONObject().put("path", f.path)) } }
+        k.addView(Ui.text(c, x.name, 14f, Ui.TEXT, true))
+        val folders = f.path.replace('/', '\\').split('\\').dropLast(1).filter { it.isNotBlank() && !it.endsWith(":") }.takeLast(3).joinToString(" › ")
+        k.addView(Ui.text(c, folders + " · " + "%.1f MB".format(f.size / 1e6) + (if (f.m > 0) " · " + SimpleDateFormat("dd MMM yyyy", Locale.UK).format(Date(f.m)) else ""), 11.5f, Ui.MUTED))
+        tags(x).let { if (it.isNotBlank()) k.addView(Ui.text(c, it, 11.5f, Ui.GOOD)) }
+        if (f.snippet.isNotBlank() && x.score < 6) k.addView(Ui.text(c, f.snippet, 11.5f, Ui.MUTED))
+        body.addView(k, Ui.lp(top = Ui.dp(c, 6)))
+    }
+
+    private fun findMail(x: PhoneSearch.Item) {
+        val c = this
+        val h = x.mail ?: return
+        val k = Ui.card(c).apply { setOnClickListener { openMail(h) } }
+        k.addView(Ui.text(c, h.subject.ifBlank { "(no subject)" }, 14f, Ui.TEXT, true))
+        k.addView(Ui.text(c, "${if (h.sent) "Me (sent)" else h.from} · ${SimpleDateFormat("EEE dd MMM yyyy", Locale.UK).format(Date(h.date))} · 📁 ${h.project.ifBlank { "—" }}" +
+            (if (h.att.isNotBlank()) " · 📎 ${h.att.split(';', '|').count { it.isNotBlank() }}" else ""), 11.5f, Ui.MUTED))
+        val t = tags(x)
+        if (t.isNotBlank()) k.addView(Ui.text(c, t, 11.5f, Ui.GOOD))
+        if (x.waitingDays >= 0) k.addView(Ui.text(c, "⏳ waiting ${x.waitingDays} day(s) for your reply", 11.5f, Ui.BAD))
         body.addView(k, Ui.lp(top = Ui.dp(c, 6)))
     }
 

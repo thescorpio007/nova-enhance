@@ -418,11 +418,16 @@ object PcLink {
 
     data class FileHit(val id: Long, val path: String, val size: Long, val m: Long, val snippet: String)
 
-    fun searchFiles(c: Context, question: String): List<FileHit> {
+    /** Every file of the catalogue (no words asked): the chips filter them. */
+    fun allFiles(c: Context, limit: Int): List<FileHit> =
+        Db.get(c).rawQuery("SELECT id, path, size, m FROM files ORDER BY m DESC LIMIT $limit", null).use { cu ->
+            generateSequence { if (cu.moveToNext()) FileHit(cu.getLong(0), cu.getString(1) ?: "", cu.getLong(2), cu.getLong(3), "") else null }.toList() }
+
+    fun searchFiles(c: Context, question: String, limit: Int = 200): List<FileHit> {
         val words = Regex("[\\p{L}\\p{N}][\\p{L}\\p{N}\\-_.]*").findAll(question).map { it.value }.filter { it.length > 1 && !instruction.matches(it) }.take(8).toList()
         if (words.isEmpty()) return emptyList()
         val match = words.joinToString(" ") { if (it.contains('-') || it.contains('_') || it.contains('.')) "\"" + it.replace(Regex("[\\-_.]"), " ") + "\"" else "$it*" }
-        return Db.get(c).rawQuery("SELECT f.id, f.path, f.size, f.m, snippet(files_fts, '[', ']', '…', -1, 12) FROM files_fts JOIN files f ON f.id = files_fts.docid WHERE files_fts MATCH ? LIMIT 200",
+        return Db.get(c).rawQuery("SELECT f.id, f.path, f.size, f.m, snippet(files_fts, '[', ']', '…', -1, 12) FROM files_fts JOIN files f ON f.id = files_fts.docid WHERE files_fts MATCH ? LIMIT $limit",
             arrayOf(match)).use { cu -> generateSequence { if (cu.moveToNext()) FileHit(cu.getLong(0), cu.getString(1) ?: "", cu.getLong(2), cu.getLong(3), cu.getString(4) ?: "") else null }.toList() }
     }
 
