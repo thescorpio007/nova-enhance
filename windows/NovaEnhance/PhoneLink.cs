@@ -653,7 +653,7 @@ static class PhoneLink
                 {
                     var p = a["path"]!.ToString();
                     if (Private(p) || !File.Exists(p)) throw new Exception("file not available");
-                    if (new FileInfo(p).Length > 15_000_000) throw new Exception("file larger than 15 MB — star it to get it through the sync");
+                    if (new FileInfo(p).Length > 35_000_000) throw new Exception("file larger than 35 MB — star it to get it through the sync");
                     data = await File.ReadAllBytesAsync(p); name = System.IO.Path.GetFileName(p);
                 }
                 else
@@ -664,7 +664,7 @@ static class PhoneLink
                     var tmp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "nova-fetch-" + Guid.NewGuid().ToString("N") + ".msg");
                     Outlook.SaveMsg(h.Entry, h.StoreId, tmp);
                     data = await File.ReadAllBytesAsync(tmp); try { File.Delete(tmp); } catch { }
-                    if (data.Length > 15_000_000) throw new Exception("email larger than 15 MB — star it to get it through the sync");
+                    if (data.Length > 35_000_000) throw new Exception("email larger than 35 MB — star it to get it through the sync");
                     name = string.Join("_", (h.Subject ?? "email").Split(System.IO.Path.GetInvalidFileNameChars())) + ".msg";
                 }
                 res = new JsonObject { ["name"] = name, ["data"] = Convert.ToBase64String(Gzip(data)) };
@@ -694,7 +694,7 @@ static class PhoneLink
                 var path = await MailPreview.SaveAttachment(h, name, dir);
                 try
                 {
-                    if (new FileInfo(path).Length > 25_000_000) throw new Exception("attachment larger than 25 MB — open it on the PC");
+                    if (new FileInfo(path).Length > 35_000_000) throw new Exception("attachment larger than 35 MB — open it on the PC");
                     res = new JsonObject { ["name"] = System.IO.Path.GetFileName(path), ["data"] = Convert.ToBase64String(Gzip(await File.ReadAllBytesAsync(path))) };
                 }
                 finally { try { Directory.Delete(dir, true); } catch { } }

@@ -9,7 +9,8 @@ namespace NovaEnhance;
 /// <summary>
 /// ☁ The real emails for the phone, in Google Drive — so the phone shows the FORMATTED email and opens its attachments with the PC off.
 /// · the formatted page (fonts, tables, pictures) of every email of the last 24 months;
-/// · the attachments of the last 3 months (each up to 25 MB).
+/// · the attachments of the last 3 months (each up to 35 MB);
+/// · the real Outlook email (.msg) of the last 3 months (up to 35 MB) — for ↗ Share on the phone.
 /// Encrypted with the pairing key like the rest of the copy (Google only stores locked files); 🔒 private emails and files never go.
 /// It works in the background, newest first, a little at a time, and stops at the size limit you set. Designed by A.HAMROUNI
 /// </summary>
@@ -18,7 +19,7 @@ static class MailFull
     public static bool On { get => Store.Bool("win_pl_full", false); set { Store.SetBool("win_pl_full", value); if (value) Start(); } }
     /// <summary>The copy stops growing at this size (GB).</summary>
     public static int LimitGb { get => Math.Clamp(Store.Int("win_pl_full_gb", 10), 1, 200); set => Store.SetInt("win_pl_full_gb", value); }
-    public const int Months = 24, AttMonths = 3, Bucket = 200, AttMax = 25_000_000;
+    public const int Months = 24, AttMonths = 3, Bucket = 200, AttMax = 35_000_000;
     public static string Status = "";
     static Thread loop;
 
@@ -74,6 +75,8 @@ static class MailFull
     {
         try { if (Directory.Exists(Root)) Directory.Delete(Root, true); } catch { }
         try { File.Delete(StateFile); } catch { }
+        try { File.Delete(MsgSkipFile); } catch { }
+        msgDone = null;
         Status = "";
     }
 
@@ -87,7 +90,7 @@ static class MailFull
             {
                 var wait = TimeSpan.FromMinutes(10);
                 if (On)
-                    try { if (Pass()) wait = TimeSpan.FromSeconds(5); }
+                    try { if (Pass() || PassMsg()) wait = TimeSpan.FromSeconds(5); }
                     catch (Exception e) { Status = "⚠ " + e.Message; Log.Warn("emails for the phone", e.Message); }
                 Thread.Sleep(wait);
             }
@@ -206,6 +209,64 @@ static class MailFull
         // Stopped half-way (switched off): the rest of this bucket is done next time.
         if (!broke) s.Done[top.ToString()] = Math.Min(max, top * Bucket + Bucket - 1);
         else if (last >= 0) s.Done[top.ToString()] = last;
+        Save(s);
+        return On;
+    }
+
+    // ------------------------------------------------------------------ ✉ the real .msg of the last 3 months (↗ Share on the phone)
+
+    static string MsgFile(long id) => Path.Combine(Root, "e", (id / 1000).ToString(), id + ".nes");
+    static HashSet<long> msgDone;
+    static string MsgSkipFile => Path.Combine(Paths.Root, "phone-full-msg-skip.txt");
+
+    /// <summary>A few emails at a time, newest first. True = there is more to do right away.</summary>
+    static bool PassMsg()
+    {
+        if (!PhoneLink.On || !PhoneLink.DriveOn || Outlook.Running() == null) return false;
+        var s = Load();
+        if (s.Bytes > LimitGb * 1_000_000_000L) return false;
+        if (msgDone == null)
+        {
+            msgDone = new HashSet<long>();
+            try
+            {
+                var e = Path.Combine(Root, "e");
+                if (Directory.Exists(e)) foreach (var f in Directory.EnumerateFiles(e, "*.nes", SearchOption.AllDirectories)) if (long.TryParse(Path.GetFileNameWithoutExtension(f), out var id)) msgDone.Add(id);
+                if (File.Exists(MsgSkipFile)) foreach (var l in File.ReadAllLines(MsgSkipFile)) if (long.TryParse(l, out var id)) msgDone.Add(id);   // too large, private or unreadable
+            }
+            catch { }
+        }
+        var todo = new List<long>();
+        using (var c = MailIndex.Open())
+        using (var cmd = c.CreateCommand())
+        {
+            cmd.CommandText = "SELECT id FROM mail WHERE date >= $d ORDER BY id DESC";
+            cmd.Parameters.AddWithValue("$d", Ms(DateTime.Now.AddMonths(-AttMonths)));
+            using var r = cmd.ExecuteReader();
+            while (r.Read() && todo.Count < 25) { var id = r.GetInt64(0); if (!msgDone.Contains(id)) todo.Add(id); }
+        }
+        if (todo.Count == 0) return false;
+        foreach (var h in MailIndex.ByIds(todo, todo.Count + 1).OrderByDescending(x => x.Id))
+        {
+            if (!On) break;
+            bool kept = false;
+            if (!Projects.Private.IsMatch($"{h.Subject} {h.Folder} {h.AttNames}"))
+            {
+                var tmp = Path.Combine(Path.GetTempPath(), "nova-full-msg-" + Guid.NewGuid().ToString("N") + ".msg");
+                try
+                {
+                    Status = $"⏳ Copying Outlook emails (.msg) for ↗ Share · {s.Bytes / 1e9:0.00} GB · now {h.Date:dd MMM yyyy}";
+                    Outlook.SaveMsg(h.Entry, h.StoreId, tmp);
+                    if (File.Exists(tmp) && new FileInfo(tmp).Length <= AttMax) { WriteSealed(MsgFile(h.Id), File.ReadAllBytes(tmp), s); kept = true; }
+                }
+                catch { }
+                finally { try { File.Delete(tmp); } catch { } }
+            }
+            msgDone.Add(h.Id);
+            if (!kept) try { File.AppendAllText(MsgSkipFile, h.Id + "\n"); } catch { }
+            Thread.Sleep(150);
+        }
+        foreach (var id in todo) msgDone.Add(id);        // not in the index any more: not asked again this run
         Save(s);
         return On;
     }

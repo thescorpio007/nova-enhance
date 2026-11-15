@@ -34,6 +34,33 @@ object OutlookFiles {
 
     private fun esc(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
+    /** An .eml (opens in Outlook, Gmail, Windows Mail…) from what the phone has: the page or the text, and the attachments. */
+    fun eml(from: String, to: String, cc: String, subject: String, date: Long, html: String?, text: String, atts: List<Pair<String, ByteArray>>): ByteArray {
+        fun hdr(v: String) = if (v.all { it.code in 32..126 }) v else "=?UTF-8?B?" + Base64.encodeToString(v.toByteArray(Charsets.UTF_8), Base64.NO_WRAP) + "?="
+        fun addrs(v: String) = v.split(';').map { it.trim() }.filter { it.isNotEmpty() }.joinToString(", ") { a ->
+            val m = Regex("^(.*?)<([^>]+)>$").find(a)
+            if (m != null) hdr(m.groupValues[1].trim().trim('"')).let { n -> if (n.isEmpty()) "<${m.groupValues[2]}>" else "\"$n\" <${m.groupValues[2]}>" } else if (a.contains('@')) a else "\"${hdr(a)}\""
+        }
+        fun b64(b: ByteArray) = Base64.encodeToString(b, Base64.NO_WRAP).chunked(76).joinToString("\r\n")
+        val bd = "nova-" + java.lang.Long.toHexString(System.nanoTime())
+        val o = ByteArrayOutputStream()
+        fun w(s: String) = o.write(s.toByteArray(Charsets.UTF_8))
+        val df = java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss Z", java.util.Locale.US)
+        w("From: ${addrs(from)}\r\n")
+        if (to.isNotBlank()) w("To: ${addrs(to)}\r\n")
+        if (cc.isNotBlank()) w("Cc: ${addrs(cc)}\r\n")
+        w("Subject: ${hdr(subject)}\r\nDate: ${df.format(java.util.Date(date))}\r\nMIME-Version: 1.0\r\nX-Unsent: 0\r\nContent-Type: multipart/mixed; boundary=\"$bd\"\r\n\r\n")
+        w("--$bd\r\nContent-Type: ${if (html != null) "text/html" else "text/plain"}; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\n\r\n")
+        w(b64((html ?: text).toByteArray(Charsets.UTF_8))); w("\r\n")
+        for ((name, data) in atts) {
+            val safe = hdr(name)
+            w("--$bd\r\nContent-Type: application/octet-stream; name=\"$safe\"\r\nContent-Disposition: attachment; filename=\"$safe\"\r\nContent-Transfer-Encoding: base64\r\n\r\n")
+            w(b64(data)); w("\r\n")
+        }
+        w("--$bd--\r\n")
+        return o.toByteArray()
+    }
+
     /** Puts [add] right after the first match of [tag] (case-insensitive); unchanged when there is none. */
     private fun after(s: String, tag: String, add: String): String {
         val m = Regex(tag, RegexOption.IGNORE_CASE).find(s) ?: return s

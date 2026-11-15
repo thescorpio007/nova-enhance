@@ -1657,7 +1657,7 @@ class SettingsForm : NovaForm
         }
         MirrorLine();
         // ☁ The real emails in Drive: formatted pages (24 months) + attachments (3 months) — the phone needs no PC for them.
-        page.Add(Th.Check($"✉ Also copy the real emails to Google Drive — formatted view for {MailFull.Months} months + attachments for {MailFull.AttMonths} months (each up to 25 MB)", MailFull.On, v =>
+        page.Add(Th.Check($"✉ Also copy the real emails to Google Drive — formatted view for {MailFull.Months} months + attachments and the Outlook email (.msg, for ↗ Share) for {MailFull.AttMonths} months (each up to 35 MB)", MailFull.On, v =>
         {
             if (v && MessageBox.Show(this, "Nova will copy your emails (encrypted with the phone's key) into Google Drive, newest first, in the background.\n\n" +
                 $"It stops at the size limit ({MailFull.LimitGb} GB) and never copies 🔒 private emails or files.\n\nThe first copy can take many hours — Outlook must be open. Start?",

@@ -28,6 +28,7 @@
     </queries>
 
     <application
+        android:largeHeap="true"
         android:name=".App"
         android:allowBackup="true"
         android:icon="@drawable/ic_launcher"

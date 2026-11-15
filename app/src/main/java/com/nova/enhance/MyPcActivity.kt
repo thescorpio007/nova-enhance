@@ -594,7 +594,7 @@ class MyPcActivity : BaseActivity() {
         b("📄 Formatted", true) { formatted(h) }
         b("✦ Draft reply") { draft(h) }
         b("✓ Handled") { pcDo("handled", JSONObject().put("i", h.id).put("on", true), "✓ Marked as handled on your PC") }
-        b("⧉ Copy") { Ui.copy(c, h.subject + "\n\n" + h.body) }
+        b("↗ Share") { shareMenu(h) }
         body.addView(sv, Ui.lp(top = Ui.dp(c, 8)))
         attachments(h)
         // The text, readable: links as 🔗, earlier messages folded.
@@ -643,30 +643,122 @@ class MyPcActivity : BaseActivity() {
         body.addView(box, Ui.lp(top = Ui.dp(c, 8)))
     }
 
+    /** One attachment as a file on the phone: kept copy → ☁ Google Drive (last 3 months, up to 35 MB) → the PC. Blocking. */
+    private fun attFile(h: PcLink.Hit, name: String): File {
+        val c = applicationContext
+        val local = File(File(PcLink.dir(c), "fetched").apply { mkdirs() }, name.replace(Regex("[\\\\/:*?\"<>|]"), "_"))
+        if (local.exists() && local.length() > 0) return local
+        val fromDrive = if (GDrive.usable(c)) try {
+            val sha = java.security.MessageDigest.getInstance("SHA-1").digest(name.lowercase().toByteArray()).joinToString("") { "%02x".format(it) }.take(16)
+            GDrive.fetchSync(c, "full/a/${h.id / 1000}/${h.id}-$sha.nes")?.let { PcLink.unbox(c, it) }
+        } catch (_: Exception) { null } else null
+        if (fromDrive != null) local.writeBytes(fromDrive)
+        else {
+            val o = PcLink.ask(c, "att", JSONObject().put("i", h.id).put("name", name)) { say(it) }
+            local.writeBytes(PcLink.gunzip(android.util.Base64.decode(o.getString("data"), android.util.Base64.DEFAULT)))
+        }
+        return local
+    }
+
     private fun getAttachment(h: PcLink.Hit, name: String) {
-        val local = File(File(PcLink.dir(this), "fetched"), name.replace(Regex("[\\\\/:*?\"<>|]"), "_"))
-        if (local.exists() && local.length() > 0) { openFile(local); return }
         say(if (GDrive.usable(this)) "⏳ Getting “$name” from Google Drive…" else "⏳ Getting “$name” from your PC…")
         Thread {
-            val r = runCatching {
-                local.parentFile?.mkdirs()
-                // ☁ Google Drive first (attachments of the last 3 months), then the PC.
-                val fromDrive = if (GDrive.usable(applicationContext)) try {
-                    val sha = java.security.MessageDigest.getInstance("SHA-1").digest(name.lowercase().toByteArray()).joinToString("") { "%02x".format(it) }.take(16)
-                    GDrive.fetchSync(applicationContext, "full/a/${h.id / 1000}/${h.id}-$sha.nes")?.let { PcLink.unbox(applicationContext, it) }
-                } catch (_: Exception) { null } else null
-                if (fromDrive != null) local.writeBytes(fromDrive)
-                else {
-                    val o = PcLink.ask(applicationContext, "att", JSONObject().put("i", h.id).put("name", name)) { say(it) }
-                    local.writeBytes(PcLink.gunzip(android.util.Base64.decode(o.getString("data"), android.util.Base64.DEFAULT)))
-                }
-                local
-            }
+            val r = runCatching { attFile(h, name) }
             main.post {
                 r.onSuccess { status.text = "✓ ${it.name}"; openFile(it) }
-                    .onFailure { status.text = "⚠ " + (if (GDrive.usable(this)) "Not in Google Drive (older than 3 months or over 25 MB) and your PC can't be reached: " else "") + it.message }
+                    .onFailure { status.text = "⚠ " + (if (GDrive.usable(this)) "Not in Google Drive (older than 3 months or over 35 MB) and your PC can't be reached: " else "") + it.message }
             }
         }.start()
+    }
+
+    // ------------------------------------------------------------------ ↗ Share an email: .msg (or .eml), save to the phone, attachments only, copy
+
+    private fun attNames(h: PcLink.Hit) = h.att.split(';', '|').map { it.trim() }.filter { it.isNotEmpty() && !Regex("^image\\d+\\.(png|jpe?g|gif)$", RegexOption.IGNORE_CASE).matches(it) }
+
+    /**
+     * The email as a file: the real Outlook .msg from ☁ Google Drive (last 3 months) or from the PC when it answers;
+     * otherwise an .eml built here from the formatted page and the attachments (Outlook, Gmail and Windows open it the same way). Blocking.
+     */
+    private fun mailFile(h: PcLink.Hit): Pair<File, String> {
+        val c = applicationContext
+        val dir = File(PcLink.dir(c), "fetched/m${h.id}").apply { mkdirs() }      // one folder per email: the same subject never mixes two emails
+        val stem = h.subject.ifBlank { "email" }.replace(Regex("[\\\\/:*?\"<>|\\r\\n\\t]"), "_").trim().take(110)
+        val msg = File(dir, "$stem.msg")
+        if (msg.exists() && msg.length() > 0) return msg to "kept on the phone"
+        if (GDrive.usable(c)) try {
+            say("⏳ Getting the Outlook email from Google Drive…")
+            GDrive.fetchSync(c, "full/e/${h.id / 1000}/${h.id}.nes")?.let { msg.writeBytes(PcLink.unbox(c, it)); return msg to "☁ from Google Drive" }
+        } catch (_: Exception) { }
+        try {
+            say("⏳ Asking your PC for the Outlook email…")
+            val o = PcLink.ask(c, "fetch", JSONObject().put("i", h.id)) { say(it) }
+            msg.writeBytes(PcLink.gunzip(android.util.Base64.decode(o.getString("data"), android.util.Base64.DEFAULT)))
+            return msg to "🖥 from your PC"
+        } catch (_: Exception) { }
+        // The PC is off and the .msg is not in Drive: an .eml with the same content.
+        say("⏳ Building the email file on the phone…")
+        val full = PcLink.mail(c, h.id) ?: h
+        val html = try { driveMail(h.id)?.optString("h")?.takeIf { it.isNotBlank() } } catch (_: Exception) { null }
+            ?: File(File(PcLink.dir(c), "formatted"), "${h.id}.html").takeIf { it.exists() }?.readText()
+        val atts = ArrayList<Pair<String, ByteArray>>(); var missing = 0
+        for (n in attNames(h)) try { atts.add(n to attFile(h, n).readBytes()) } catch (_: Exception) { missing++ }
+        val eml = File(dir, "$stem.eml")
+        eml.writeBytes(OutlookFiles.eml(if (h.fromAddr.isNotBlank()) "${h.from} <${h.fromAddr}>" else h.from, h.to, h.cc, h.subject, h.date, html, full.body.ifBlank { h.first }, atts))
+        return eml to ("built on the phone as .eml (the PC is off and the .msg is not in Google Drive)" + (if (missing > 0) " · $missing attachment(s) could not be included" else ""))
+    }
+
+    private fun uriOf(f: File) = Uri.parse("content://${PcFiles.AUTH}/" + Uri.encode(f.relativeTo(PcLink.dir(this)).path, "/"))
+    private fun mimeOf(f: File) = when (f.extension.lowercase()) { "msg" -> "application/vnd.ms-outlook"; "eml" -> "message/rfc822"
+        else -> MimeTypeMap.getSingleton().getMimeTypeFromExtension(f.extension.lowercase()) ?: "application/octet-stream" }
+
+    private fun shareMenu(h: PcLink.Hit) {
+        val c = this
+        val n = attNames(h).size
+        val items = arrayListOf("✉  Outlook email (.msg)" + (if (n > 0) " with its $n attachment(s)" else ""), "💾  Save to phone (Download › Nova Enhance)")
+        if (n > 0) items.add("📎  Attachments only ($n)")
+        items.add("⧉  Copy the text")
+        android.app.AlertDialog.Builder(c).setTitle("↗ Share this email").setItems(items.toTypedArray()) { _, w ->
+            when (items[w].substring(0, 1)) {
+                "✉" -> work({ mailFile(h) }) { (f, how) ->
+                    status.text = "✓ ${f.name} · $how"
+                    startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType(mimeOf(f)).putExtra(Intent.EXTRA_STREAM, uriOf(f)).putExtra(Intent.EXTRA_SUBJECT, h.subject)
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), "↗ Share “${f.name}”"))
+                }
+                "💾" -> work({ mailFile(h).let { (f, how) -> saveToDownloads(f) to how } }) { (where, how) -> status.text = "✓ Saved: $where · $how"; Ui.toast(c, "Saved: $where") }
+                "📎" -> work({ attNames(h).mapNotNull { nm -> try { attFile(h, nm) } catch (_: Exception) { null } } }) { files ->
+                    if (files.isEmpty()) { status.text = "⚠ The attachments are not in Google Drive and your PC can't be reached"; return@work }
+                    status.text = "✓ ${files.size} attachment(s)"
+                    val send = if (files.size == 1) Intent(Intent.ACTION_SEND).setType(mimeOf(files[0])).putExtra(Intent.EXTRA_STREAM, uriOf(files[0]))
+                        else Intent(Intent.ACTION_SEND_MULTIPLE).setType("*/*").putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(files.map { uriOf(it) }))
+                    startActivity(Intent.createChooser(send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), "↗ Share the attachments"))
+                }
+                else -> Ui.copy(c, h.subject + "\n\n" + (PcLink.mail(c, h.id)?.body ?: h.body))
+            }
+        }.show()
+    }
+
+    /** Runs [job] off the screen thread, then [done] on it; a failure goes to the status line. */
+    private fun <T> work(job: () -> T, done: (T) -> Unit) {
+        Thread {
+            val r = runCatching(job)
+            main.post { r.onSuccess { try { done(it) } catch (e: Exception) { status.text = "⚠ " + e.message } }.onFailure { status.text = "⚠ " + (it.message ?: "failed") } }
+        }.start()
+    }
+
+    /** Download › Nova Enhance › name (Android 10+); older phones: the app's own Download folder. Returns where it is. */
+    private fun saveToDownloads(f: File): String {
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            val v = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.Downloads.DISPLAY_NAME, f.name); put(android.provider.MediaStore.Downloads.MIME_TYPE, mimeOf(f))
+                put(android.provider.MediaStore.Downloads.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS + "/Nova Enhance")
+            }
+            val u = contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, v) ?: throw Exception("the phone refused to save the file")
+            contentResolver.openOutputStream(u)?.use { o -> f.inputStream().use { it.copyTo(o) } } ?: throw Exception("the phone refused to save the file")
+            return "Download › Nova Enhance › ${f.name}"
+        }
+        val dir = File(getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS), "Nova Enhance").apply { mkdirs() }
+        f.copyTo(File(dir, f.name), true)
+        return "Android › data › Nova Enhance › Download › ${f.name}"
     }
 
     /** 📄 The email as Outlook shows it (fonts, tables, logos, pictures), shown inside Nova. Kept on the phone after the first time. */
