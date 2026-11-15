@@ -55,6 +55,8 @@ class MyPcActivity : BaseActivity() {
         root.addView(head)
         status = Ui.text(c, "", 12.5f, Ui.MUTED)
         root.addView(status)
+        sourceBar = Ui.col(c)
+        root.addView(sourceBar)
         val sv = ScrollView(c).apply { isFillViewport = true }
         body = Ui.col(c)
         sv.addView(body)
@@ -96,6 +98,39 @@ class MyPcActivity : BaseActivity() {
     }
     private var lastMail: PcLink.Hit? = null
 
+    private lateinit var sourceBar: LinearLayout
+
+    /** ☁ / 📶 / 🔁 Where the data comes from — at the top of every My PC page. */
+    private fun drawSource() {
+        val c = this
+        sourceBar.removeAllViews()
+        if (!PcLink.paired(c)) return
+        val (scroll, row) = Ui.chipRow(c)
+        row.addView(Ui.text(c, "Get my data from", 12f, Ui.MUTED), Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 8)))
+        val cur = GDrive.source(c)
+        for ((v, l) in listOf("auto" to "Auto", "drive" to "☁ Google Drive", "wifi" to "📶 Office Wi-Fi", "relay" to "🔁 Relay"))
+            row.addView(Ui.chip(c, l, cur == v) {
+                GDrive.setSource(c, v); drawSource()
+                if (v == "drive" && !GDrive.signedIn(c)) googleSignIn() else syncNow()
+            })
+        sourceBar.addView(scroll, Ui.lp(top = Ui.dp(c, 6)))
+        if ((cur == "auto" || cur == "drive") && !GDrive.signedIn(c))
+            sourceBar.addView(
+                if (GDrive.configured(c)) Ui.button(c, "☁ Sign in with Google — then the PC can be off") { googleSignIn() }
+                else Ui.text(c, "☁ Google Drive: this copy of Nova has no Google sign-in built in yet.", 12f, Ui.MUTED),
+                Ui.lp(top = Ui.dp(c, 6)))
+    }
+
+    private fun googleSignIn() {
+        Thread {
+            val r = runCatching { GDrive.signIn(this) { say(it) } }
+            main.post {
+                status.text = r.fold({ "✓ Google Drive connected" + (if (it.isNotBlank()) " ($it)" else "") + " — updating…" }, { "⚠ " + it.message })
+                drawSource(); if (page == "settings") show("settings"); if (r.isSuccess) syncNow()
+            }
+        }.start()
+    }
+
     private fun say(s: String) = main.post { status.text = s }
 
     private fun headerStatus() {
@@ -121,6 +156,7 @@ class MyPcActivity : BaseActivity() {
         page = p
         body.removeAllViews()
         headerStatus()
+        drawSource()
         when (p) {
             "pair" -> pairPage()
             "home" -> homePage()
@@ -553,7 +589,8 @@ class MyPcActivity : BaseActivity() {
         sr.addView(q, Ui.lp(0, weight = 1f, end = Ui.dp(c, 8)))
         sr.addView(Ui.button(c, "🔍", true) { run() }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT))
         body.addView(sr)
-        body.addView(Ui.text(c, "Tap a file to get it from your PC (through the relay, up to 15 MB). ⭐ Star it on the PC to keep it on the phone.", 12f, Ui.MUTED), Ui.lp(top = Ui.dp(c, 6)))
+        body.addView(Ui.text(c, (if (GDrive.signedIn(c) && GDrive.source(c).let { it == "auto" || it == "drive" }) "Tap a file to open it from Google Drive (the PC can be off)."
+            else "Tap a file to get it from your PC (office Wi-Fi, or the relay up to 15 MB).") + " ⭐ Star it on the PC to keep it on the phone.", 12f, Ui.MUTED), Ui.lp(top = Ui.dp(c, 6)))
         body.addView(results)
     }
 
@@ -594,15 +631,12 @@ class MyPcActivity : BaseActivity() {
         val gdLine = when {
             GDrive.signedIn(c) -> "✓ Signed in" + GDrive.account(c).let { if (it.isNotBlank()) " as $it" else "" } + " — the copy and your project files come straight from Google Drive."
             GDrive.configured(c) -> "Not signed in yet. One Google sign-in (read-only) and the phone updates from Google Drive by itself, even when the PC is off."
-            else -> "Your PC has not shared its Google sign-in yet: on the PC set up Settings → Google Drive, then ⟳ update once over the office Wi-Fi (or scan the QR code again)."
+            else -> "This copy of Nova has no Google sign-in built in yet — update Nova Enhance."
         }
         body.addView(Ui.text(c, gdLine, 13f, if (GDrive.signedIn(c)) Ui.TEXT else Ui.MUTED), Ui.lp(top = Ui.dp(c, 4)))
-        if (GDrive.configured(c)) body.addView(Ui.button(c, if (GDrive.signedIn(c)) "Sign out of Google Drive" else "☁ Sign in to Google Drive") {
+        if (GDrive.configured(c)) body.addView(Ui.button(c, if (GDrive.signedIn(c)) "Sign out of Google Drive" else "☁ Sign in with Google") {
             if (GDrive.signedIn(c)) { GDrive.signOut(c); show("settings") }
-            else Thread {
-                val r = runCatching { GDrive.signIn(this) { say(it) } }
-                main.post { status.text = r.fold({ "✓ Google Drive connected" + (if (it.isNotBlank()) " ($it)" else "") + " — updating…" }, { "⚠ " + it.message }); show("settings"); if (r.isSuccess) syncNow() }
-            }.start()
+            else googleSignIn()
         }, Ui.lp(top = Ui.dp(c, 8)))
         body.addView(Ui.text(c, "On this phone: ${mb(PcLink.sizeOnPhone(c))} · %,d emails · %,d files".format(PcLink.count(c, "mail"), PcLink.count(c, "files")), 13f, Ui.TEXT), Ui.lp(top = Ui.dp(c, 8)))
         body.addView(Ui.button(c, "📷 Pair again (scan the QR code)") { scan() }, Ui.lp(top = Ui.dp(c, 14)))

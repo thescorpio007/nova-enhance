@@ -53,6 +53,17 @@ jobs:
           PY
           echo "::notice title=Signing key::ready"
 
+      - name: Nova's Google sign-in app (NOVA_GD_ID / NOVA_GD_SECRET secrets; empty = none built in)
+        env:
+          GD_ID: ${{ secrets.NOVA_GD_ID }}
+          GD_SECRET: ${{ secrets.NOVA_GD_SECRET }}
+        run: |
+          if ($env:GD_ID -and $env:GD_SECRET) {
+            if (("$env:GD_ID$env:GD_SECRET") -notmatch '^[A-Za-z0-9._-]+$') { Write-Host "::error title=Google sign-in::NOVA_GD_ID / NOVA_GD_SECRET contain unexpected characters"; exit 1 }
+            Set-Content -Path windows/NovaEnhance/GdBuiltIn.cs -Encoding utf8 -Value "namespace NovaEnhance;`nstatic class GdBuiltIn { public static readonly string Id = `"$env:GD_ID`"; public static readonly string Secret = `"$env:GD_SECRET`"; }"
+            Write-Host "::notice title=Google sign-in::built in"
+          } else { Write-Host "::notice title=Google sign-in::not built in (add the NOVA_GD_ID and NOVA_GD_SECRET secrets)" }
+
       - name: Build
         run: |
           dotnet publish windows/NovaEnhance/NovaEnhance.csproj -c Release -r win-x64 -o out "-p:Version=2.0.${{ inputs.build }}" -nologo 2>&1 | Tee-Object -FilePath build.log

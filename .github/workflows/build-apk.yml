@@ -48,6 +48,19 @@ jobs:
           curl -sSL --retry 3 https://raw.githubusercontent.com/dwyl/english-words/master/words_alpha.txt | tr -d '\r' | tr 'A-Z' 'a-z' | grep -E '^[a-z]{2,}$' | LC_ALL=C sort -u > app/src/main/assets/words.txt || true
           echo "::notice title=Word list::$(wc -l < app/src/main/assets/words.txt) words"
 
+      - name: Nova's Google sign-in app (NOVA_GD_ID / NOVA_GD_SECRET secrets; empty = none built in)
+        env:
+          GD_ID: ${{ secrets.NOVA_GD_ID }}
+          GD_SECRET: ${{ secrets.NOVA_GD_SECRET }}
+        run: |
+          if [ -n "$GD_ID" ] && [ -n "$GD_SECRET" ]; then
+            if ! printf '%s%s' "$GD_ID" "$GD_SECRET" | grep -Eq '^[A-Za-z0-9._-]+$'; then echo "::error title=Google sign-in::NOVA_GD_ID / NOVA_GD_SECRET contain unexpected characters"; exit 1; fi
+            printf 'package com.nova.enhance\n\nobject GdBuiltIn {\n    const val ID = "%s"\n    const val SECRET = "%s"\n}\n' "$GD_ID" "$GD_SECRET" > app/src/main/java/com/nova/enhance/GdBuiltIn.kt
+            echo "::notice title=Google sign-in::built in"
+          else
+            echo "::notice title=Google sign-in::not built in (add the NOVA_GD_ID and NOVA_GD_SECRET secrets)"
+          fi
+
       - name: Build
         env:
           NOVA_BUILD: ${{ inputs.build }}

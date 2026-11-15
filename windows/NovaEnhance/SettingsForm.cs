@@ -1634,9 +1634,9 @@ class SettingsForm : NovaForm
         }
         DriveLine();
         // ☁ The phone reads Google Drive itself (no PC needed): your Google sign-in app + where the work folder is copied in Drive.
-        var phNote = Note(GDrive.Configured
-            ? "📱 The phone reads this folder from Google Drive by itself (one Google sign-in on the phone: 🖥 My PC → ⚙ → Sign in to Google Drive). The PC can be off."
-            : "📱 For the phone to read Google Drive by itself, set up the Google sign-in first (Settings → Google Drive → Client ID and secret).", GDrive.Configured ? Th.Text : Th.Warn);
+        var phNote = Note(GDrive.BuiltIn || GDrive.OwnApp
+            ? "✓ The phone can read this folder from Google Drive by itself: on the phone, 🖥 My PC → ☁ Sign in with Google (once). The PC can then be off. Nothing to set up here."
+            : "⚠ This copy of Nova has no Google sign-in built in yet — the phone uses the office Wi-Fi and the relay.", GDrive.BuiltIn || GDrive.OwnApp ? Th.Good : Th.Warn);
         var mrow = page.Add(Th.Row(false));
         mrow.Controls.Add(Th.L("📂 Work folder copied to Google Drive (FreeFileSync…) at  My Drive /", 9.5f, Th.Text));
         var mbox = Th.NoSpell(Th.Box(false)); mbox.Width = 200;

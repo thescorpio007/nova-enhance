@@ -178,12 +178,17 @@ object PcLink {
             // ☁ Google Drive first (the PC can be off), then 📶 the office Wi-Fi, then 🔁 the relay.
             var drive: Map<String, String>? = null
             var driveErr = ""
-            if (GDrive.signedIn(c)) {
+            val src = GDrive.source(c)
+            if (src == "drive" && !GDrive.signedIn(c)) throw Exception("Google Drive is chosen but not signed in — tap ☁ Sign in with Google")
+            if (GDrive.signedIn(c) && (src == "auto" || src == "drive")) {
                 progress("☁ Reading Google Drive…")
                 try { drive = GDrive.syncFiles(c).takeIf { it.containsKey("manifest.nes") } ?: run { driveErr = "the PC copy is not in Google Drive yet"; null } }
                 catch (e: Exception) { driveErr = e.message ?: "failed" }
             }
-            val base = if (drive == null) { progress("Looking for your PC on this Wi-Fi…"); wifi(c) } else null
+            if (src == "drive" && drive == null) throw Exception("Google Drive: $driveErr")
+            val base = if (drive == null && (src == "auto" || src == "wifi")) { progress("Looking for your PC on this Wi-Fi…"); wifi(c) } else null
+            if (src == "wifi" && base == null) throw Exception("Office Wi-Fi is chosen, but your PC is not on this Wi-Fi")
+            if (src == "relay" && !hasRelay(c)) throw Exception("Relay is chosen, but it is not set up on the PC")
             val way = if (drive != null) "☁ Google Drive" else if (base != null) "📶 office Wi-Fi" else if (hasRelay(c)) "🔁 relay"
                 else throw Exception(if (driveErr.isNotEmpty()) "Google Drive: $driveErr · and your PC is not on this Wi-Fi" else "Your PC is not on this Wi-Fi and no relay is set up")
             val drv = drive

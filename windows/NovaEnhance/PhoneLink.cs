@@ -760,11 +760,11 @@ static class PhoneLink
     /// <summary>What the phone needs to read Google Drive by itself: the Google sign-in app (yours, Settings → Google Drive), the folder, the mirror.</summary>
     static JsonObject PhoneDrive()
     {
-        if (!DriveOn || !GDrive.Configured) return null;
+        if (!DriveOn) return null;       // the folder and the work-folder copy always go; the sign-in app only when this PC has its own
         var root = DriveRoot;
         return new JsonObject
         {
-            ["id"] = GDrive.ClientId, ["secret"] = GDrive.ClientSecret, ["folder"] = root.Length > 0 ? InMyDrive(Dir) : "Nova Enhance Sync",
+            ["id"] = GDrive.OwnApp ? GDrive.ClientId : "", ["secret"] = GDrive.OwnApp ? GDrive.ClientSecret : "", ["folder"] = root.Length > 0 ? InMyDrive(Dir) : "Nova Enhance Sync",
             ["work"] = Projects.WorkFolder, ["mirror"] = Mirror
         };
     }

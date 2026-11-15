@@ -28,8 +28,12 @@ object GDrive {
     private const val FOLDER = "application/vnd.google-apps.folder"
     private fun sp(c: Context) = c.applicationContext.getSharedPreferences("nova_pc", Context.MODE_PRIVATE)
 
-    fun clientId(c: Context) = sp(c).getString("gd_id", "").orEmpty()
-    private fun secret(c: Context) = sp(c).getString("gd_secret", "").orEmpty()
+    /** Nova's built-in Google sign-in app when the build has one; else the one the PC shares. */
+    fun clientId(c: Context) = GdBuiltIn.ID.ifBlank { sp(c).getString("gd_id", "").orEmpty() }
+    private fun secret(c: Context) = if (GdBuiltIn.ID.isNotBlank()) GdBuiltIn.SECRET else sp(c).getString("gd_secret", "").orEmpty()
+    /** Where the data comes from: auto (Drive, then Wi-Fi, then relay) · drive · wifi · relay. */
+    fun source(c: Context) = sp(c).getString("source", "auto") ?: "auto"
+    fun setSource(c: Context, v: String) = sp(c).edit().putString("source", v).apply()
     private fun refresh(c: Context) = sp(c).getString("gd_refresh", "").orEmpty()
     fun account(c: Context) = sp(c).getString("gd_email", "").orEmpty()
     fun configured(c: Context) = clientId(c).length > 10 && secret(c).isNotEmpty()
@@ -45,7 +49,7 @@ object GDrive {
         val e = sp(c).edit()
         val id = o.optString("id")
         if (id.isNotBlank()) {
-            if (id != clientId(c)) e.remove("gd_refresh").remove("gd_email")      // another Google app: sign in again
+            if (GdBuiltIn.ID.isBlank() && id != clientId(c)) e.remove("gd_refresh").remove("gd_email")      // another Google app: sign in again
             e.putString("gd_id", id).putString("gd_secret", o.optString("secret"))
         }
         e.putString("gd_folder", o.optString("folder", "Nova Enhance Sync")).putString("gd_work", o.optString("work"))
@@ -63,7 +67,7 @@ object GDrive {
     /** Opens Google's page; waits up to 5 minutes for the answer. Run on a background thread. Returns the account. */
     fun signIn(act: Activity, progress: (String) -> Unit): String {
         val c = act.applicationContext
-        if (!configured(c)) throw Exception("Your PC has not shared its Google sign-in yet — on the PC: Settings → Google Drive (Client ID and secret), then ⟳ update the phone over Wi-Fi or scan the QR code again")
+        if (!configured(c)) throw Exception("This copy of Nova has no Google sign-in built in yet — update Nova Enhance, or set it up on the PC (Settings → Google Drive) and ⟳ update once over Wi-Fi")
         val rnd = SecureRandom()
         val verifier = b64(ByteArray(48).also { rnd.nextBytes(it) })
         val challenge = b64(MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray(Charsets.US_ASCII)))
@@ -214,7 +218,7 @@ object GDrive {
     /** True when this PC path is inside the work folder that is copied to Google Drive. */
     fun canOpen(c: Context, pcPath: String): Boolean {
         val w = work(c).trimEnd('\\', '/')
-        return signedIn(c) && mirror(c) != null && w.isNotEmpty() && pcPath.startsWith("$w\\", true)
+        return signedIn(c) && source(c).let { it == "auto" || it == "drive" } && mirror(c) != null && w.isNotEmpty() && pcPath.startsWith("$w\\", true)
     }
 
     /** Downloads the file from My Drive (same place as on the PC) into the phone's My PC folder. */

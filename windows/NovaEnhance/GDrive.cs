@@ -29,8 +29,11 @@ static class GDrive
     const string Api = "https://www.googleapis.com/drive/v3";
     public const string Folder = "application/vnd.google-apps.folder";
 
-    public static string ClientId { get => Store.Str("win_gd_client"); set => Store.Set("win_gd_client", value?.Trim()); }
-    public static string ClientSecret { get => Store.Secret("win_gd_secret"); set => Store.SetSecret("win_gd_secret", value?.Trim()); }
+    /// <summary>Your own Google app when you pasted one (Settings → Google Drive); else Nova's built-in one.</summary>
+    public static bool OwnApp => Store.Str("win_gd_client").Length > 0 && Store.Secret("win_gd_secret").Length > 0;
+    public static bool BuiltIn => GdBuiltIn.Id.Length > 0;
+    public static string ClientId { get => OwnApp || !BuiltIn ? Store.Str("win_gd_client") : GdBuiltIn.Id; set => Store.Set("win_gd_client", value?.Trim()); }
+    public static string ClientSecret { get => OwnApp || !BuiltIn ? Store.Secret("win_gd_secret") : GdBuiltIn.Secret; set => Store.SetSecret("win_gd_secret", value?.Trim()); }
     static string Refresh { get => Store.Secret("win_gd_refresh"); set => Store.SetSecret("win_gd_refresh", value); }
     public static string Account => Store.Str("win_gd_email");
     public static bool Configured => ClientId.Length > 0 && ClientSecret.Length > 0;
