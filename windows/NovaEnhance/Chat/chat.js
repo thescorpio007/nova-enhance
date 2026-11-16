@@ -156,18 +156,20 @@
     return p.join(" · ");
   }
 
-  function send(text, moreDetail) {
+  function setBusy(b) { busy = b; $("send").disabled = b; $("deep").disabled = b; $("stop").style.display = b ? "" : "none"; }
+
+  function send(text, moreDetail, deep) {
     text = (text || "").trim();
     if (!text || busy) return;
     if (!cur) cur = { id: null, title: text.substring(0, 60), messages: [] };
     var d = moreDetail ? true : detail;
     if (!moreDetail) cur.messages.push({ role: "user", text: text, ctxLabel: ctxLabel(ctx) });
     drawChat();
-    var th = el("div", "thinking", "✦ " + (ctx.folder ? "Reading the folder and thinking…" : "Thinking…"));
+    var th = el("div", "thinking", "✦ " + (deep ? "Deep search — this takes a few minutes…" : ctx.folder ? "Reading the folder and thinking…" : "Thinking…"));
     th.id = "thinking";
     $("msgs").appendChild(th); $("msgs").scrollTop = 1e9;
-    busy = true; $("send").disabled = true;
-    post({ t: "send", id: cur.id, text: text, ctx: ctx, detailed: d, again: !!moreDetail });
+    setBusy(true);
+    post({ t: "send", id: cur.id, text: text, ctx: ctx, detailed: d, again: !!moreDetail, deep: !!deep });
     $("input").value = "";
   }
 
@@ -183,10 +185,10 @@
     else if (m.t === "chat") { cur = m.chat; ctx = m.chat.ctx || newCtx(); drawList(); drawChips(); drawChat(); }
     else if (m.t === "progress") thinking(m.text);
     else if (m.t === "answer") {
-      busy = false; $("send").disabled = false;
+      setBusy(false);
       cur = m.chat; drawList(); drawChat();
     } else if (m.t === "error") {
-      busy = false; $("send").disabled = false;
+      setBusy(false);
       var e = $("thinking"); if (e) { e.className = "thinking err"; e.textContent = "⚠ " + m.text; }
       else { var x = el("div", "thinking err", "⚠ " + m.text); $("msgs").appendChild(x); }
     } else if (m.t === "folder") { ctx.folder = m.path; drawChips(); }
@@ -216,6 +218,8 @@
   $("find").oninput = drawList;
   $("send").onclick = function () { send($("input").value); };
   $("input").onkeydown = function (e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send($("input").value); } };
+  $("deep").onclick = function () { send($("input").value || "Check in my records whether this system, or parts of it, was submitted or approved earlier.", false, true); };
+  $("stop").onclick = function () { post({ t: "stop" }); thinking("Stopping…"); };
   $("short").onclick = function () { detail = false; $("short").className = "on"; $("detail").className = ""; };
   $("detail").onclick = function () { detail = true; $("detail").className = "on"; $("short").className = ""; };
   $("mic").onclick = function () { post({ t: "mic", on: !recording }); };

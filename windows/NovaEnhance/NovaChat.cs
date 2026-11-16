@@ -123,7 +123,12 @@ class NovaChat
                     break;
                 case "copyTable": Clipboard.SetText(FileTalk.Tsv(m["text"]?.ToString() ?? "") is { Length: > 0 } tsv ? tsv : " "); break;
                 case "findEmail": FindEmail(m["q"]?.ToString() ?? ""); break;
-                case "send": await Send(m); break;
+                case "send":
+                    sendCts?.Cancel(); sendCts = new CancellationTokenSource();
+                    try { await Send(m, sendCts.Token); }
+                    catch (OperationCanceledException) { Post(new JsonObject { ["t"] = "error", ["text"] = "Stopped." }); }
+                    break;
+                case "stop": sendCts?.Cancel(); break;
                 case "openSource": OpenSource(m["src"] as JsonObject); break;
                 case "copy": Clipboard.SetText(m["text"]?.ToString() ?? " "); break;
                 case "saveWord": SaveWord(m["id"]?.ToString(), m["idx"]?.GetValue<int>() ?? -1); break;
@@ -205,7 +210,9 @@ class NovaChat
         return tcs.Task;
     }
 
-    async Task Send(JsonObject m)
+    CancellationTokenSource sendCts;
+
+    async Task Send(JsonObject m, CancellationToken stop = default)
     {
         var text = m["text"]?.ToString()?.Trim() ?? "";
         if (text.Length == 0) return;
@@ -320,9 +327,43 @@ class NovaChat
             }
         }
 
+        // 🔎 Deep search (the 🔎 button, or "go deep" / "approved earlier?" in the question): the parts of the system, in rounds,
+        // through the index, Google Drive and the emails; the slow full read only for what nobody found.
+        DeepSearch.Outcome deep = null;
+        bool wantDeep = m["deep"]?.GetValue<bool>() == true || DeepSearch.Wanted(text);
+        if (wantDeep && FolderAsk.Sees == "never") notes.Add("deep search not run — Settings → Folder search is set to \"Never send my files\"");
+        else if (wantDeep)
+        {
+            var attachedText = string.Join("\n\n", sources.Where(x => x.Kind == "file").Select(x => x.Label + "\n" + x.Text));
+            deep = await DeepSearch.Run(text, attachedText, sources.Where(x => x.Kind == "file" && !string.IsNullOrEmpty(x.Path)).Select(x => x.Path).Distinct(),
+                history.ToString(), prov, t => Post(new JsonObject { ["t"] = "progress", ["text"] = t }), stop);
+            // The attached document keeps its best pages; the rest of the room goes to what was found.
+            if (deep.Hits.Count > 0 && sources.Count > 6) sources = sources.Take(6).ToList();
+            bool sendDeep = true;
+            if (deep.Hits.Count > 0 && FolderAsk.Sees == "ask")
+            {
+                var nFiles = deep.Hits.Where(h => h.Path.Length > 0).Select(h => h.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+                var tcs = new TaskCompletionSource<bool>();
+                owner.BeginInvoke(new Action(() =>
+                {
+                    using var dlg = new ConfirmSend($"✦ Send {deep.Hits.Count} extracts to {prov.Label}?",
+                        $"To answer, Nova sends {deep.Hits.Count} short passages (about {deep.Hits.Sum(x => x.Text.Length):N0} characters) from {nFiles} file(s) and {deep.Emails} email(s) found by the deep search. Nothing else leaves the PC.",
+                        string.Join("\n\n", deep.Hits.Take(40).Select(h => "— " + h.Label + "\n" + (h.Text.Length > 400 ? h.Text[..400] + "…" : h.Text))), "Send and answer", false);
+                    dlg.ShowDialog(owner);
+                    tcs.SetResult(dlg.Result == ConfirmSend.Choice.Send);
+                }));
+                sendDeep = await tcs.Task;
+            }
+            if (!sendDeep) { notes.Add("deep search extracts not sent (you chose not to)"); deep.Hits.Clear(); }
+            foreach (var h in deep.Hits.Take(46))
+                sources.Add(new Src { Kind = h.Kind, Path = h.Path, Loc = h.Loc, Goto = h.Goto, Remote = h.Remote, Entry = h.Entry, Store = h.Store,
+                    Label = (h.Part.Length > 0 ? "[" + h.Part + "] " : "") + h.Label, Text = h.Text });
+            detailed = true;
+        }
+
         // 🔎 One Nova search: when the question names a project or a drawing number, its documents and emails are searched too;
         // 🧠 Nova Memory and 🕘 past answers always (only close matches are used).
-        if (string.IsNullOrEmpty(folder))
+        if (string.IsNullOrEmpty(folder) && deep == null)
             try
             {
                 var proj = Projects.ForText(searchText);
@@ -372,6 +413,7 @@ class NovaChat
         if (sources.Any(x => x.Kind == "file"))
             sys.Append(" Here the ATTACHED FILES are the extracts from the user's files (their labels are file names); cite them by their numbers." + FileTalk.Rules);
         if (about) sys.Append(Modes.ProfileNote());
+        if (deep != null && deep.Parts.Count > 0) sys.Append(DeepSearch.Instructions(deep));
 
         var user = new StringBuilder();
         if (history.Length > 0) user.Append("Earlier in this chat:\n").Append(history).Append('\n');
@@ -383,7 +425,8 @@ class NovaChat
         user.Append("Question: ").Append(text);
 
         Post(new JsonObject { ["t"] = "progress", ["text"] = $"Asking {prov.Label}…" });
-        var answer = await Ai.Chat(sys.ToString(), user.ToString(), !detailed, false, prov, CancellationToken.None);
+        var answer = await Ai.Chat(sys.ToString(), user.ToString(), !detailed, false, prov, stop);
+        if (deep != null) answer += "\n\n" + deep.Searched;
         History.Add("chat", prov.Id, Store.Model(prov.Id), detailed ? "chat-detail" : "chat", text, answer);
 
         var label = prov.Label + (sources.Count > 0 ? $" · {sources.Count} source{(sources.Count == 1 ? "" : "s")}" : "") + (detailed ? " · detailed" : "") +

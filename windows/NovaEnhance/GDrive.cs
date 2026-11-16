@@ -276,6 +276,17 @@ static class GDrive
         return list;
     }
 
+    /// <summary>☁ Google's own search inside the files of the Drive (text, scans and pictures): the files that contain the phrase. One request.</summary>
+    public static async Task<List<DriveFile>> FullText(string phrase, int max, CancellationToken ct = default)
+    {
+        var p = (phrase ?? "").Replace("\\", " ").Replace("'", " ").Replace("\"", " ").Trim();
+        if (p.Length < 3 || !SignedIn) return new();
+        var q = $"fullText contains '\"{p}\"' and trashed=false and mimeType!='{Folder}'";
+        var url = $"{Api}/files?q={Uri.EscapeDataString(q)}&fields={Uri.EscapeDataString(Fields)}&pageSize={Math.Clamp(max, 1, 100)}&supportsAllDrives=true&includeItemsFromAllDrives=true&corpora=allDrives";
+        var j = await GetJson(url, ct);
+        return (j["files"] as JsonArray ?? new JsonArray()).Select(Parse).ToList();
+    }
+
     public static Task<List<DriveFile>> Children(string folderId, CancellationToken ct = default) =>
         Query($"'{folderId.Replace("'", "\\'")}' in parents and trashed=false", ct);
 
