@@ -196,7 +196,7 @@ class EnhanceForm : NovaForm
         {
             // ✉ Only your text in the email — closing, signature and earlier emails untouched.
             if (OutlookBody.Replace(t)) { Program.Balloon("✓ Replaced in your email", "Only your text changed — the signature is untouched. Ctrl+Z in Outlook to undo."); return; }
-            Status("⚠ Not replaced — Outlook refused, or Nova could not tell where your signature starts. Select your text and try again (or ⧉ Copy)", Th.Warn); Show(); return;
+            Status(OutlookBody.LastReason.Length > 0 ? "⚠ Not replaced — " + OutlookBody.LastReason + " (or ⧉ Copy)" : "⚠ Not replaced — Outlook refused, or Nova could not tell where your signature starts. Select your text and try again (or ⧉ Copy)", Th.Warn); Show(); return;
         }
         await Selection.Paste(target, t);
         Program.Balloon("✓ Replaced in " + targetName, (wholeText ? "All the text was replaced (as plain text). " : "") + "Press Ctrl+Z there to undo. The original is saved in 📄 Originals.");

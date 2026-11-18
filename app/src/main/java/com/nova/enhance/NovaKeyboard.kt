@@ -282,25 +282,73 @@ class NovaKeyboard : InputMethodService() {
 
     // ------------------------------------------------------------------ text in the other app
 
-    /** The selected text, or the whole message. Returns (text, wholeMessage). */
+    /** A picture, a table or another object inside the message (Android shows it as one special character, or an image span). */
+    private fun hasObjects(t: CharSequence?): Boolean {
+        if (t == null) return false
+        if (t.indexOf('\uFFFC') >= 0) return true
+        return t is android.text.Spanned && t.getSpans(0, t.length, android.text.style.ImageSpan::class.java).isNotEmpty()
+    }
+
+    private fun wholeText(): CharSequence? = currentInputConnection?.getExtractedText(ExtractedTextRequest(), android.view.inputmethod.InputConnection.GET_TEXT_WITH_STYLES)?.text
+
+    /** The selected text, or the whole message. Returns (text, wholeMessage). Pictures are left out of what the AI reads. */
     private fun grab(): Pair<String, Boolean>? {
         val ic = currentInputConnection ?: return null
         val sel = ic.getSelectedText(0)?.toString()
-        if (!sel.isNullOrEmpty()) return sel to false
-        val ex = ic.getExtractedText(ExtractedTextRequest(), 0)?.text?.toString()
+        if (!sel.isNullOrEmpty()) return sel.replace("\uFFFC", "") to false
+        val ex = wholeText()?.toString()
         val whole = ex ?: ((ic.getTextBeforeCursor(20000, 0)?.toString() ?: "") + (ic.getTextAfterCursor(20000, 0)?.toString() ?: ""))
-        return if (whole.isBlank()) null else whole to true
+        val clean = whole.replace("\uFFFC", "")
+        return if (clean.isBlank()) null else clean to true
     }
 
-    private fun put(text: String, whole: Boolean) {
-        val ic = currentInputConnection ?: return
+    /** False = not put (the message has pictures or tables and the paragraphs did not line up — said in the status line). */
+    private fun put(text: String, whole: Boolean): Boolean {
+        val ic = currentInputConnection ?: return false
+        if (whole) {
+            val cur = wholeText()
+            // 🖼 Pictures and tables stay where they are: only the text of each paragraph is changed.
+            if (cur != null && hasObjects(cur)) return putAround(cur, text)
+        }
         ic.beginBatchEdit()
         if (whole) {
-            val len = ic.getExtractedText(ExtractedTextRequest(), 0)?.text?.length
+            val len = wholeText()?.length
             if (len != null) ic.setSelection(0, len) else ic.performContextMenuAction(android.R.id.selectAll)
         }
         ic.commitText(text, 1)
         ic.endBatchEdit()
+        return true
+    }
+
+    /** The paragraphs with words, one by one from the end (the earlier positions stay right); the pictures between them are not touched. */
+    private fun putAround(cur: CharSequence, text: String): Boolean {
+        val ic = currentInputConnection ?: return false
+        val s = cur.toString()
+        val olds = ArrayList<IntRange>()
+        var start = 0
+        while (start <= s.length) {
+            var end = s.indexOf('\n', start).let { if (it < 0) s.length else it }
+            val line = s.substring(start, end)
+            // A paragraph with a picture inside: only the words before / after it would be changed — kept whole instead.
+            if (line.isNotBlank() && line.indexOf('\uFFFC') < 0) {
+                var a = start; var b = end
+                while (a < b && s[a].isWhitespace()) a++
+                while (b > a && s[b - 1].isWhitespace()) b--
+                olds.add(a until b)
+            } else if (line.indexOf('\uFFFC') >= 0 && line.replace("\uFFFC", "").isNotBlank()) {
+                say("⚠ A picture sits inside a line of text — select only the text to correct (the picture is kept)", Ui.BAD); return false
+            }
+            start = end + 1
+        }
+        val news = text.replace("\r\n", "\n").split('\n').map { it.trim() }.filter { it.isNotEmpty() }
+        if (olds.isEmpty() || news.size != olds.size) {
+            say("⚠ This message has pictures or tables — the new text has ${news.size} paragraph(s) for ${olds.size}. Select only the text to correct (nothing was changed)", Ui.BAD)
+            return false
+        }
+        ic.beginBatchEdit()
+        for (i in olds.indices.reversed()) { ic.setSelection(olds[i].first, olds[i].last + 1); ic.commitText(news[i], 1) }
+        ic.endBatchEdit()
+        return true
     }
 
     // ------------------------------------------------------------------ actions
@@ -334,9 +382,9 @@ class NovaKeyboard : InputMethodService() {
                         say("✓ ${Modes.label(mode)}${if (usedExtra.isNotBlank()) " + your instruction" else ""} · $fixed change(s) — ✓ Replace to use it", Ui.GOOD)
                         return@onSuccess
                     }
+                    if (!put(out, whole)) { sub.text = "Acts on the selected text, or the whole message"; return@onSuccess }
                     undoText = text; undoWhole = whole
                     saveOriginal(text, out, whole, Modes.label(mode))
-                    put(out, whole)
                     val db = Db.get(this)
                     val id = db.newConv(p.id, modeId, text, "api")
                     db.addMsg(id, "user", Modes.firstMessage(mode, store.custom, text)); db.addMsg(id, "assistant", out)
@@ -357,9 +405,9 @@ class NovaKeyboard : InputMethodService() {
     private fun acceptPending() {
         val (before, out, whole) = pending ?: return
         pending = null; preview.visibility = View.GONE
+        if (!put(out, whole)) return
         undoText = before; undoWhole = whole
         saveOriginal(before, out, whole, Modes.label(Modes.byId(store.mode)))
-        put(out, whole)
         say("✓ Replaced · original saved (↶ Undo)", Ui.GOOD)
     }
 
@@ -400,7 +448,7 @@ class NovaKeyboard : InputMethodService() {
     private fun undo() {
         val u = undoText ?: run { say("Nothing to undo"); return }
         val (_, whole) = grab() ?: ("" to true)
-        put(u, whole || undoWhole)
+        if (!put(u, whole || undoWhole)) return
         undoText = null
         say("↶ Restored your original text")
     }
@@ -515,7 +563,7 @@ class NovaKeyboard : InputMethodService() {
         val sel = ic.getSelectedText(0)?.toString()
         when {
             !sel.isNullOrEmpty() -> ic.commitText(t, 1)
-            e.optBoolean("w") -> put(t, true)
+            e.optBoolean("w") -> if (!put(t, true)) return
             o.isNotEmpty() && (ic.getTextBeforeCursor(o.length, 0)?.toString() ?: "") == o -> {
                 ic.beginBatchEdit(); ic.deleteSurroundingText(o.length, 0); ic.commitText(t, 1); ic.endBatchEdit()
             }

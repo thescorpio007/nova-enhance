@@ -146,7 +146,7 @@ object PhoneSearch {
         return p
     }
 
-    private val PRIVATE = Regex("wallet|password|passwd|keepass|bitwarden|\\b(bank|banking|crypto|seed|passport|salary|personal)\\b", RegexOption.IGNORE_CASE)
+    val PRIVATE = Regex("wallet|password|passwd|keepass|bitwarden|\\b(bank|banking|crypto|seed|passport|salary|personal)\\b", RegexOption.IGNORE_CASE)
 
     /** Rules first; then your AI reads the question (only the question) and fills what the rules could not. 8 s at most. */
     fun plan(c: Context, question: String): Plan {

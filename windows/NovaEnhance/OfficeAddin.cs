@@ -493,7 +493,7 @@ static class Server
         var first = lines[0].Split(' ');
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var l in lines.Skip(1)) { var i = l.IndexOf(':'); if (i > 0) headers[l[..i].Trim()] = l[(i + 1)..].Trim(); }
-        int len = headers.TryGetValue("Content-Length", out var cl) && int.TryParse(cl, out var x) ? Math.Min(x, 20_000_000) : 0;
+        int len = headers.TryGetValue("Content-Length", out var cl) && int.TryParse(cl, out var x) ? Math.Min(x, 40_000_000) : 0;
         var bodyBytes = new MemoryStream();
         bodyBytes.Write(data, headerEnd, data.Length - headerEnd);
         while (bodyBytes.Length < len)
@@ -653,11 +653,14 @@ static class Server
                 return new JsonObject { ["result"] = a, ["ai"] = prov.Label };
             }
             case "/api/versions/save":
-                return new JsonObject { ["count"] = Versions.Save(S(r, "key"), S(r, "subject"), S(r, "label"), S(r, "html"), S(r, "text")) };
+                return new JsonObject { ["count"] = Versions.Save(S(r, "key"), S(r, "subject"), S(r, "label"), S(r, "html"), S(r, "text"), r["imgs"] as JsonArray) };
             case "/api/versions/list":
                 return Versions.List(S(r, "key"));
             case "/api/versions/get":
-                return new JsonObject { ["html"] = Versions.Get(S(r, "key"), int.TryParse(S(r, "i"), out var vi) ? vi : -1) };
+            {
+                var vix = int.TryParse(S(r, "i"), out var vi) ? vi : -1;
+                return new JsonObject { ["html"] = Versions.Get(S(r, "key"), vix), ["imgs"] = Versions.Images(S(r, "key"), vix) };
+            }
             case "/api/originals":
             {
                 var a = new JsonArray();

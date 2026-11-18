@@ -406,7 +406,7 @@ class SendCheckForm : NovaForm
                 var doc = OutlookBody.EditorFor(item);
                 if (!OutlookBody.ReplaceIn(doc, text))
                 {
-                    status.Text = "⚠ Outlook did not accept the corrected text — choose “Back to Outlook to edit”, or send your original.";
+                    status.Text = OutlookBody.LastReason.Length > 0 ? "⚠ Not sent — " + OutlookBody.LastReason + ". Choose “Back to Outlook to edit”, or send your original." : "⚠ Outlook did not accept the corrected text — choose “Back to Outlook to edit”, or send your original.";
                     return;
                 }
             }

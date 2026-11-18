@@ -80,13 +80,47 @@
 
   function esc(t) { return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 
-  /// Replaces only your text: the signature and the earlier emails below stay exactly as they are.
+  // 🖼 Pictures, tables and other objects in YOUR part of the email (above the closing).
+  var OBJ = /<img\b|<table\b|<v:|<object\b|<svg\b|<o:OLEObject/i;
+  var BLOCKS = "p,li,h1,h2,h3,h4,h5,h6,div,blockquote";
+
+  /// The paragraphs that hold only words (no picture, no table): their text is changed one by one; everything else stays as it is.
+  function replaceAround(own, text) {
+    var box = document.createElement("div"); box.innerHTML = own;
+    var blocks = Array.prototype.slice.call(box.querySelectorAll(BLOCKS)).filter(function (el) {
+      return !el.querySelector(BLOCKS + ",table") && !(el.closest && el.closest("table"));
+    });
+    var words = [], mixed = false;
+    blocks.forEach(function (el) {
+      var t = (el.innerText || el.textContent || "").replace(/\u00a0/g, " ").trim();
+      var obj = el.querySelector("img,table,object,svg") || /<v:|<o:OLEObject/i.test(el.innerHTML);
+      if (t && obj) mixed = true; else if (t) words.push(el);
+    });
+    var news = String(text).replace(/\r\n/g, "\n").split("\n").map(function (x) { return x.trim(); }).filter(function (x) { return x.length; });
+    if (mixed) return { error: "a picture sits inside a line of text — select only the text to correct (the picture is kept)" };
+    if (!words.length || news.length !== words.length)
+      return { error: "this email has pictures or tables, and the new text has " + news.length + " paragraph(s) for " + words.length + " — select only the text to correct (nothing was changed)" };
+    words.forEach(function (el, i) {
+      // The look of the paragraph's first words (font, size, colour) is kept.
+      var sp = el.querySelector("span[style],font"), style = sp ? (sp.getAttribute("style") || "") : "";
+      el.innerHTML = (style ? '<span style="' + style.replace(/"/g, "&quot;") + '">' : "") + esc(news[i]) + (style ? "</span>" : "");
+    });
+    return { html: box.innerHTML };
+  }
+
+  /// Replaces only your text: the signature and the earlier emails below stay exactly as they are — and the pictures and tables in your text too.
   function replaceOwn(text, done) {
     var item = Office.context.mailbox.item;
     item.body.getAsync(Office.CoercionType.Html, function (b) {
       if (b.status !== Office.AsyncResultStatus.Succeeded) { done(b); return; }
       var parts = splitHtml(b.value || "");
       if (parts.found) text = stripClosing(text);
+      if (OBJ.test(parts.own)) {
+        var r = replaceAround(parts.own, text);
+        if (r.error) { done({ status: Office.AsyncResultStatus.Failed, error: { message: "Not replaced: " + r.error } }); return; }
+        item.body.setAsync(parts.pre + r.html + parts.rest, { coercionType: Office.CoercionType.Html }, done);
+        return;
+      }
       var fm = /font-family:\s*([^;"]+)/i.exec(parts.own), sm = /font-size:\s*([^;"]+)/i.exec(parts.own);
       var style = (fm ? "font-family:" + fm[1] + ";" : "") + (sm ? "font-size:" + sm[1] + ";" : "");
       var lines = String(text).replace(/\r\n/g, "\n").split("\n"), out = "";
@@ -121,13 +155,58 @@
     });
   }
 
+  /// 🖼 The pictures inside the draft (name + bytes): Outlook deletes them when they leave the email, so each version keeps them. Needs Outlook 2019 / 365.
+  function inlineImages(cb) {
+    var it = Office.context.mailbox.item;
+    if (!it.getAttachmentsAsync || !it.getAttachmentContentAsync || !Office.context.requirements.isSetSupported("Mailbox", "1.8")) { cb([]); return; }
+    it.getAttachmentsAsync(function (r) {
+      var list = (r.status === Office.AsyncResultStatus.Succeeded ? r.value : []).filter(function (a) { return a.isInline && (a.size || 0) < 6000000; });
+      var out = [], total = 0, i = 0;
+      (function next() {
+        if (i >= list.length || total > 12000000) { cb(out); return; }
+        var a = list[i++];
+        it.getAttachmentContentAsync(a.id, function (c) {
+          if (c.status === Office.AsyncResultStatus.Succeeded && c.value && c.value.format === "base64") { out.push({ name: a.name, b64: c.value.content }); total += c.value.content.length; }
+          next();
+        });
+      })();
+    });
+  }
+
   function snapshot(label, cb) {
     if (host !== "compose") { if (cb) cb(); return; }
     draftKey(function (key, subj) {
       Office.context.mailbox.item.body.getAsync(Office.CoercionType.Html, function (b) {
         if (b.status !== Office.AsyncResultStatus.Succeeded) { if (cb) cb(); return; }
-        api("versions/save", { key: key, subject: subj, label: label, html: b.value || "", text: htmlText(splitHtml(b.value || "").own) }, function () { if (cb) cb(); });
+        var html = b.value || "";
+        var save = function (imgs) { api("versions/save", { key: key, subject: subj, label: label, html: html, text: htmlText(splitHtml(html).own), imgs: imgs }, function () { if (cb) cb(); }); };
+        if (/<img\b/i.test(html)) inlineImages(save); else save([]);
       });
+    });
+  }
+
+  /// Puts a saved version back: its pictures first (when Outlook lost them), then the email pointing at them.
+  function putVersion(g, done) {
+    var it = Office.context.mailbox.item, imgs = g.imgs || [];
+    if (!imgs.length || !it.addFileAttachmentFromBase64Async) { it.body.setAsync(g.html, { coercionType: Office.CoercionType.Html }, done); return; }
+    it.getAttachmentsAsync(function (r) {
+      var have = {};
+      (r.status === Office.AsyncResultStatus.Succeeded ? r.value : []).forEach(function (a) { if (a.isInline) have[a.name.toLowerCase()] = 1; });
+      var html = g.html, i = 0;
+      (function next() {
+        if (i >= imgs.length) { it.body.setAsync(html, { coercionType: Office.CoercionType.Html }, done); return; }
+        var im = imgs[i++];
+        if (have[im.name.toLowerCase()]) { next(); return; }
+        it.addFileAttachmentFromBase64Async(im.b64, im.name, { isInline: true }, function (a) {
+          if (a.status === Office.AsyncResultStatus.Succeeded) {
+            // The email points at the picture by its name again ("cid:image001.png@01DA…" → "cid:image001.png").
+            var nm = im.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            html = html.replace(new RegExp('src=(["\'])cid:' + nm + '[^"\']*\\1', "gi"), 'src="cid:' + im.name + '"')
+                       .replace(new RegExp('src=(["\'])[^"\']*[\\/]' + nm + '\\1', "gi"), 'src="cid:' + im.name + '"');
+          }
+          next();
+        });
+      })();
     });
   }
 
@@ -154,8 +233,8 @@
               api("versions/get", { key: k, i: v.i }, function (g) {
                 if (!g.html) { status("⚠ That version could not be read", "bad"); return; }
                 snapshot("Before putting back " + v.when, function () {
-                  Office.context.mailbox.item.body.setAsync(g.html, { coercionType: Office.CoercionType.Html }, function (res) {
-                    status(res.status === Office.AsyncResultStatus.Succeeded ? "↩ The " + v.when + " version is back (formatting and signature included)" : "⚠ " + (res.error ? res.error.message : ""), res.status === Office.AsyncResultStatus.Succeeded ? "good" : "bad");
+                  putVersion(g, function (res) {
+                    status(res.status === Office.AsyncResultStatus.Succeeded ? "↩ The " + v.when + " version is back (formatting, pictures and signature included)" : "⚠ " + (res.error ? res.error.message : ""), res.status === Office.AsyncResultStatus.Succeeded ? "good" : "bad");
                     showVersions();
                   });
                 });

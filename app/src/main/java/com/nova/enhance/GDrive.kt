@@ -194,6 +194,19 @@ object GDrive {
 
     private fun q(s: String) = s.replace("\\", "\\\\").replace("'", "\\'")
 
+    /** 🔎 Google reads inside every file of your Drive (PDF, Word, scans it has read): the files that contain this exact phrase. */
+    data class Found(val id: String, val name: String, val size: Long, val modified: String, val link: String)
+    fun fullText(c: Context, phrase: String, max: Int = 25): List<Found> {
+        val p = phrase.replace("\"", "").trim()
+        if (p.length < 3) return emptyList()
+        val query = "fullText contains '\"${q(p)}\"' and trashed=false and mimeType != '$FOLDER'"
+        val o = get(c, "$API/files?q=${enc(query)}&pageSize=${max.coerceIn(1, 100)}&includeItemsFromAllDrives=true&supportsAllDrives=true" +
+            "&fields=${enc("files(id,name,size,modifiedTime,webViewLink)")}")
+        val a = o.optJSONArray("files") ?: return emptyList()
+        return (0 until a.length()).map { a.getJSONObject(it) }.filter { !it.optString("name").startsWith("full-") && !it.optString("name").endsWith(".nes") }
+            .map { Found(it.optString("id"), it.optString("name"), it.optString("size").toLongOrNull() ?: 0L, it.optString("modifiedTime").take(10), it.optString("webViewLink")) }
+    }
+
     private fun children(c: Context, parent: String, name: String? = null): List<JSONObject> {
         val out = ArrayList<JSONObject>()
         var page = ""

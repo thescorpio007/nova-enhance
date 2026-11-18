@@ -206,6 +206,7 @@ class MyPcActivity : BaseActivity() {
             "home" -> homePage()
             "search" -> searchPage()
             "find" -> findPage()
+            "deep" -> deepPage()
             "brief" -> briefPage()
             "files" -> filesPage()
             "starred" -> starredPage()
@@ -257,10 +258,11 @@ class MyPcActivity : BaseActivity() {
         val sr = Ui.row(c)
         val q = Ui.input(c, "🔍 Search emails, files and drawings…", false).apply {
             imeOptions = EditorInfo.IME_ACTION_SEARCH
-            setOnEditorActionListener { v, _, _ -> runFind(v.text.toString()); true }
+            setOnEditorActionListener { v, _, _ -> v.text.toString().let { if (DeepPhone.wanted(it)) runDeep(it) else runFind(it) }; true }
         }
         sr.addView(q, Ui.lp(0, weight = 1f, end = Ui.dp(c, 8)))
-        sr.addView(Ui.button(c, "🔍", true) { runFind(q.text.toString()) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT))
+        sr.addView(Ui.button(c, "🔍", true) { q.text.toString().let { if (DeepPhone.wanted(it)) runDeep(it) else runFind(it) } }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+        sr.addView(Ui.button(c, "🔎 Deep") { runDeep(q.text.toString()) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT))
         body.addView(sr)
         projectChips()
         Thread {
@@ -542,6 +544,122 @@ class MyPcActivity : BaseActivity() {
             })
         }
         if (PcLink.hasRelay(c) && lastQuery.isNotBlank()) body.addView(Ui.smallButton(c, "🖥 Ask the PC instead (newest emails)") { runSearch(lastQuery, true) }, Ui.lp(top = Ui.dp(c, 10)))
+    }
+
+    // ------------------------------------------------------------------ 🔎 deep search (round after round: phone + Google Drive)
+
+    private var deep: DeepPhone.Result? = null
+    private var deepRunning = false
+    private var deepStep = ""
+    private val deepStop = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    private fun runDeep(q: String) {
+        if (q.isBlank() || deepRunning) { if (deepRunning) show("deep"); return }
+        lastQuery = q; deep = null; deepRunning = true; deepStep = "🔎 Starting…"; deepStop.set(false)
+        show("deep")
+        val c = applicationContext
+        Thread {
+            val r = runCatching { DeepPhone.run(c, q, project, deepStop) { s -> main.post { deepStep = s; if (page == "deep") show("deep") } } }
+            main.post {
+                deepRunning = false
+                deep = r.getOrElse { DeepPhone.Result("⚠ " + (it.message ?: "Deep search failed"), emptyList(), emptyList(), false) }
+                if (page == "deep") show("deep")
+            }
+        }.start()
+    }
+
+    private fun deepPage() {
+        val c = this
+        val sr = Ui.row(c)
+        val q = Ui.input(c, "🔎 Ask: e.g. which waterproofing system was approved earlier?", false).apply {
+            setText(lastQuery); imeOptions = EditorInfo.IME_ACTION_SEARCH
+            setOnEditorActionListener { v, _, _ -> runDeep(v.text.toString()); true }
+        }
+        sr.addView(q, Ui.lp(0, weight = 1f, end = Ui.dp(c, 8)))
+        sr.addView(if (deepRunning) Ui.button(c, "■ Stop") { deepStop.set(true); deepStep = "■ Stopping — writing up what was found…"; show("deep") }
+                   else Ui.button(c, "🔎 Deep", true) { runDeep(q.text.toString()) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT))
+        body.addView(sr)
+        body.addView(Ui.smallButton(c, "← Quick search") { show("find") }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, top = Ui.dp(c, 6)))
+        if (deepRunning) { body.addView(Ui.text(c, deepStep, 13f, Ui.ACCENT), Ui.lp(top = Ui.dp(c, 12))); return }
+        val r = deep ?: run {
+            body.addView(Ui.text(c, "Nova splits your question into its parts (the whole system, each product, the references), then searches round after round: the emails and files on this phone" +
+                (if (GDrive.usable(c)) " and inside every file of your Google Drive" else "") + " — then the document numbers it finds on the way. Works with the PC off.", 13f, Ui.MUTED), Ui.lp(top = Ui.dp(c, 12)))
+            return
+        }
+        // The answer: text, and its table drawn as a table.
+        val box = Ui.card(c)
+        val lines = r.answer.lines()
+        var i = 0
+        while (i < lines.size) {
+            if (lines[i].trim().startsWith("|")) {
+                val rows = ArrayList<List<String>>()
+                while (i < lines.size && lines[i].trim().startsWith("|")) {
+                    val cells = lines[i].trim().trim('|').split('|').map { it.trim() }
+                    if (!cells.all { Regex("^:?-{2,}:?$").matches(it) }) rows.add(cells)
+                    i++
+                }
+                box.addView(table(rows, r.sources), Ui.lp(top = Ui.dp(c, 6)))
+            } else {
+                val t = lines[i].trim().replace(Regex("\\*\\*(.+?)\\*\\*"), "$1").removePrefix("#").removePrefix("#").trim()
+                if (t.isNotEmpty()) box.addView(Ui.text(c, t, 14f, if (t.startsWith("Missing", true)) Ui.BAD else Ui.TEXT, lines[i].trim().startsWith("#")), Ui.lp(top = Ui.dp(c, 4)))
+                i++
+            }
+        }
+        body.addView(box, Ui.lp(top = Ui.dp(c, 10)))
+        if (r.log.isNotEmpty()) body.addView(Ui.text(c, r.log.joinToString("\n"), 11f, Ui.MUTED), Ui.lp(top = Ui.dp(c, 6)))
+        if (r.sources.isEmpty()) return
+        body.addView(Ui.section(c, "Sources · ${r.sources.size}"))
+        r.sources.forEachIndexed { n, s -> deepSource(n + 1, s) }
+    }
+
+    /** A markdown table as a real table (sideways scroll on a narrow phone); [n] opens that source. */
+    private fun table(rows: List<List<String>>, src: List<DeepPhone.Src>): View {
+        val c = this
+        val sv = android.widget.HorizontalScrollView(c)
+        val t = android.widget.TableLayout(c)
+        rows.forEachIndexed { ri, cells ->
+            val tr = android.widget.TableRow(c)
+            for (cell in cells) {
+                val ref = Regex("\\[(\\d+)]").find(cell)?.groupValues?.get(1)?.toIntOrNull()
+                val tv = Ui.text(c, cell, 12.5f, if (ri == 0) Ui.MUTED else if (ref != null) Ui.ACCENT else Ui.TEXT, ri == 0).apply {
+                    setPadding(Ui.dp(c, 6), Ui.dp(c, 5), Ui.dp(c, 10), Ui.dp(c, 5)); maxWidth = Ui.dp(c, 220)
+                    if (ref != null && ri > 0 && ref in 1..src.size) setOnClickListener { openSrc(src[ref - 1]) }
+                }
+                tr.addView(tv)
+            }
+            if (ri > 0) tr.setBackgroundColor(if (ri % 2 == 0) 0x10FFFFFF else 0)
+            t.addView(tr)
+        }
+        sv.addView(t)
+        return sv
+    }
+
+    private fun deepSource(n: Int, s: DeepPhone.Src) {
+        val c = this
+        val k = Ui.card(c).apply { setOnClickListener { openSrc(s) } }
+        k.addView(Ui.text(c, "[$n] " + (when (s.kind) { "mail" -> "✉ "; "drive" -> "☁ "; else -> "📂 " }) + s.title, 14f, Ui.TEXT, true))
+        k.addView(Ui.text(c, s.sub.replace('\\', '›'), 11.5f, Ui.MUTED))
+        k.addView(Ui.text(c, "matched: " + s.terms.joinToString(" · "), 11.5f, Ui.GOOD))
+        body.addView(k, Ui.lp(top = Ui.dp(c, 6)))
+    }
+
+    private fun openSrc(s: DeepPhone.Src) {
+        s.mail?.let { openMail(it); return }
+        s.file?.let { fetch(JSONObject().put("path", it.path)); return }
+        val d = s.drive ?: return
+        say("📥 Downloading from Google Drive…")
+        Thread {
+            val r = runCatching {
+                val data = GDrive.download(applicationContext, d.id) ?: throw Exception("Google Drive refused the download (a Google Docs file? open it in Drive)")
+                File(File(PcLink.dir(this), "fetched").apply { mkdirs() }, d.name.replace(Regex("[\\\\/:*?\"<>|]"), "_")).apply { writeBytes(data) }
+            }
+            main.post {
+                r.onSuccess { status.text = "✓ ${it.name} · from Google Drive"; openFile(it) }.onFailure {
+                    status.text = "⚠ " + it.message
+                    if (d.link.isNotBlank()) try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(d.link))) } catch (_: Exception) { }
+                }
+            }
+        }.start()
     }
 
     private fun tags(x: PhoneSearch.Item): String = listOfNotNull(

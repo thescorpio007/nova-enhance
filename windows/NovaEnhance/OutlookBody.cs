@@ -153,9 +153,17 @@ static class OutlookBody
     /// Outlook's HTML emails are made of blocks; Word sometimes refuses to delete across them ("The range cannot be deleted").
     /// So: 1 · the whole part at once · 2 · as if typed over the selection · 3 · paragraph by paragraph (each block keeps its place).
     /// </summary>
+    /// <summary>Why the last replace was refused (shown to you), or "".</summary>
+    public static string LastReason = "";
+
     static bool Put(dynamic doc, int start, int end, string text)
     {
+        LastReason = "";
         var t = (text ?? "").Replace("\r\n", "\n").TrimEnd();
+        // 🖼 Pictures or tables in your part: only the paragraphs holding words alone get new words; the pictures and tables stay.
+        int shapes = 0, tables = 0;
+        try { dynamic rr = doc.Range(start, end); shapes = (int)rr.InlineShapes.Count; tables = (int)rr.Tables.Count; } catch { }
+        if (shapes > 0 || tables > 0) return PutAround(doc, start, end, t);
         string why1 = "", why2 = "";
         try { dynamic r = doc.Range(start, end); r.Text = t.Replace("\n", "\r"); return true; }
         catch (Exception e) { why1 = e.Message; }
@@ -196,6 +204,42 @@ static class OutlookBody
             return true;
         }
         catch (Exception e) { Log.Warn("Outlook body", $"replace refused 3 ways: {why1} · {why2} · {e.Message}"); return false; }
+    }
+
+    static bool PutAround(dynamic doc, int start, int end, string t)
+    {
+        try
+        {
+            var olds = new List<(int S, int E)>();
+            bool mixed = false;
+            dynamic ps = doc.Range(start, end).Paragraphs;
+            int n = (int)ps.Count;
+            for (int i = 1; i <= n; i++)
+            {
+                dynamic pr = ps.Item(i).Range;
+                int ps0 = Math.Max(start, (int)pr.Start), pe = Math.Min(end, (int)pr.End);
+                dynamic part = doc.Range(ps0, pe);
+                bool inTable = false; try { inTable = (bool)part.Information(12); } catch { }   // 12 = wdWithInTable
+                if (inTable) continue;
+                string pt = part.Text ?? "";
+                while (pe > ps0 && (pt.EndsWith("\r") || pt.EndsWith("\a"))) { pe--; pt = pt[..^1]; }
+                bool pic = false; try { pic = (int)part.InlineShapes.Count > 0; } catch { }
+                string words = pt.Replace("/", "").Replace("\u0001", "").Trim();
+                if (pic && words.Length > 0) mixed = true;
+                else if (!pic && words.Length > 0) olds.Add((ps0, pe));
+            }
+            var news = t.Split('\n').Select(x => x.TrimEnd()).Where(x => x.Trim().Length > 0).ToList();
+            if (mixed) { LastReason = "a picture sits inside a line of text — select only the text to correct (nothing was changed)"; return false; }
+            if (olds.Count == 0 || news.Count != olds.Count)
+            {
+                LastReason = $"this email has pictures or tables, and the new text has {news.Count} paragraph(s) for {olds.Count} — select only the text to correct (nothing was changed)";
+                return false;
+            }
+            for (int i = olds.Count - 1; i >= 0; i--) { dynamic r = doc.Range(olds[i].S, olds[i].E); r.Text = news[i]; }
+            Log.Write("Outlook body: replaced around pictures/tables");
+            return true;
+        }
+        catch (Exception e) { LastReason = "Outlook refused: " + e.Message; Log.Warn("Outlook body", "around: " + e.Message); return false; }
     }
 
     /// <summary>The window in front is Outlook.</summary>
