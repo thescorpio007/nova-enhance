@@ -41,10 +41,10 @@ object DeepPhone {
     }
 
     /** The parts to look for: the subject, other wordings, each part of a system, the references. */
-    private fun plan(c: Context, q: String, private: Boolean): List<String> {
+    private fun plan(c: Context, q: String, priv: Boolean): List<String> {
         val own = Regex("\"([^\"]+)\"").findAll(q).map { it.groupValues[1] }.toMutableList()
         own += REF.findAll(q).map { it.value }
-        if (!private) {
+        if (!priv) {
             val raw = chat(c, "You plan a deep search over a construction professional's own emails and project files (submittals, approvals, RFIs, drawings, method statements). " +
                 "Reply with JSON only: {\"subject\":\"the main thing asked, 2-5 words\",\"wide\":[\"up to 3 wider names of the same thing, e.g. the whole system it belongs to\"]," +
                 "\"parts\":[\"up to 8 products, components, layers, brands or materials that are usually part of it (as written in submittals)\"]," +
