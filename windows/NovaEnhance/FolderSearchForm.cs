@@ -783,6 +783,19 @@ class FolderSearchForm : NovaForm
                 $" · {pg.Seconds:0.0} s" + (pg.Read > 0 ? $" · {pg.Read:N0} new or changed files read and remembered — next search here is instant" : "") +
                 (all.Count > MaxRows ? $" · showing {MaxRows:N0} files, ⇩ Export for all" : "");
             if (!cancelled) OfferVision(lastRoot, () => Start());
+            // 🕘 Search history (60 days): what was searched, where, and the files found (each one opens).
+            if (query.Text.Trim().Length > 0)
+            {
+                var top = all.OrderByDescending(h => h.Hits).Take(40).ToList();
+                SearchHistory.Add("folder", query.Text.Trim(),
+                    (all.Count == 0 ? "Not found" : $"Found in {all.Count:N0} file(s) · {hitsN:N0} hits") + $" · {lastRoot}\n\n" + string.Join("\n", top.Select((h, i) => $"• {Path.GetFileName(h.Path)} — {h.Hits} hit(s) [{i + 1}]")),
+                    new System.Text.Json.Nodes.JsonArray(top.Select(h => (System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["kind"] = "passage", ["label"] = Path.GetFileName(h.Path) + " · " + Path.GetFileName(Path.GetDirectoryName(h.Path) ?? ""), ["path"] = h.Path, ["remote"] = h.Remote ?? "",
+                        ["loc"] = h.Pieces.FirstOrDefault()?.Loc ?? "", ["goto"] = h.Pieces.FirstOrDefault()?.Goto ?? ""
+                    }).ToArray()),
+                    (cancelled ? "■ stopped · " : "") + $"{all.Count:N0} file(s) · {lastRoot}", new System.Text.Json.Nodes.JsonObject { ["folder"] = lastRoot });
+            }
         }
     }
 
@@ -1189,6 +1202,11 @@ class FolderSearchForm : NovaForm
             ShowAnswer(head + FolderAsk.WithSources(a, passages));
             if (!detailed) history += $"Q: {lastQuestion}\nA: {a}\n";
             ShowSources(FolderAsk.CitedOrder(a, passages.Count));
+            // 🕘 Search history (60 days): the question, the answer and the passages it cites.
+            SearchHistory.Add("folder", lastQuestion, FolderAsk.WithSources(a, passages), new System.Text.Json.Nodes.JsonArray(passages.Select(p => (System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject
+            {
+                ["kind"] = "passage", ["label"] = FolderAsk.Label(p), ["path"] = p.Path, ["loc"] = p.Loc ?? "", ["goto"] = p.Goto ?? "", ["remote"] = p.Remote ?? ""
+            }).ToArray()), "✦ answer · " + lastRoot, new System.Text.Json.Nodes.JsonObject { ["folder"] = lastRoot });
             // "… export to Word" in the question or the instructions: saved at once.
             if (Prompts.Local(ins + "\n" + Prompts.Split(lastQuestion).Extra).Export.Length > 0 && !FolderAsk.NotFound(a)) SaveAnswer();
         }

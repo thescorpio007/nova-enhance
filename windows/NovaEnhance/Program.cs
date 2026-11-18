@@ -168,6 +168,7 @@ class NovaContext : ApplicationContext
         m.Items.Add(new ToolStripSeparator());
         m.Items.Add("☀  Morning brief", null, (_, _) => Screens.Brief());
         m.Items.Add("🕘  Chat history", null, (_, _) => Screens.ChatHistory());
+        m.Items.Add("🔎  Search history (every search, 60 days)", null, (_, _) => Screens.SearchHistory());
         m.Items.Add(new ToolStripSeparator());
         m.Items.Add("⚙  Settings", null, (_, _) => Screens.Settings());
         m.Items.Add("📁  Open the Nova Enhance folder", null, (_, _) => Shell.Open(Paths.Root));
@@ -366,6 +367,34 @@ static class Screens
     {
         Program.Balloon("📌 Saved in My Work", t.Title);
         Work(t.Id);
+    }
+
+    static HistoryForm hist;
+
+    public static void SearchHistory()
+    {
+        if (Program.OffUi(SearchHistory)) return;
+        try
+        {
+            if (hist == null || hist.IsDisposed) hist = new HistoryForm();
+            Show(hist);
+            hist.Reload();
+        }
+        catch (Exception e) { Log.Error("Search history", e); }
+    }
+
+    public static void HubContinueDeep(string text, string id)
+    {
+        if (Program.OffUi(() => HubContinueDeep(text, id))) return;
+        try { if (hub == null || hub.IsDisposed) hub = new HubForm(); Show(hub); hub.ContinueDeep(text, id); }
+        catch (Exception e) { Log.Error("AI window · continue", e); }
+    }
+
+    public static void HubOpenChat(string id)
+    {
+        if (Program.OffUi(() => HubOpenChat(id))) return;
+        try { if (hub == null || hub.IsDisposed) hub = new HubForm(); Show(hub); hub.OpenChat(id); }
+        catch (Exception e) { Log.Error("AI window · open chat", e); }
     }
 
     public static void HubAttach(string path)

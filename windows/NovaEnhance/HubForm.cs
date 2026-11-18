@@ -52,7 +52,16 @@ class HubForm : NovaForm
 
         var top = new Panel { Dock = DockStyle.Top, Height = 46, BackColor = Color.FromArgb(0x0E, 0x11, 0x17), Padding = new Padding(8, 7, 8, 0) };
         strip = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, AutoScroll = false, BackColor = top.BackColor };
+        // 🕘 Every search, saved by itself (60 days): always one click away, top right.
+        histBtn = new Button { AutoSize = true, FlatStyle = FlatStyle.Flat, Font = Th.F(10, true), ForeColor = Color.White, BackColor = Th.Accent, Height = 34, Padding = new Padding(10, 2, 10, 2), Dock = DockStyle.Right, UseMnemonic = false };
+        histBtn.FlatAppearance.BorderSize = 0;
+        histBtn.Click += (_, _) => Screens.SearchHistory();
+        void Count() { try { if (IsHandleCreated && !IsDisposed) BeginInvoke(new Action(() => histBtn.Text = "🕘 History · " + NovaEnhance.SearchHistory.Count())); } catch { } }
+        histBtn.Text = "🕘 History · " + NovaEnhance.SearchHistory.Count();
+        NovaEnhance.SearchHistory.Changed += Count;
+        FormClosed += (_, _) => NovaEnhance.SearchHistory.Changed -= Count;
         top.Controls.Add(strip);
+        top.Controls.Add(histBtn);
 
         var tools = new Panel { Dock = DockStyle.Top, Height = 44, BackColor = Th.Card2, Padding = new Padding(8, 6, 8, 4) };
         var tl = new FlowLayoutPanel { Dock = DockStyle.Left, AutoSize = true, WrapContents = false, BackColor = Th.Card2 };
@@ -316,6 +325,28 @@ class HubForm : NovaForm
         if (left.IsChat && fresh) pendingChat = text;   // the chat page picks it up when it opens
         await Place();
         if (!(left.IsChat && fresh)) await Type(left, text, false);
+    }
+
+    readonly Button histBtn;
+
+    /// <summary>▶ Continue an interrupted deep search, in Nova Chat.</summary>
+    public async void ContinueDeep(string text, string id)
+    {
+        var chat = tabs.FirstOrDefault(t => t.IsChat);
+        if (chat == null) return;
+        await Select(chat);
+        if (!chat.Loaded.Task.IsCompleted) { await Task.WhenAny(chat.Loaded.Task, Task.Delay(15000)); await Task.Delay(800); }
+        chat.Chat?.ContinueDeep(text, id);
+    }
+
+    /// <summary>Opens a saved chat in Nova Chat.</summary>
+    public async void OpenChat(string id)
+    {
+        var chat = tabs.FirstOrDefault(t => t.IsChat);
+        if (chat == null) return;
+        await Select(chat);
+        if (!chat.Loaded.Task.IsCompleted) { await Task.WhenAny(chat.Loaded.Task, Task.Delay(15000)); await Task.Delay(800); }
+        chat.Chat?.OpenChat(id);
     }
 
     /// <summary>"Send to Nova Chat" from another window: opens the chat tab with the file attached.</summary>

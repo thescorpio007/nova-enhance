@@ -82,15 +82,69 @@ static class DeepSearch
         return (a > 0 ? "…" : "") + s[a..b] + (b < s.Length ? "…" : "");
     }
 
-    public static async Task<Outcome> Run(string question, string attached, IEnumerable<string> attachedPaths, string history, Provider prov, Action<string> status, CancellationToken ct)
+    // ---------------------------------------------------------------- 🕘 saved after every step (Search history), taken back by ▶ Continue
+
+    static JsonObject HitJson(Hit h) => new()
+    {
+        ["kind"] = h.Kind, ["path"] = h.Path, ["loc"] = h.Loc, ["goto"] = h.Goto, ["remote"] = h.Remote, ["entry"] = h.Entry, ["store"] = h.Store,
+        ["label"] = h.Label, ["text"] = h.Text, ["part"] = h.Part, ["via"] = h.Via
+    };
+    static Hit HitOf(JsonObject j)
+    {
+        string S(string k) => j[k]?.ToString() ?? "";
+        return new Hit { Kind = S("kind").Length > 0 ? S("kind") : "passage", Path = S("path"), Loc = S("loc"), Goto = S("goto"), Remote = S("remote"), Entry = S("entry"), Store = S("store"), Label = S("label"), Text = S("text"), Part = S("part"), Via = S("via") };
+    }
+    static JsonArray Arr(IEnumerable<string> l) => new(l.Select(x => (JsonNode)x).ToArray());
+    static List<string> Strs(JsonNode n) => (n as JsonArray)?.Select(x => x?.ToString() ?? "").ToList() ?? new();
+
+    /// <summary>The sources as Nova Chat shows them (for the 🕘 history).</summary>
+    public static JsonArray SourcesJson(IEnumerable<Hit> hits) => new(hits.Select(h => (JsonNode)new JsonObject
+    {
+        ["kind"] = h.Kind, ["label"] = (h.Part.Length > 0 ? "[" + h.Part + "] " : "") + h.Label, ["path"] = h.Path, ["loc"] = h.Loc, ["goto"] = h.Goto,
+        ["remote"] = h.Remote, ["entry"] = h.Entry, ["store"] = h.Store, ["text"] = h.Text.Length > 600 ? h.Text[..600] + "…" : h.Text
+    }).ToArray());
+
+    /// <summary>[resume] = the saved state of an interrupted search: its parts, finished steps and finds are taken back. [checkpoint] gets the state after every step.</summary>
+    public static async Task<Outcome> Run(string question, string attached, IEnumerable<string> attachedPaths, string history, Provider prov, Action<string> status, CancellationToken ct,
+        JsonObject resume = null, Action<JsonObject, Outcome> checkpoint = null)
     {
         var o = new Outcome();
         var skip = new HashSet<string>(attachedPaths ?? Enumerable.Empty<string>(), StringComparer.OrdinalIgnoreCase);
 
-        // 1 · The parts of the system.
-        status("🔎 Deep search · reading the parts of the system…");
-        var (subject, wide, parts, refs) = await Plan(question, attached, history, prov, ct);
+        // 1 · The parts of the system (taken back when the search continues).
+        string subject; List<string> wide, refs; List<Part> parts;
+        var doneQ = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var doneNums = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (resume?["parts"] is JsonArray rp)
+        {
+            status("▶ Deep search · taking back what was found before…");
+            subject = resume["subject"]?.ToString() ?? question; wide = Strs(resume["wide"]); refs = Strs(resume["refs"]);
+            parts = rp.OfType<JsonObject>().Select(x => new Part { Role = x["role"]?.ToString() ?? "", Name = x["name"]?.ToString() ?? "", Also = Strs(x["also"]), Found = x["found"]?.GetValue<int>() ?? 0 }).ToList();
+            if (resume["done"] is JsonObject dq) foreach (var kv in dq) doneQ[kv.Key] = kv.Value?.GetValue<int>() ?? 0;
+            foreach (var n in Strs(resume["nums"])) doneNums.Add(n);
+        }
+        else
+        {
+            status("🔎 Deep search · reading the parts of the system…");
+            (subject, wide, parts, refs) = await Plan(question, attached, history, prov, ct);
+        }
         o.Subject = subject; o.Parts = parts;
+        void Checkpoint(string step)
+        {
+            if (checkpoint == null) return;
+            try
+            {
+                var st = new JsonObject
+                {
+                    ["subject"] = subject, ["wide"] = Arr(wide), ["refs"] = Arr(refs), ["step"] = step,
+                    ["parts"] = new JsonArray(parts.Select(p => (JsonNode)new JsonObject { ["role"] = p.Role, ["name"] = p.Name, ["also"] = Arr(p.Also), ["found"] = p.Found }).ToArray()),
+                    ["done"] = new JsonObject(doneQ.Select(kv => KeyValuePair.Create(kv.Key, (JsonNode)kv.Value))), ["nums"] = Arr(doneNums),
+                    ["hits"] = new JsonArray(o.Hits.Select(h => (JsonNode)HitJson(h)).ToArray())
+                };
+                checkpoint(st, o);
+            }
+            catch { }
+        }
         if (parts.Count == 0 && wide.Count == 0) { o.Notes.Add("the AI could not name the parts of the system — add the product names to the question"); return o; }
 
         // 2 · The project: named in the question, or the attached file's own (its folder, its number, the text), or the chat so far.
@@ -108,6 +162,8 @@ static class DeepSearch
             if (h.Path.Length > 0) { fileCount.TryGetValue(h.Path, out var n); if (n >= 3) return false; fileCount[h.Path] = n + 1; }
             o.Hits.Add(h); return true;
         }
+        if (resume?["hits"] is JsonArray rh) foreach (var j in rh.OfType<JsonObject>()) Add(HitOf(j));
+        Checkpoint("parts");
         string LabelOf(string path, string loc, string go) => Path.GetFileName(path) + " · " + FolderIndex.Where(new PieceHit { Loc = loc ?? "", Goto = go ?? "", Text = "", Matches = new() });
 
         bool driveOk = GDrive.SignedIn;
@@ -116,6 +172,15 @@ static class DeepSearch
 
         // One query, three sources. [exact] = the name must really be in the extract (a part); else the words are enough (the subject).
         async Task<int> Query(string q, Part part, bool exact, int perSource)
+        {
+            var key = (exact ? "x|" : "w|") + q;
+            if (doneQ.TryGetValue(key, out var before)) return before;   // done before ▶ Continue
+            var got = await QueryNow(q, part, exact, perSource);
+            doneQ[key] = got;
+            Checkpoint(part == null ? "subject · " + q : part.Name);
+            return got;
+        }
+        async Task<int> QueryNow(string q, Part part, bool exact, int perSource)
         {
             ct.ThrowIfCancellationRequested();
             int got = 0;
@@ -201,7 +266,6 @@ static class DeepSearch
         }
 
         // Rounds 3-4 · the leads: document numbers named in what was found (and in the attached document) — their own files, then what THEY name.
-        var doneNums = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var p in skip) foreach (var n in Revisions.Numbers(Path.GetFileName(p))) doneNums.Add(n);
         var from = 0;
         for (int round = 3; round <= 4; round++)
@@ -215,6 +279,7 @@ static class DeepSearch
             foreach (var n in nums)
             {
                 doneNums.Add(n);
+                Checkpoint("reference " + n);
                 status($"🔎 Round {round} · following {n}…");
                 var doc = Projects.FindDoc(n, folders).FirstOrDefault(x => !x.Cad && !skip.Contains(x.Path));
                 if (doc == null || fileCount.ContainsKey(doc.Path)) continue;
@@ -268,6 +333,7 @@ static class DeepSearch
                 }
         }
 
+        Checkpoint("deep read");
         // The approval: the reply / response / comment sheet next to each document found, and the page that carries a code.
         status("🔎 Looking for the approval status of what was found…");
         int statusAdded = 0;

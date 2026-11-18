@@ -950,6 +950,12 @@ class AskForm : NovaForm
         }
         if (lastExport != null) sb.Append("\n⇩ " + lastExport);
         Conversations.Add(ref conv, "ask", Prompts.Split(q).Main, "", q, sb.ToString(), src);
+        // 🕘 Search history (60 days): the question and the emails found, each one opens in Outlook.
+        if (!followUp)
+            SearchHistory.Add("email", Prompts.Split(q).Main, sb.ToString().Replace("[E", "["), new System.Text.Json.Nodes.JsonArray(main.Select(h => (System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject
+            {
+                ["kind"] = "email", ["label"] = $"{h.Subject} — {(h.Sent ? "you" : h.FromName)} · {h.Date:dd MMM yyyy}", ["entry"] = h.Entry, ["store"] = h.StoreId
+            }).ToArray()), $"{main.Count} email(s)" + (Project.Length > 0 && Project != "?" ? " · 📁 " + Project : ""));
     }
 
     /// <summary>Runs a question from elsewhere (🔍 Find related emails).</summary>

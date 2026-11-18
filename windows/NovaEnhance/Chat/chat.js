@@ -158,7 +158,7 @@
 
   function setBusy(b) { busy = b; $("send").disabled = b; $("deep").disabled = b; $("stop").style.display = b ? "" : "none"; }
 
-  function send(text, moreDetail, deep) {
+  function send(text, moreDetail, deep, resume) {
     text = (text || "").trim();
     if (!text || busy) return;
     if (!cur) cur = { id: null, title: text.substring(0, 60), messages: [] };
@@ -169,7 +169,7 @@
     th.id = "thinking";
     $("msgs").appendChild(th); $("msgs").scrollTop = 1e9;
     setBusy(true);
-    post({ t: "send", id: cur.id, text: text, ctx: ctx, detailed: d, again: !!moreDetail, deep: !!deep });
+    post({ t: "send", id: cur.id, text: text, ctx: ctx, detailed: d, again: !!moreDetail, deep: !!deep, resume: resume || "" });
     $("input").value = "";
   }
 
@@ -209,6 +209,7 @@
       if (m.error) { var x2 = el("div", "thinking err", "⚠ " + m.error); $("msgs").appendChild(x2); }
     } else if (m.t === "insert") { $("input").value = ($("input").value ? $("input").value + "\n" : "") + m.text; $("input").focus(); }
     else if (m.t === "askNow") send(m.text);
+    else if (m.t === "continueDeep") { if (busy) return; newChat(); send(m.text, false, true, m.resume); }
     else if (m.t === "new") newChat();
   }
   function newChat() { cur = null; ctx = newCtx(); drawList(); drawChips(); drawChat(); $("input").focus(); }

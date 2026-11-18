@@ -34,6 +34,10 @@ class NovaChat
 
     public void Insert(string text) => Post(new JsonObject { ["t"] = "insert", ["text"] = text });
     public void AskNow(string text) => Post(new JsonObject { ["t"] = "askNow", ["text"] = text });
+    /// <summary>▶ Continue an interrupted deep search (🕘 Search history).</summary>
+    public void ContinueDeep(string text, string id) => Post(new JsonObject { ["t"] = "continueDeep", ["text"] = text, ["resume"] = id });
+    /// <summary>Opens a saved chat.</summary>
+    public void OpenChat(string id) { var c = Load(id); if (c != null) Post(new JsonObject { ["t"] = "chat", ["chat"] = c }); }
     public void Attach(string path) => Post(new JsonObject { ["t"] = "files", ["paths"] = new JsonArray(path) });
 
     // ================================================================ chat files
@@ -211,6 +215,7 @@ class NovaChat
     }
 
     CancellationTokenSource sendCts;
+    string deepHist;
 
     async Task Send(JsonObject m, CancellationToken stop = default)
     {
@@ -335,8 +340,27 @@ class NovaChat
         else if (wantDeep)
         {
             var attachedText = string.Join("\n\n", sources.Where(x => x.Kind == "file").Select(x => x.Label + "\n" + x.Text));
-            deep = await DeepSearch.Run(text, attachedText, sources.Where(x => x.Kind == "file" && !string.IsNullOrEmpty(x.Path)).Select(x => x.Path).Distinct(),
-                history.ToString(), prov, t => Post(new JsonObject { ["t"] = "progress", ["text"] = t }), stop);
+            // 🕘 Saved after every step: if Nova closes, ▶ Continue in Search history goes on from there.
+            var resumeId = m["resume"]?.ToString();
+            var resumeState = string.IsNullOrEmpty(resumeId) ? null : SearchHistory.Get(resumeId)?["state"] as JsonObject;
+            deepHist = string.IsNullOrEmpty(resumeId) ? SearchHistory.NewId() : resumeId;
+            var hid = deepHist;
+            SearchHistory.Save(hid, new JsonObject { ["kind"] = "deep", ["subject"] = text, ["status"] = "running", ["chatId"] = chat["id"]?.ToString(), ["note"] = "starting…" });
+            try
+            {
+                deep = await DeepSearch.Run(text, attachedText, sources.Where(x => x.Kind == "file" && !string.IsNullOrEmpty(x.Path)).Select(x => x.Path).Distinct(),
+                    history.ToString(), prov, t => Post(new JsonObject { ["t"] = "progress", ["text"] = t }), stop, resumeState,
+                    (st, o) => SearchHistory.Save(hid, new JsonObject
+                    {
+                        ["status"] = "running", ["state"] = st, ["sources"] = DeepSearch.SourcesJson(o.Hits), ["note"] = $"{o.Parts.Count} part(s) · last step: {st["step"]}",
+                        ["answer"] = "⏳ Not finished — " + o.Hits.Count + " find(s) so far. ▶ Continue goes on from where it stopped."
+                    }));
+            }
+            catch (OperationCanceledException)
+            {
+                SearchHistory.Save(hid, new JsonObject { ["status"] = "stopped", ["answer"] = "■ Stopped — what was found so far is kept. ▶ Continue goes on from where it stopped." });
+                throw;
+            }
             // The attached document keeps its best pages; the rest of the room goes to what was found.
             if (deep.Hits.Count > 0 && sources.Count > 6) sources = sources.Take(6).ToList();
             bool sendDeep = true;
@@ -428,6 +452,12 @@ class NovaChat
         var answer = await Ai.Chat(sys.ToString(), user.ToString(), !detailed, false, prov, stop);
         if (deep != null) answer += "\n\n" + deep.Searched;
         History.Add("chat", prov.Id, Store.Model(prov.Id), detailed ? "chat-detail" : "chat", text, answer);
+        // 🕘 Search history: the question, the answer and its sources.
+        var srcJson = new JsonArray(sources.Select(s => (JsonNode)s.Json()).ToArray());
+        if (deep != null && deepHist != null)
+            SearchHistory.Save(deepHist, new JsonObject { ["status"] = "done", ["answer"] = answer, ["sources"] = srcJson, ["chatId"] = chat["id"]?.ToString(), ["note"] = $"{deep.Parts.Count} part(s) · {deep.Rounds} round(s) · {sources.Count} source(s)" });
+        else SearchHistory.Add("chat", text, answer, srcJson, $"{sources.Count} source(s)", new JsonObject { ["chatId"] = chat["id"]?.ToString() });
+        deepHist = null;
 
         var label = prov.Label + (sources.Count > 0 ? $" · {sources.Count} source{(sources.Count == 1 ? "" : "s")}" : "") + (detailed ? " · detailed" : "") +
                     (notes.Count > 0 ? " · ⚠ " + string.Join(" · ", notes.Distinct()) : "");
@@ -453,7 +483,7 @@ class NovaChat
 
     // ================================================================ actions on an answer
 
-    static void OpenSource(JsonObject s)
+    public static void OpenSource(JsonObject s)
     {
         if (s == null) return;
         if (s["kind"]?.ToString() == "email") { Outlook.Open(s["entry"]?.ToString(), s["store"]?.ToString()); return; }

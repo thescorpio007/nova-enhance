@@ -168,6 +168,8 @@ object PcLink {
         fun close() = synchronized(this) { try { helper?.close() } catch (_: Exception) { }; helper = null }
 
         class Helper(c: Context) : SQLiteOpenHelper(c, "mypc.db", null, 1) {
+            // Many readers at once (search, deep search, opening an email) while the update writes: nobody waits for anybody.
+            init { setWriteAheadLoggingEnabled(true) }
             override fun onCreate(db: SQLiteDatabase) {
                 db.execSQL("CREATE TABLE mail(id INTEGER PRIMARY KEY, e TEXT, d INTEGER, s INTEGER, f TEXT, fn TEXT, fa TEXT, too TEXT, cc TEXT, sub TEXT, an TEXT, p TEXT, b TEXT, at TEXT)")
                 db.execSQL("CREATE INDEX mail_d ON mail(d)")

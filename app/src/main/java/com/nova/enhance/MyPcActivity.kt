@@ -50,6 +50,7 @@ class MyPcActivity : BaseActivity() {
         val root = Ui.col(c, 16)
         val head = Ui.row(c)
         head.addView(Ui.title(c, "🖥 My PC").apply { textSize = 21f }, Ui.lp(0, weight = 1f))
+        head.addView(Ui.smallButton(c, "🕘") { show("history") }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, Ui.dp(c, 32), end = Ui.dp(c, 8)))
         head.addView(Ui.smallButton(c, "⌂") { show("home") }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, Ui.dp(c, 32), end = Ui.dp(c, 8)))
         head.addView(Ui.smallButton(c, "⟳") { syncNow() }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, Ui.dp(c, 32)))
         root.addView(head)
@@ -67,6 +68,8 @@ class MyPcActivity : BaseActivity() {
         if (PcLink.paired(c)) PcLink.schedule(c)   // the hourly update (again after a restart of the phone)
         show(if (PcLink.paired(c)) "home" else "pair")
         pendingFile?.let { pendingFile = null; openShared(it) }
+        // 🧊 Did Nova freeze last time? Android keeps the report: saved here, under ⚙ → Last freeze report.
+        Thread { Freeze.check(applicationContext)?.let { t -> main.post { status.text = "⚠ Nova froze at $t — the report is saved (⚙ → Last freeze report)" } } }.start()
     }
 
     /** 📷 Nova's own QR scanner. */
@@ -207,6 +210,7 @@ class MyPcActivity : BaseActivity() {
             "search" -> searchPage()
             "find" -> findPage()
             "deep" -> deepPage()
+            "history" -> historyPage()
             "brief" -> briefPage()
             "files" -> filesPage()
             "starred" -> starredPage()
@@ -317,7 +321,9 @@ class MyPcActivity : BaseActivity() {
                 }
             }
             main.post {
-                r.onSuccess { (h, e) -> hits = h; explain = e + " · ${h.size} emails · %.1f s".format((System.currentTimeMillis() - t0) / 1000.0) + if (onPc) " · on your PC" else " · on this phone" }
+                r.onSuccess { (h, e) -> hits = h
+                    Thread { PhoneHistory.quick(c, if (onPc) "pc" else "mail", q, h.size, "${h.size} emails" + (if (onPc) " · asked the PC" else ""), h.take(12).map { "✉ " + it.subject }) }.start()
+                    explain = e + " · ${h.size} emails · %.1f s".format((System.currentTimeMillis() - t0) / 1000.0) + if (onPc) " · on your PC" else " · on this phone" }
                     .onFailure { hits = emptyList(); explain = "⚠ " + (it.message ?: "failed") }
                 show("search")
             }
@@ -425,6 +431,8 @@ class MyPcActivity : BaseActivity() {
                     if (shown().isEmpty() && fDisc.isNotEmpty()) { off.add(fDisc.first()); fDisc.clear() }
                     if (shown().isEmpty() && fWhen.isNotEmpty()) { off.add(fWhen); fWhen = "" }
                     if (shown().isEmpty() && fKind.isNotEmpty()) { off.add(fKind); fKind = "" }
+                    val top = l.take(12).map { (if (it.isMail) "✉ " else "📂 ") + it.name.ifBlank { it.mail?.subject ?: "" } }
+                    Thread { PhoneHistory.quick(c, "find", q, l.size, "${l.size} found", top) }.start()
                     findNote = "%.1f s · on this phone".format((System.currentTimeMillis() - t0) / 1000.0) + (if (off.isNotEmpty()) " · nothing with ${off.joinToString(", ")} — shown without" else "")
                 }.onFailure { items = emptyList(); plan = PhoneSearch.Plan(); findNote = "⚠ " + (it.message ?: "failed") }
                 show("find")
@@ -553,13 +561,13 @@ class MyPcActivity : BaseActivity() {
     private var deepStep = ""
     private val deepStop = java.util.concurrent.atomic.AtomicBoolean(false)
 
-    private fun runDeep(q: String) {
+    private fun runDeep(q: String, resume: String? = null) {
         if (q.isBlank() || deepRunning) { if (deepRunning) show("deep"); return }
         lastQuery = q; deep = null; deepRunning = true; deepStep = "🔎 Starting…"; deepStop.set(false)
         show("deep")
         val c = applicationContext
         Thread {
-            val r = runCatching { DeepPhone.run(c, q, project, deepStop) { s -> main.post { deepStep = s; if (page == "deep") show("deep") } } }
+            val r = runCatching { DeepPhone.run(c, q, project, deepStop, resume) { s -> main.post { deepStep = s; if (page == "deep") show("deep") } } }
             main.post {
                 deepRunning = false
                 deep = r.getOrElse { DeepPhone.Result("⚠ " + (it.message ?: "Deep search failed"), emptyList(), emptyList(), false) }
@@ -697,8 +705,14 @@ class MyPcActivity : BaseActivity() {
     private fun openMail(h0: PcLink.Hit) {
         page = "mail"; lastMail = h0
         body.removeAllViews()
+        body.addView(Ui.text(this, "⏳ Opening the email…", 13f, Ui.MUTED))
+        // Read in the background: the screen (and the Nova keyboard, same app) never waits for the phone's database.
+        work({ PcLink.mail(applicationContext, h0.id) ?: h0.also { it.body = it.first } }) { h -> if (page == "mail" && lastMail === h0) drawMail(h) }
+    }
+
+    private fun drawMail(h: PcLink.Hit) {
+        body.removeAllViews()
         val c = this
-        val h = PcLink.mail(c, h0.id) ?: h0.also { it.body = it.first }
         body.addView(Ui.text(c, h.subject.ifBlank { "(no subject)" }, 18f, Ui.TEXT, true).apply { setTextIsSelectable(true) })
         // Header: one line, tap for To / Cc.
         val short = "${if (h.sent) "Me" else h.from} · ${fmt.format(Date(h.date))} · 📁 ${h.project.ifBlank { "unsorted" }}"
@@ -850,7 +864,7 @@ class MyPcActivity : BaseActivity() {
                         else Intent(Intent.ACTION_SEND_MULTIPLE).setType("*/*").putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(files.map { uriOf(it) }))
                     startActivity(Intent.createChooser(send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), "↗ Share the attachments"))
                 }
-                else -> Ui.copy(c, h.subject + "\n\n" + (PcLink.mail(c, h.id)?.body ?: h.body))
+                else -> work({ h.subject + "\n\n" + (PcLink.mail(applicationContext, h.id)?.body ?: h.body) }) { Ui.copy(c, it) }
             }
         }.show()
     }
@@ -882,7 +896,7 @@ class MyPcActivity : BaseActivity() {
     /** 📄 The email as Outlook shows it (fonts, tables, logos, pictures), shown inside Nova. Kept on the phone after the first time. */
     private fun formatted(h: PcLink.Hit) {
         val cache = File(File(PcLink.dir(this), "formatted").apply { mkdirs() }, "${h.id}.html")
-        if (cache.exists()) { showHtml(h.subject, cache.readText()); return }
+        if (cache.exists()) { work({ cache.readText() }) { showHtml(h.subject, it) }; return }
         say(if (GDrive.usable(this)) "⏳ Getting the formatted email from Google Drive…" else "⏳ Getting the formatted email from your PC…")
         Thread {
             // ☁ Google Drive first (the PC can be off), then the PC.
@@ -1101,13 +1115,20 @@ class MyPcActivity : BaseActivity() {
     }
 
     private fun openFile(f: File) {
-        if (f.extension.lowercase() in listOf("html", "htm")) { showHtml(f.nameWithoutExtension, f.readText()); return }
-        // ✉ Outlook files (.msg .oft .eml .ics .vcf): Nova reads them itself.
+        if (f.extension.lowercase() in listOf("html", "htm")) { work({ f.readText() }) { showHtml(f.nameWithoutExtension, it) }; return }
+        // ✉ Outlook files (.msg .oft .eml .ics .vcf): Nova reads them itself — in the background (a big .msg takes seconds).
         if (f.extension.lowercase() in OutlookFiles.EXT && f.length() < 60_000_000) {
-            val m = try { OutlookFiles.read(f.name, f.readBytes()) } catch (e: Exception) { null }
-            if (m != null) { showOutlook(m, f.nameWithoutExtension); return }
-            Ui.toast(this, "Nova could not read this ${f.extension} file — choose another app")
+            say("⏳ Reading ${f.name}…")
+            work({ try { OutlookFiles.read(f.name, f.readBytes()) } catch (e: Exception) { null } }) { m ->
+                if (m != null) { status.text = "✓ ${f.name}"; showOutlook(m, f.nameWithoutExtension) }
+                else { Ui.toast(this, "Nova could not read this ${f.extension} file — choose another app"); openOutside(f) }
+            }
+            return
         }
+        openOutside(f)
+    }
+
+    private fun openOutside(f: File) {
         val uri = Uri.parse("content://${PcFiles.AUTH}/" + Uri.encode(f.relativeTo(PcLink.dir(this)).path, "/"))
         val type = MimeTypeMap.getSingleton().getMimeTypeFromExtension(f.extension.lowercase())
         // Only apps that really open this type; otherwise 📤 Share.
@@ -1121,9 +1142,93 @@ class MyPcActivity : BaseActivity() {
 
     // ------------------------------------------------------------------ ⚙
 
+    // ------------------------------------------------------------------ 🕘 search history (saved by itself, 60 days)
+
+    private var hFind = ""; private var hKind = ""
+
+    private fun historyPage() {
+        val c = this
+        val q = Ui.input(c, "🔍 Find in history: subject, words, document no.…", false).apply {
+            setText(hFind); imeOptions = EditorInfo.IME_ACTION_SEARCH
+            setOnEditorActionListener { v, _, _ -> hFind = v.text.toString().trim(); show("history"); true }
+        }
+        body.addView(q)
+        val box = Ui.col(c)
+        body.addView(box)
+        box.addView(Ui.text(c, "⏳ Reading the history…", 13f, Ui.MUTED), Ui.lp(top = Ui.dp(c, 10)))
+        work({ PhoneHistory.list(applicationContext) }) { all -> if (page == "history") drawHistory(box, all) }
+    }
+
+    private fun drawHistory(box: LinearLayout, all: List<PhoneHistory.Entry>) {
+        val c = this
+        box.removeAllViews()
+        val kinds = listOf("" to "All", "deep" to "🔎 Deep", "find" to "🔍 Quick", "mail" to "✉ Emails", "pc" to "🖥 Asked the PC", "interrupted" to "⚠ Interrupted")
+        fun match(e: PhoneHistory.Entry, k: String) = k.isEmpty() || (if (k == "interrupted") e.status == "interrupted" else e.kind == k)
+        val (sv, row) = Ui.chipRow(c)
+        for ((k, l) in kinds) {
+            val n = all.count { match(it, k) }
+            if (k.isNotEmpty() && n == 0) continue
+            row.addView(Ui.chip(c, "$l $n", hKind == k) { hKind = if (hKind == k) "" else k; show("history") }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+        }
+        box.addView(sv, Ui.lp(top = Ui.dp(c, 8)))
+        val words = hFind.lowercase().split(' ').filter { it.isNotBlank() }
+        val list = all.filter { e -> match(e, hKind) && words.all { w -> (e.q + " " + e.answer).lowercase().contains(w) } }
+        if (list.isEmpty()) box.addView(Ui.text(c, if (all.isEmpty()) "Nothing yet — every search you make is saved here by itself, with its date, subject and answer." else "Nothing matches.", 13.5f, Ui.MUTED), Ui.lp(top = Ui.dp(c, 14)))
+        val dayF = SimpleDateFormat("EEE dd MMM", Locale.UK); val timeF = SimpleDateFormat("HH:mm", Locale.UK)
+        var lastDay = ""
+        for (e in list.take(300)) {
+            val d = dayF.format(Date(e.ts)).let { if (it == dayF.format(Date())) "Today · $it" else if (it == dayF.format(Date(System.currentTimeMillis() - 86_400_000))) "Yesterday · $it" else it }
+            if (d != lastDay) { box.addView(Ui.section(c, d)); lastDay = d }
+            val k = Ui.card(c)
+            val icon = when (e.kind) { "deep" -> "🔎"; "find" -> "🔍"; "pc" -> "🖥"; else -> "✉" }
+            k.addView(Ui.text(c, "${timeF.format(Date(e.ts))}  $icon ${e.q}", 14f, Ui.TEXT, true))
+            val st = when (e.status) { "done" -> "✓ finished"; "stopped" -> "■ stopped"; "interrupted" -> "⚠ interrupted (Nova closed) — what was found is kept"; "running" -> "⏳ running now"; else -> e.status }
+            k.addView(Ui.text(c, st + " · ${e.count} found" + (if (e.note.isNotBlank()) " · ${e.note}" else ""), 11.5f, if (e.status == "interrupted") Ui.BAD else Ui.GOOD))
+            val r = Ui.row(c)
+            fun b(t: String, primary: Boolean, f: () -> Unit) = r.addView(Ui.chip(c, t, primary) { f() }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+            if (e.kind == "deep" && e.status == "interrupted") b("▶ Continue", true) { runDeep(e.q, e.id) }
+            b("Open", e.status != "interrupted") { openHistory(e) }
+            b("⧉", false) { Ui.copy(c, e.q + "\n\n" + e.answer) }
+            b("🗑", false) { PhoneHistory.delete(c, e.id); show("history") }
+            k.addView(r, Ui.lp(top = Ui.dp(c, 6)))
+            box.addView(k, Ui.lp(top = Ui.dp(c, 6)))
+        }
+        // How long it is kept
+        box.addView(Ui.section(c, "Keep history for"))
+        val (sv2, row2) = Ui.chipRow(c)
+        for ((dd, l) in listOf(60 to "60 days", 90 to "90 days", 180 to "180 days", 0 to "Always")) row2.addView(Ui.chip(c, l, PhoneHistory.days(c) == dd) {
+            work({ PhoneHistory.setDays(applicationContext, dd) }) { show("history") }
+        }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+        box.addView(sv2)
+        box.addView(Ui.text(c, "Older searches are removed by themselves · 🔒 stays on this phone", 11.5f, Ui.MUTED), Ui.lp(top = Ui.dp(c, 4)))
+        if (all.isNotEmpty()) box.addView(Ui.smallButton(c, "🗑 Clear all history…") {
+            android.app.AlertDialog.Builder(c).setMessage("Delete all ${all.size} saved searches?").setPositiveButton("Delete") { _, _ -> PhoneHistory.clear(c); show("history") }
+                .setNegativeButton("Cancel", null).show()
+        }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, top = Ui.dp(c, 10)))
+    }
+
+    private fun openHistory(e: PhoneHistory.Entry) {
+        when (e.kind) {
+            "deep" -> { say("⏳ Opening the saved search…"); work({ PhoneHistory.result(applicationContext, e) }) { r -> lastQuery = e.q; deep = r; status.text = "🕘 Saved ${SimpleDateFormat("dd MMM HH:mm", Locale.UK).format(Date(e.ts))}"; show("deep") } }
+            "find" -> { lastQuery = e.q; show("find"); runFind(e.q) }
+            else -> runSearch(e.q, e.kind == "pc")
+        }
+    }
+
     private fun settingsPage() {
         val c = this
         val sp = getSharedPreferences("nova_pc", MODE_PRIVATE)
+        Freeze.last(c)?.let { (t, txt) ->
+            body.addView(Ui.section(c, "🧊 Last freeze report"))
+            body.addView(Ui.text(c, "Nova froze on $t. Share this report so the exact cause can be fixed.", 13f, Ui.TEXT))
+            val r = Ui.row(c)
+            r.addView(Ui.chip(c, "↗ Share the report", true) {
+                startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_SUBJECT, "Nova freeze report $t").putExtra(Intent.EXTRA_TEXT, txt), "↗ Share the report"))
+            }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+            r.addView(Ui.chip(c, "⧉ Copy", false) { Ui.copy(c, txt) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+            r.addView(Ui.chip(c, "Clear", false) { Freeze.clear(c); show("settings") }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT))
+            body.addView(r, Ui.lp(top = Ui.dp(c, 6)))
+        }
         body.addView(Ui.section(c, "Update every"))
         val (sv, row) = Ui.chipRow(c)
         for (m in listOf(30, 60, 180)) row.addView(Ui.chip(c, if (m < 60) "$m min" else "${m / 60} h", sp.getInt("every_min", 60) == m) {
