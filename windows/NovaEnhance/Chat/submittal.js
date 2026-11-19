@@ -14,7 +14,16 @@
   function drawFilters() {
     var p = $("cProj"); p.innerHTML = "";
     chip(p, "All", !opt.projects.length, function () { opt.projects = []; run(); });
-    allProjects.forEach(function (x) { chip(p, x, opt.projects.indexOf(x) >= 0, function () { toggle(opt.projects, x); run(); }); });
+    allProjects.forEach(function (x) {
+      var c = chip(p, x.code, opt.projects.indexOf(x.code) >= 0, function () { toggle(opt.projects, x.code); run(); });
+      if (x.name) c.appendChild(el("span", "nm", x.name));
+    });
+    // ✚ New: document prefixes found in your emails that are not a project of yours yet (click = see their items).
+    fresh.forEach(function (s) {
+      var c = chip(p, "✚ " + s.value + " · new · " + s.emails, opt.projects.indexOf(s.value) >= 0, function () { toggle(opt.projects, s.value); run(); });
+      c.className += " new"; c.title = "Found in " + s.emails + " emails, not in your projects yet — ＋ to add or merge it";
+    });
+    var plus = chip(p, "＋", false, function () { ProjFound.open(); }); plus.className += " plus"; plus.title = "Projects found in your emails";
     var t = $("cType"); t.innerHTML = "";
     chip(t, "All", !opt.types.length, function () { opt.types = []; run(); });
     allTypes.forEach(function (x) { chip(t, x, opt.types.indexOf(x) >= 0, function () { toggle(opt.types, x); run(); }); });
@@ -54,15 +63,21 @@
     var box = $("kpi"); box.innerHTML = "";
     function one(n, label, color, f) { var d = el("div", "k"); var b = el("b", null, n == null ? "–" : String(n)); if (color) b.style.color = color; d.appendChild(b); d.appendChild(el("span", null, label)); d.onclick = function () { show = f; drawTable(); }; box.appendChild(d); }
     one(k.found, "found", null, "");
-    one(k.closed, "closed by MZA", "#3DDC97", "Closed");
+    one(k.closed, "closed" + (builtin ? " by " + us : ""), "#3DDC97", "Closed");
     one(k.open, "open", "#FFB547", "Open");
     one(k.overdue, "overdue", "#FF6B6B", "Overdue");
-    one(k.avg == null ? null : k.avg + " d", "average MZA reply", null, "");
+    one(k.avg == null ? null : k.avg + " d", "average " + (builtin ? us + " " : "") + "reply", null, "");
     one(k.check, "to check", "#9AA3B5", "check");
     var s = el("div", "muted small", k.mails + " emails read · " + k.secs + " s"); s.style.alignSelf = "center"; box.appendChild(s);
   }
 
-  var COLS = [["proj", "Proj"], ["type", "Type"], ["no", "Document no."], ["rev", "Rev"], ["disc", "Disc."], ["title", "Title"], ["tower", "Tower"], ["zone", "Zone"], ["level", "Level"], ["apt", "Apt / TH"], ["sub", "Submitted"], ["due", "Deadline"], ["reply", "MZA reply"], ["code", "Code"], ["days", "Days"], ["status", "Status"]];
+  var ALL_COLS = [["proj", "Proj"], ["type", "Type"], ["no", "Document no."], ["rev", "Rev"], ["disc", "Disc."], ["title", "Title"], ["tower", "Tower"], ["zone", "Zone"], ["level", "Level"], ["apt", "Apt / TH"], ["sub", "Submitted"], ["due", "Deadline"], ["reply", "MZA reply"], ["code", "Code"], ["days", "Days"], ["status", "Status"]];
+  var COLS = ALL_COLS, builtin = true, us = "MZA", fresh = [];
+  function setCols() {
+    COLS = ALL_COLS.filter(function (c) { return builtin || ["rev", "disc", "tower", "zone", "level", "apt", "code"].indexOf(c[0]) < 0; })
+      .map(function (c) { return c[0] === "reply" ? ["reply", builtin ? us + " reply" : "Reply"] : c[0] === "no" && !builtin ? ["no", "Reference"] : c; });
+    ["lWhere", "cWhere"].forEach(function (id) { $(id).style.display = builtin ? "" : "none"; });
+  }
   function drawTable() {
     var box = $("tbl"); box.innerHTML = "";
     var t = el("table"), hr = el("tr");
@@ -97,12 +112,25 @@
 
   if (W) W.addEventListener("message", function (ev) {
     var m = ev.data;
-    if (m.t === "setup") { allProjects = m.projects || []; allTypes = m.types || []; opt = m.opt; $("sign").textContent = m.sign || ""; $("brain").textContent = m.brain; drawFilters(); }
+    if (ProjFound.handle(m)) {
+      fresh = ProjFound.items().filter(function (s) { return s.kind === "prefix"; }).slice(0, 3);
+      if (m.projects && m.projects.length) allProjects = m.projects;
+      if (m.said && !/^⚠/.test(m.said)) run(); else drawFilters();
+      return;
+    }
+    if (m.t === "setup") {
+      allProjects = m.projects || []; allTypes = m.types || []; opt = m.opt; $("sign").textContent = m.sign || ""; $("brain").textContent = m.brain;
+      builtin = m.builtin !== false; us = m.us || "MZA";
+      $("ttl").textContent = "📋 " + (m.name || "Submittal log");
+      if (!builtin) $("sub").textContent = "every item of your field found in your emails (" + (m.field || "") + ") · checks the reply on the same thread";
+      else if (us !== "MZA") $("sub").textContent = "every submission found in Outlook · Thinkproject or direct email · checks if " + us + " replied on the same thread";
+      setCols(); drawFilters();
+    }
     else if (m.t === "busy") { $("busy").textContent = "⏳ " + m.text; }
     else if (m.t === "opt") { opt = m.opt; drawFilters(); if (m.said) $("busy").textContent = "🧭 " + m.said; }
     else if (m.t === "result") {
       $("busy").textContent = ""; items = m.items || [];
-      (m.towers || []).forEach(function (x) { towers[x] = 1; }); (m.discs || []).forEach(function (x) { discs[x] = 1; }); (m.projects || []).forEach(function (x) { if (allProjects.indexOf(x) < 0) allProjects.push(x); });
+      (m.towers || []).forEach(function (x) { towers[x] = 1; }); (m.discs || []).forEach(function (x) { discs[x] = 1; }); (m.projects || []).forEach(function (x) { if (!allProjects.some(function (p) { return p.code === x; }) && !fresh.some(function (s) { return s.value === x; })) allProjects.push({ code: x, name: "" }); });
       show = ""; drawFilters(); drawKpi(m.kpi); drawTable();
       $("gaps").textContent = (m.kpi.gaps || []).length ? "⚠ Missing in the register: " + m.kpi.gaps.join(" · ") : "";
     }

@@ -211,6 +211,7 @@ class MyPcActivity : BaseActivity() {
             "find" -> findPage()
             "deep" -> deepPage()
             "log" -> logPage()
+            "found" -> foundPage()
             "history" -> historyPage()
             "brief" -> briefPage()
             "files" -> filesPage()
@@ -269,7 +270,8 @@ class MyPcActivity : BaseActivity() {
         sr.addView(Ui.button(c, "🔍", true) { q.text.toString().let { route(it) } }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
         sr.addView(Ui.button(c, "🔎 Deep") { runDeep(q.text.toString()) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT))
         body.addView(sr)
-        body.addView(Ui.smallButton(c, "📋 Submittal log (WIR · EI · MOM · RFI…)") { runLog(logOpt ?: PhoneLog.fromWords("", project)) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, top = Ui.dp(c, 6)))
+        PhoneLog.prime(c)
+        body.addView(Ui.smallButton(c, "📋 " + PhoneLog.logName + if (PhoneLog.builtin) " (WIR · EI · MOM · RFI…)" else "") { runLog(logOpt ?: PhoneLog.fromWords("", project)) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, top = Ui.dp(c, 6)))
         projectChips()
         Thread {
             val n = PcLink.count(c, "mail"); val f = PcLink.count(c, "files"); val old = PcLink.oldest(c); val size = PcLink.sizeOnPhone(c)
@@ -570,7 +572,8 @@ class MyPcActivity : BaseActivity() {
     private fun route(q: String) {
         val t = q.trim(); if (t.isEmpty()) return
         val last = logOpt
-        val f = if (last != null && page == "log") PhoneLog.follow(t, last, (listOf("SLV", "RS5") + (logRes?.items?.map { it.project } ?: emptyList())).filter { it.isNotBlank() }.distinct()) else null
+        PhoneLog.prime(applicationContext)
+        val f = if (last != null && page == "log") PhoneLog.follow(t, last, (PhoneLog.projectCodes() + (logRes?.items?.map { it.project } ?: emptyList())).filter { it.isNotBlank() }.distinct()) else null
         when {
             f != null -> { logSaid = "🧭 " + PhoneLog.describe(f); runLog(f) }
             PhoneLog.wanted(t) -> { val o = PhoneLog.fromWords(t, project); logSaid = "🧭 " + PhoneLog.describe(o); runLog(o) }
@@ -635,11 +638,16 @@ class MyPcActivity : BaseActivity() {
         for (st in listOf("Open", "Overdue", "Closed", "Code3/4")) pr.addView(Ui.chip(c, if (st == "Code3/4") "Code 3/4" else st, o.status == st) { o.status = if (o.status == st) "" else st; runLog(o) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
         body.addView(pv, Ui.lp(top = Ui.dp(c, 6)))
         val r = logRes
-        // Projects: the ones found in the log, plus SLV and RS5.
-        val projs = (listOf("SLV", "RS5") + (r?.items?.map { it.project } ?: emptyList()) + o.projects).filter { it.isNotBlank() }.distinct()
+        // Projects: your list from the PC (codes and names), then any other one found in the log · ＋ projects found in your emails.
+        PhoneLog.prime(c)
+        val projs = (PhoneLog.projectCodes() + (r?.items?.map { it.project } ?: emptyList()) + o.projects).filter { it.isNotBlank() }.distinct()
         val (jv, jr) = Ui.chipRow(c)
         jr.addView(Ui.chip(c, "All projects", o.projects.isEmpty()) { o.projects.clear(); runLog(o) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
-        for (p in projs) jr.addView(Ui.chip(c, p, p in o.projects) { if (p in o.projects) o.projects.remove(p) else o.projects.add(p); runLog(o) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+        for (p in projs) {
+            val mine = PhoneLog.canon(p).isNotEmpty()
+            jr.addView(Ui.chip(c, if (mine) p else "✚ $p · new", p in o.projects) { if (p in o.projects) o.projects.remove(p) else o.projects.add(p); runLog(o) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+        }
+        jr.addView(Ui.chip(c, "＋", true) { loadFound(null) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
         body.addView(jv, Ui.lp(top = Ui.dp(c, 6)))
         if (r != null) {
             val towers = r.items.map { it.tower }.filter { it.isNotEmpty() && !it.startsWith("TH") }.distinct().sorted()
@@ -650,7 +658,7 @@ class MyPcActivity : BaseActivity() {
                 body.addView(wv, Ui.lp(top = Ui.dp(c, 6)))
             }
         }
-        if (logBusy) { body.addView(Ui.text(c, "⏳ Reading every submission and its reply on this phone…", 13f, Ui.ACCENT), Ui.lp(top = Ui.dp(c, 10))); return }
+        if (logBusy) { body.addView(Ui.text(c, if (PhoneLog.builtin) "⏳ Reading every submission and its reply on this phone…" else "⏳ Reading every item of your field and its reply on this phone…", 13f, Ui.ACCENT), Ui.lp(top = Ui.dp(c, 10))); return }
         if (r == null) return
         val open = r.items.count { it.status in setOf("Open", "Reviewing", "Replied", "Draft") }
         val (kv, kr) = Ui.chipRow(c)
@@ -681,6 +689,67 @@ class MyPcActivity : BaseActivity() {
             body.addView(k, Ui.lp(top = Ui.dp(c, 6)))
         }
         if (list.size > 400) body.addView(Ui.text(c, "… ${list.size - 400} more — ⬇ Excel has them all", 12f, Ui.MUTED))
+    }
+
+    // ------------------------------------------------------------------ ＋ Projects found in your emails (asks the PC)
+
+    private var found: JSONObject? = null
+    private var foundBusy = false
+
+    private fun loadFound(args: JSONObject?) {
+        foundBusy = true
+        show("found")
+        val c = applicationContext
+        Thread {
+            val r = runCatching { PcLink.ask(c, "projfound", args ?: JSONObject().put("t", "pf.load")) { s -> main.post { status.text = s } } }
+            main.post {
+                foundBusy = false
+                r.onSuccess { found = it }.onFailure { found = JSONObject().put("said", "⚠ " + (it.message ?: "your PC did not answer")) }
+                if (page == "found") show("found")
+            }
+        }.start()
+    }
+
+    private fun foundPage() {
+        val c = this
+        body.addView(Ui.text(c, "＋ Projects found in your emails", 17f, Ui.TEXT, true))
+        body.addView(Ui.text(c, "document numbers, Outlook folders and subject tags that no project of yours claims yet · ✚ add · ⇢ merge · ✗ ignore — your PC and this phone use it at once (after the next update)", 12f, Ui.MUTED))
+        body.addView(Ui.smallButton(c, "← Back to the log") { show("log") }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, top = Ui.dp(c, 6)))
+        if (foundBusy) { body.addView(Ui.text(c, "⏳ Asking your PC…", 13f, Ui.ACCENT), Ui.lp(top = Ui.dp(c, 10))); return }
+        val f = found ?: return
+        f.optString("said").takeIf { it.isNotBlank() }?.let { body.addView(Ui.text(c, it, 13f, if (it.startsWith("⚠")) Ui.BAD else Ui.GOOD), Ui.lp(top = Ui.dp(c, 8))) }
+        val items = f.optJSONArray("items") ?: JSONArray()
+        val projs = f.optJSONArray("projects") ?: JSONArray()
+        if (items.length() == 0 && f.has("items")) body.addView(Ui.text(c, "Nothing new — every project in your emails is already in your list.", 13f, Ui.MUTED), Ui.lp(top = Ui.dp(c, 10)))
+        val kinds = mapOf("prefix" to "document numbers", "folder" to "Outlook folder", "tag" to "subject tag")
+        for (i in 0 until items.length()) {
+            val s = items.getJSONObject(i)
+            val kind = s.optString("kind"); val value = s.optString("value"); val target = s.optString("target"); val code = s.optString("code")
+            val k = Ui.card(c)
+            k.addView(Ui.text(c, value + (if (kind == "prefix") "-…" else "") + " · ${s.optInt("emails")} emails", 15f, Ui.TEXT, true))
+            k.addView(Ui.text(c, (kinds[kind] ?: kind) + " · " + s.optString("sample"), 11.5f, Ui.MUTED))
+            val (bv, br) = Ui.chipRow(c)
+            br.addView(Ui.chip(c, "✚ Add as $code", target.isEmpty()) {
+                val e = EditText(c).apply { setText(code) }
+                val n = EditText(c).apply { hint = "Full name (optional)"; if (kind != "prefix") setText(value) }
+                val box = Ui.col(c, 16).apply { addView(e); addView(n) }
+                android.app.AlertDialog.Builder(c).setTitle("✚ New project").setView(box)
+                    .setPositiveButton("Add") { _, _ -> loadFound(JSONObject().put("t", "pf.add").put("kind", kind).put("value", value).put("code", e.text.toString().trim()).put("name", n.text.toString().trim())) }
+                    .setNegativeButton("Cancel", null).show()
+            }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+            if (target.isNotEmpty()) br.addView(Ui.chip(c, "⇢ $target", true) {
+                loadFound(JSONObject().put("t", "pf.merge").put("kind", kind).put("value", value).put("target", target))
+            }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+            br.addView(Ui.chip(c, "⇢ Merge into…", false) {
+                val codes = (0 until projs.length()).map { projs.getJSONObject(it) }.map { it.optString("code") to (it.optString("code") + it.optString("name").let { nm -> if (nm.isNotBlank()) " · $nm" else "" }) }
+                android.app.AlertDialog.Builder(c).setTitle("⇢ $value is part of…").setItems(codes.map { it.second }.toTypedArray()) { _, w ->
+                    loadFound(JSONObject().put("t", "pf.merge").put("kind", kind).put("value", value).put("target", codes[w].first))
+                }.show()
+            }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+            br.addView(Ui.chip(c, "✗ Ignore", false) { loadFound(JSONObject().put("t", "pf.ignore").put("value", value)) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+            k.addView(bv, Ui.lp(top = Ui.dp(c, 6)))
+            body.addView(k, Ui.lp(top = Ui.dp(c, 8)))
+        }
     }
 
     private var deep: DeepPhone.Result? = null

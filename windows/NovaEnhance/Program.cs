@@ -119,6 +119,7 @@ class NovaContext : ApplicationContext
         Paths.Ensure();
         Store.Load();
         try { Persona.Migrate(); } catch { }   // 🌐 universal Nova: an old install keeps its field (construction for an architecture profile)
+        Task.Run(() => { try { Projects.MigrateNames(); } catch { } });   // 🏷 build 37: your project codes and names
         // 🛡 Two starts that never finished → safe mode (background jobs off, you switch them on one by one).
         Guard.BeginStart();
         Startup.Apply();
@@ -391,6 +392,16 @@ static class Screens
         if (Program.OffUi(() => Submittal(o))) return;
         try { Show(new SubmittalForm(o)); }
         catch (Exception e) { Log.Error("Submittal log", e); }
+    }
+
+    static ProjectsForm projForm;
+
+    /// <summary>📁 Your projects + ＋ Projects found in your emails.</summary>
+    public static void ProjectsFound()
+    {
+        if (Program.OffUi(ProjectsFound)) return;
+        try { if (projForm == null || projForm.IsDisposed) projForm = new ProjectsForm(); Show(projForm); }
+        catch (Exception e) { Log.Error("Projects", e); }
     }
 
     public static void SearchHistory()

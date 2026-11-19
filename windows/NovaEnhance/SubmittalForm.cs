@@ -10,7 +10,7 @@ class SubmittalForm : WebPage
     bool exportNext;
     CancellationTokenSource cts;
 
-    public SubmittalForm(SubmittalLog.Options o = null, bool export = false) : base("📋 Submittal log", "submittal.html", 1500, 900) { start = o; exportNext = export; }
+    public SubmittalForm(SubmittalLog.Options o = null, bool export = false) : base("📋 " + Tracker.LogName, "submittal.html", 1500, 900) { start = o; exportNext = export; }
 
     /// <summary>New choices from the search box (“only the overdue ones”, “now tower 2”, “export it”).</summary>
     public void Apply(SubmittalLog.Options o, bool export)
@@ -30,13 +30,21 @@ class SubmittalForm : WebPage
             case "init":
             {
                 var o = start ?? new SubmittalLog.Options();
-                var projects = SubmittalLog.KnownProjects().Take(14).ToList();
                 Post(new JsonObject
                 {
-                    ["t"] = "setup", ["projects"] = A(projects), ["types"] = A(SubmittalLog.Enabled()),
+                    ["t"] = "setup", ["projects"] = ProjectFinder.ProjectsJson(), ["types"] = A(SubmittalLog.Enabled()),
+                    ["builtin"] = Tracker.Builtin, ["us"] = Tracker.UsShort, ["name"] = Tracker.LogName, ["field"] = Packs.Current.Name,
                     ["opt"] = OptJson(o), ["sign"] = Program.Sign, ["brain"] = Brain.Unlocked ? $"🧠 rules: Nova Brain v{Brain.Version}" : "🧠 rules: built-in (Nova Brain locked)"
                 });
                 Run(o);
+                // ✚ New projects found in your emails (for the dashed chips and the ＋ panel) — after the log, quietly.
+                _ = Task.Run(() => { try { Thread.Sleep(1500); Post(ProjectFinder.Handle(new JsonObject { ["t"] = "pf.load" })); } catch (Exception e) { Log.Warn("projects found", e.Message); } });
+                break;
+            }
+            case "pf.load" or "pf.add" or "pf.merge" or "pf.ignore":
+            {
+                var msg = m;
+                _ = Task.Run(() => { try { Post(ProjectFinder.Handle(msg)); } catch (Exception e) { Post(new JsonObject { ["t"] = "pf.list", ["said"] = "⚠ " + e.Message }); } });
                 break;
             }
             case "run": Run(OptOf(m["opt"] as JsonObject)); break;
@@ -105,7 +113,7 @@ class SubmittalForm : WebPage
         cts?.Cancel();
         cts = new CancellationTokenSource();
         var ct = cts.Token;
-        Work("📋 Reading every submission and its MZA reply in your emails…", () =>
+        Work(Tracker.Builtin ? $"📋 Reading every submission and its {Tracker.UsShort} reply in your emails…" : "📋 Reading every item of your field and its reply in your emails…", () =>
         {
             var r = SubmittalLog.Run(o, null, ct);
             last = r;

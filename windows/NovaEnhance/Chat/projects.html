@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Projects</title>
+<link rel="stylesheet" href="chat.css">
+<style>
+body{overflow:auto}
+#wrap{padding:14px 20px;display:flex;flex-direction:column;gap:12px}
+.hd{display:flex;align-items:center;gap:10px}.hd b{font-size:18px}
+.card{background:#151925;border:1px solid #2A3040;border-radius:12px;padding:12px 14px}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{text-align:left;color:#9AA3B5;font-weight:600;padding:4px 6px;border-bottom:1px solid #2A3040}
+td{padding:4px 6px;border-bottom:1px solid #1F2433}
+td input{width:100%;padding:3px 6px}
+.al{color:#8E96A8;font-size:11.5px}
+#msg{font-size:12.5px;color:#3DDC97}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div class="hd"><b>📁 Your projects</b><span class="muted small">one list for email sorting, the logs, the search box, the connector and the phone · an old code stays as an alias, so old emails keep their project</span><span class="grow"></span><span class="sign" id="sign"></span></div>
+  <div class="card">
+    <table id="tbl"></table>
+    <div id="msg"></div>
+  </div>
+  <div class="card" id="pfHost"></div>
+</div>
+<script src="projfound.js"></script>
+<script>
+(function () {
+  var W = window.chrome && window.chrome.webview;
+  function post(o) { if (W) W.postMessage(o); }
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  ProjFound.full();
+  function draw(list) {
+    var t = document.getElementById("tbl"); t.innerHTML = "";
+    var h = el("tr"); ["Code", "Full name", "Also written as (old codes, numbers, names)", "Emails", ""].forEach(function (x) { h.appendChild(el("th", null, x)); }); t.appendChild(h);
+    list.forEach(function (p) {
+      var r = el("tr");
+      var c = el("input"); c.value = p.code; var n = el("input"); n.value = p.name;
+      var td1 = el("td"); td1.style.width = "130px"; td1.appendChild(c); r.appendChild(td1);
+      var td2 = el("td"); td2.appendChild(n); r.appendChild(td2);
+      r.appendChild(el("td", "al", (p.aliases || []).join(" · ")));
+      r.appendChild(el("td", null, p.emails ? p.emails.toLocaleString() : "–"));
+      var b = el("button", null, "✓ Save"); b.onclick = function () { document.getElementById("msg").textContent = "⏳ …"; post({ t: "pr.rename", old: p.code, code: c.value.trim(), name: n.value.trim() }); };
+      var td5 = el("td"); td5.appendChild(b); r.appendChild(td5);
+      t.appendChild(r);
+    });
+  }
+  if (W) W.addEventListener("message", function (ev) {
+    var m = ev.data;
+    if (ProjFound.handle(m)) { if (m.said && !/^⚠/.test(m.said)) post({ t: "pr.list" }); return; }
+    if (m.t === "pr.list") { draw(m.list || []); document.getElementById("sign").textContent = m.sign || ""; if (m.said) document.getElementById("msg").textContent = m.said; }
+    else if (m.t === "error") document.getElementById("msg").textContent = "⚠ " + m.text;
+  });
+  post({ t: "init" });
+  ProjFound.open();
+})();
+</script>
+</body>
+</html>

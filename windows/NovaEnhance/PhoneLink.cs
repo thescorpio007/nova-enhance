@@ -284,7 +284,16 @@ static class PhoneLink
             try { using var r = cmd.ExecuteReader(); while (r.Read()) sb.Append(r.GetInt64(0)).Append('\t').Append(r.GetString(1)).Append('\n'); } catch { }
         }
         var choices = new JsonArray();
-        foreach (var ch in MailProjects.Choices()) choices.Add(new JsonObject { ["code"] = ch.Code, ["label"] = ch.Label });
+        foreach (var ch in MailProjects.Choices())
+        {
+            // 🏷 Names and old codes too, so “RS5”, “Saadiyat” or “Lucci Dubai” typed on the phone find the right project.
+            var p = Projects.All().FirstOrDefault(x => x.Code.Equals(ch.Code, StringComparison.OrdinalIgnoreCase));
+            choices.Add(new JsonObject
+            {
+                ["code"] = ch.Code, ["label"] = ch.Label, ["name"] = p?.Name ?? "",
+                ["aliases"] = new JsonArray((p == null ? new List<string>() : Projects.NamesOf(p).Where(n => n != p.Code)).Select(n => (JsonNode)n).ToArray())
+            });
+        }
         var text = new JsonObject { ["projects"] = choices, ["map"] = sb.ToString() }.ToJsonString();
         var h = Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes(text)));
         if (h == s.ProjHash) return;
@@ -397,7 +406,8 @@ static class PhoneLink
         o["rules"] = rules;
         try { o["prompts"] = JsonNode.Parse(JsonSerializer.Serialize(NovaEnhance.Prompts.All(), JO)); } catch { }
         try { o["work"] = JsonNode.Parse(JsonSerializer.Serialize(Work.All(), JO)); } catch { }
-        try { o["guide"] = NovaEnhance.Brain.ForPhone(); o["settings"] = NovaEnhance.Brain.AllSettings(); } catch { }   // 🧠 the same Nova Brain rules on the phone
+        try { o["guide"] = NovaEnhance.Brain.ForPhone(); o["settings"] = NovaEnhance.Brain.AllSettings(); } catch { }
+        try { o["track"] = Tracker.ForPhone(); } catch { }   // 🧩 the field pack: what the log tracks, who is “us”   // 🧠 the same Nova Brain rules on the phone
         var text = o.ToJsonString();
         var h = Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes(text)));
         if (h == s.BrainHash) return;
@@ -699,6 +709,14 @@ static class PhoneLink
                     res = new JsonObject { ["name"] = System.IO.Path.GetFileName(path), ["data"] = Convert.ToBase64String(Gzip(await File.ReadAllBytesAsync(path))) };
                 }
                 finally { try { Directory.Delete(dir, true); } catch { } }
+                break;
+            }
+            case "projfound":
+            {
+                // ＋ Projects found in your emails — the same list, ✚ add · ⇢ merge · ✗ ignore from the phone.
+                var m = a.DeepClone().AsObject();
+                if ((m["t"]?.ToString() ?? "").Length == 0) m["t"] = "pf.load";
+                res = await Task.Run(() => ProjectFinder.Handle(m));
                 break;
             }
             case "sync": _ = Task.Run(() => RunSafe("asked by the phone")); res = new JsonObject { ["ok"] = true }; break;

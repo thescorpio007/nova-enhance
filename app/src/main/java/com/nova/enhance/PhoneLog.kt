@@ -1,6 +1,7 @@
 package com.nova.enhance
 
 import android.content.Context
+import org.json.JSONArray
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -35,7 +36,7 @@ object PhoneLog {
 
     class Result(val items: List<Item>, val mails: Int, val gaps: List<String>, val opt: Options, val secs: Double)
 
-    data class Def(val code: String, val label: String, val find: String, val close: String, val overdue: Int)
+    data class Def(val code: String, val label: String, val find: String, val close: String, val overdue: Int, val rx: String = "", val done: String = "", val words: String = "")
 
     val TYPES = listOf(
         Def("WIR", "Work inspection request", "code", "code", 2), Def("MIR", "Material inspection request", "code", "code", 2),
@@ -48,7 +49,61 @@ object PhoneLog {
         Def("VO", "Variation", "words", "reply", 14), Def("AUTH", "Authority submission", "words", "anyreply", 14),
         Def("SOR", "Site observation report (MZA)", "code", "mzaconfirm", 7), Def("NCR", "Non-conformance report (MZA)", "code", "mzaconfirm", 14),
         Def("EI", "Engineer's instruction (MZA)", "words", "contractor", 7), Def("MOM", "Minutes of meeting", "words", "final", 7))
-    fun def(code: String) = TYPES.firstOrNull { it.code == code }
+    fun def(code: String) = defsNow.firstOrNull { it.code == code }
+
+    // ---------------------------------------------------------------- 🧩 field pack + 🏷 project names, from the PC
+
+    @Volatile private var defsNow: List<Def> = TYPES
+    @Volatile private var alias: Map<String, String> = emptyMap()
+    @Volatile var builtin = true; private set
+    @Volatile var us = "MZA"; private set
+    @Volatile var usMatch = "MZ ARCHITECTS, mz-architects.com"; private set
+    @Volatile var logName = "Submittal log"; private set
+    @Volatile private var defaults = ""
+
+    /** Reads the PC's field pack (Settings → About me) and your projects with their names and old codes. */
+    fun prime(c: Context) {
+        val m = java.util.TreeMap<String, String>(String.CASE_INSENSITIVE_ORDER)
+        val projs = PcLink.json(c, "projects.json")?.let { runCatching { JSONArray(it) }.getOrNull() }
+        if (projs != null) for (i in 0 until projs.length()) {
+            val p = projs.optJSONObject(i) ?: continue
+            val code = p.optString("code"); if (code.isBlank() || code == "GEN") continue
+            m.putIfAbsent(code, code)
+            p.optJSONArray("aliases")?.let { a -> for (k in 0 until a.length()) a.optString(k).takeIf { it.length >= 2 }?.let { x -> m.putIfAbsent(x, code) } }
+            p.optString("name").takeIf { it.length > 2 }?.let { x -> m.putIfAbsent(x, code) }
+        }
+        alias = m
+        val t = PcLink.track(c)
+        builtin = t?.optBoolean("builtin", true) ?: true
+        us = t?.optString("short")?.takeIf { it.isNotBlank() } ?: "MZA"
+        usMatch = t?.optString("us")?.takeIf { it.isNotBlank() } ?: "MZ ARCHITECTS, mz-architects.com"
+        logName = t?.optString("name")?.takeIf { it.isNotBlank() } ?: "Submittal log"
+        defaults = t?.optString("defaults") ?: ""
+        defsNow = if (builtin) TYPES else t?.optJSONArray("types")?.let { a ->
+            (0 until a.length()).mapNotNull { a.optJSONObject(it) }.map { o ->
+                Def(o.optString("code"), o.optString("label"), o.optString("find"), o.optString("close"), o.optInt("overdue"), o.optString("rx"), o.optString("done"), o.optString("words"))
+            }
+        }?.takeIf { it.isNotEmpty() } ?: TYPES
+        if (!builtin && defsNow === TYPES) builtin = true
+    }
+
+    /** Your project codes (in your order on the PC). */
+    fun projectCodes(): List<String> = alias.values.distinct()
+
+    /** The project for any way it is written (“RS5” → RS5-C7, “Saadiyat …” → Nouran), "" when none. */
+    fun canon(s: String): String = alias[s.trim()] ?: ""
+
+    /** The projects named in a sentence: by code, old code or name. */
+    fun mentioned(q: String): List<String> {
+        val out = ArrayList<String>()
+        for ((k, code) in alias) {
+            if (code in out) continue
+            val caps = k.length <= 3 && k.none { it.isDigit() } && k == k.uppercase()
+            val rx = Regex("(?<![\\p{L}\\p{N}])" + Regex.escape(k) + "(?![\\p{L}\\p{N}])", if (caps) setOf() else setOf(RegexOption.IGNORE_CASE))
+            if (rx.containsMatchIn(q)) out.add(code)
+        }
+        return out
+    }
     private val ALIAS = mapOf("SHD" to "SDS", "REP" to "RPT", "VOR" to "VO", "PAYMENT" to "PAY", "AUTHORITY" to "AUTH")
 
     private val I = RegexOption.IGNORE_CASE
@@ -66,7 +121,10 @@ object PhoneLog {
 
     private fun numRx(codes: List<String>) = Regex("(?<![A-Za-z0-9])([A-Z][A-Z0-9]{1,5}(?:-[A-Z0-9]{1,6}){1,4}?-(" + codes.joinToString("|") { Regex.escape(it) } + ")-(\\d{2,6}))(?:[_\\- ]*(?i:Rev|R)\\.?\\s?(\\d{1,2}))?")
 
-    fun enabled(c: Context) = PcLink.settingList(c, "log.all", TYPES.joinToString(", ") { it.code }).map { ALIAS[it.uppercase()] ?: it.uppercase() }.distinct()
+    fun enabled(c: Context): List<String> {
+        prime(c)
+        return PcLink.settingList(c, "log.all", defaults.ifBlank { defsNow.joinToString(", ") { it.code } }).map { ALIAS[it.uppercase()] ?: it.uppercase() }.distinct().filter { def(it) != null }
+    }
     private fun norm(s: String) = strip.replace(s, "").lowercase().replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim()
     private val day = SimpleDateFormat("dd MMM HH:mm", Locale.UK)
     private val dayY = SimpleDateFormat("dd MMM yyyy", Locale.UK)
@@ -89,26 +147,32 @@ object PhoneLog {
 
     fun run(c: Context, o: Options): Result {
         val t0 = System.currentTimeMillis()
+        prime(c)
         val want = (if (o.types.isNotEmpty()) o.types.map { ALIAS[it.uppercase()] ?: it.uppercase() } else enabled(c)).toSet()
-        val mza = PcLink.settingList(c, "mza.match", "MZ ARCHITECTS, mz-architects.com")
+        val mza = PcLink.settingList(c, "mza.match", usMatch)
+        val bi = builtin
+        val refTypes = defsNow.filter { it.find == "ref" && it.code in want }.map { Triple(it, Regex(it.rx, I), if (it.done.isNotBlank()) Regex(it.done, I) else null) }
         val closedFiles = PcLink.settingList(c, "closed.files", "signed, -C1, -C2, -C3, -C4, reply")
-        val codeTypes = TYPES.filter { it.find == "code" && it.code in want }.map { it.code }.toMutableList()
-        if ("HSE" in want) codeTypes.add("GEN")
-        if ("PAY" in want && "LTR" !in codeTypes) codeTypes.add("LTR")
+        val codeTypes = defsNow.filter { it.find == "code" && it.code in want }.map { it.code }.toMutableList()
+        if (bi && "HSE" in want) codeTypes.add("GEN")
+        if (bi && "PAY" in want && "LTR" !in codeTypes) codeTypes.add("LTR")
         val rx = if (codeTypes.isNotEmpty()) numRx(codeTypes) else null
         val subj = codeTypes.map { "%-$it-%" }.toMutableList()
-        if ("EI" in want) subj += listOf("%Engineer%Instruction%", "%EI No%", "%Engineer%Determination%")
+        if (bi && "EI" in want) subj += listOf("%Engineer%Instruction%", "%EI No%", "%Engineer%Determination%")
         if ("MOM" in want) subj += listOf("%Minutes%", "%MOM%", "%Meeting No%", "%Kick%Off%")
-        if ("VO" in want) subj += listOf("%Variation%", "% VO %", "% VO-%", "%VOR%", "%V.O.%")
-        if ("AUTH" in want) subj += listOf("%ADCD%", "%Civil Defen%", "%ADM %", "%Municipality%", "%DMT%", "%Aldar%", "%Miral%", "%NOC%", "%ADDC%")
-        if ("PAY" in want) subj += listOf("%Payment%", "%IPC%", "%IPA%", "%Statement of Account%")
+        if (bi && "VO" in want) subj += listOf("%Variation%", "% VO %", "% VO-%", "%VOR%", "%V.O.%")
+        if (bi && "AUTH" in want) subj += listOf("%ADCD%", "%Civil Defen%", "%ADM %", "%Municipality%", "%DMT%", "%Aldar%", "%Miral%", "%NOC%", "%ADDC%")
+        if (bi && "PAY" in want) subj += listOf("%Payment%", "%IPC%", "%IPA%", "%Statement of Account%")
+        refTypes.forEach { (t, _, _) -> subj += refLike(t.code) }
         val ms = mails(c, subj, if ("MOM" in want) listOf("%MOM%") else emptyList(), o.from - 3 * 86_400_000L)
-        val known = HashSet<String>().apply { add("SLV"); add("RS5"); ms.forEach { if (it.project.isNotBlank()) add(it.project.uppercase()) } }
+        val al = java.util.TreeMap<String, String>(String.CASE_INSENSITIVE_ORDER).apply { putAll(alias); ms.forEach { if (it.project.isNotBlank()) putIfAbsent(it.project, it.project) } }
+        val known = al.keys.filter { ' ' !in it }.toHashSet().let { k -> java.util.TreeSet(String.CASE_INSENSITIVE_ORDER).apply { addAll(k) } }
         fun isMza(h: PcLink.Hit) = h.sent || mza.any { h.from.contains(it, true) || h.fromAddr.contains(it, true) }
+        val byLength = al.entries.sortedByDescending { it.key.length }
         fun projFrom(s: String): String {
-            Regex("(?<![A-Za-z0-9])([A-Z][A-Z0-9]{1,6})-[A-Z0-9]").findAll(s).forEach { if (it.groupValues[1] in known) return it.groupValues[1] }
-            if (Regex("Sea\\s*La\\s*Vie|\\bSLV\\b", I).containsMatchIn(s)) return "SLV"
-            if (Regex("\\bRS5\\b", I).containsMatchIn(s)) return "RS5"
+            Regex("(?<![A-Za-z0-9])([A-Z][A-Z0-9]{1,6})-[A-Z0-9]").findAll(s).forEach { m0 -> al[m0.groupValues[1]]?.let { return it } }
+            for ((k, code) in byLength)
+                if ((k.length >= 3 || k.any { it.isDigit() }) && Regex("(?<![\\p{L}\\p{N}])" + Regex.escape(k).replace("\\ ", "\\s*") + "(?![\\p{L}\\p{N}])", I).containsMatchIn(s)) return code
             return ""
         }
         val groups = LinkedHashMap<String, Item>()
@@ -117,7 +181,7 @@ object PhoneLog {
 
         for (h in ms.sortedBy { it.date }) {
             val s = h.subject; val clean = strip.replace(s, "")
-            if ("EI" in want && (eiRx.containsMatchIn(s) || detRx.containsMatchIn(s))) {
+            if (bi && "EI" in want && (eiRx.containsMatchIn(s) || detRx.containsMatchIn(s))) {
                 val n = eiNum.find(s)
                 if (n != null) {
                     val p = projFrom(s).ifBlank { h.project }
@@ -150,9 +214,10 @@ object PhoneLog {
                 if (ok && type in want) {
                     var proj = no.substringBefore('-')
                     if (proj !in known) {
-                        val k = known.firstOrNull { proj.endsWith(it) && it.length >= 2 }
+                        val k = known.firstOrNull { proj.endsWith(it, true) && it.length >= 2 && '-' !in it }
                         if (k != null) { no = k + no.substring(proj.length); proj = k } else if (h.project.isNotBlank()) proj = h.project
                     }
+                    al[proj]?.let { proj = it }   // RS5 → RS5-C7, SAADIYAT → Nouran
                     val rev = m.groupValues[4].toIntOrNull() ?: 0
                     val parts = no.split('-')
                     val it = g("$type|$no|$rev") { Item(type, proj).also { x -> x.no = no; x.revNum = rev; x.disc = if (parts.size >= 4) parts[parts.size - 3] else "" } }
@@ -162,7 +227,19 @@ object PhoneLog {
                     handled = true
                 }
             }
-            if (!handled) for ((code, wrx) in listOf("PAY" to payRx, "VO" to voRx, "AUTH" to authRx)) {
+            if (!handled) for ((t, trx, _) in refTypes) {
+                // 🧩 Your field's items (invoices, tickets, contracts, approvals…): one row per reference, or per thread without a number.
+                val rm = trx.find(s) ?: continue
+                val refv = rm.value.trim().replace(Regex("\\s+"), " ")
+                val numbered = refv.any { it.isDigit() }
+                val it = g(if (numbered) "${t.code}|${refv.uppercase()}" else "${t.code}|" + norm(s)) { Item(t.code, h.project).also { x -> x.no = if (numbered) refv else t.code; x.via = "Email" } }
+                it.mails.add(h)
+                if (it.project.isEmpty()) it.project = h.project
+                if (it.title.isEmpty() || (!replyRx.containsMatchIn(s) && !fwdRx.containsMatchIn(s))) it.title = clean.trim()
+                handled = true
+                break
+            }
+            if (!handled && bi) for ((code, wrx) in listOf("PAY" to payRx, "VO" to voRx, "AUTH" to authRx)) {
                 if (code !in want || !wrx.containsMatchIn(s)) continue
                 val p = projFrom(s).ifBlank { h.project }
                 val it = g("$code|" + norm(s)) { Item(code, p).also { x -> x.no = code; x.via = "Email" } }
@@ -180,13 +257,13 @@ object PhoneLog {
             val tp = list.any { x -> x.fromAddr.contains("thinkproject", true) || x.body.contains("thinkproject", true) }
             it.via = if (tp) "Thinkproject" else it.via.ifBlank { "Outlook" }
             fun plain(x: PcLink.Hit) = !replyRx.containsMatchIn(x.subject) && !fwdRx.containsMatchIn(x.subject)
-            val mzaIssues = df.close in setOf("mzaconfirm", "contractor") || (df.code in setOf("LTR", "VO", "AUTH", "MOM") && list.firstOrNull { x -> plain(x) }?.let { x -> isMza(x) } == true)
-            it.sub = list.firstOrNull { x -> plain(x) && (mzaIssues || df.close == "received" || df.code in setOf("AUTH", "MOM") || !isMza(x)) }
-                ?: if (df.code in setOf("EI", "MOM", "AUTH", "VO", "PAY", "LTR")) list.firstOrNull { x -> !fwdRx.containsMatchIn(x.subject) } else null
+            val mzaIssues = df.close in setOf("mzaconfirm", "contractor") || ((df.code in setOf("LTR", "VO", "AUTH", "MOM") || df.find == "ref") && list.firstOrNull { x -> plain(x) }?.let { x -> isMza(x) } == true)
+            it.sub = list.firstOrNull { x -> plain(x) && (mzaIssues || df.close == "received" || df.code in setOf("AUTH", "MOM") || df.find == "ref" || !isMza(x)) }
+                ?: if (df.code in setOf("EI", "MOM", "AUTH", "VO", "PAY", "LTR") || df.find == "ref") list.firstOrNull { x -> !fwdRx.containsMatchIn(x.subject) } else null
             if (tp) it.sub?.let { sh -> it.deadline = tpDeadline(sh.body) }
             val after = list.filter { x -> it.sub == null || x.date > it.sub!!.date }
             var waiting = ""
-            fun close(x: PcLink.Hit, code: String) { it.rep = x; it.by = if (x.sent) "MZA (me)" else x.from; if (code.isNotEmpty()) it.code = code }
+            fun close(x: PcLink.Hit, code: String) { it.rep = x; it.by = if (x.sent) "$us (me)" else x.from; if (code.isNotEmpty()) it.code = code }
             when (df.close) {
                 "code" -> for (x in after) {
                     val fromMza = isMza(x); val withResp = x.subject.contains("with MZA Response", true)
@@ -204,13 +281,19 @@ object PhoneLog {
                     val cr = after.firstOrNull { x -> !isMza(x) && !fwdRx.containsMatchIn(x.subject) }
                     if (cr != null) {
                         val conf = after.firstOrNull { x -> x.date > cr.date && isMza(x) && Regex("\\bclosed?\\b|closure|accepted|verified|rectified", I).containsMatchIn(x.subject + " " + x.att + " " + x.body.take(1200)) }
-                        if (conf != null) close(conf, "") else { waiting = "Replied"; it.why = "contractor replied ${d(cr.date)} · waiting for MZA to close it" }
+                        if (conf != null) close(conf, "") else { waiting = "Replied"; it.why = "contractor replied ${d(cr.date)} · waiting for $us to close it" }
                     }
+                }
+                "done" -> {
+                    val drx = refTypes.firstOrNull { x -> x.first.code == df.code }?.third ?: df.done.takeIf { x -> x.isNotBlank() }?.let { x -> Regex(x, I) }
+                    val dn = if (drx == null) null else after.firstOrNull { x -> !fwdRx.containsMatchIn(x.subject) && drx.containsMatchIn(x.subject + " " + x.body.take(1500) + " " + x.att) }
+                    if (dn != null) close(dn, "")
+                    else if (after.any { x -> !fwdRx.containsMatchIn(x.subject) && (it.sub == null || !x.fromAddr.equals(it.sub!!.fromAddr, true)) }) waiting = "Replied"
                 }
                 "final" -> {
                     val fin = list.firstOrNull { x -> !Regex("draft", I).containsMatchIn(x.subject + " " + x.att) && !replyRx.containsMatchIn(x.subject) }
                     if (it.sub == null) it.sub = list.firstOrNull()
-                    if (fin != null) { it.rep = fin; it.by = if (fin.sent) "MZA (me)" else fin.from } else waiting = "Draft"
+                    if (fin != null) { it.rep = fin; it.by = if (fin.sent) "$us (me)" else fin.from } else waiting = "Draft"
                 }
             }
             val pl = SubmittalPlace.of(it.title)
@@ -231,7 +314,7 @@ object PhoneLog {
             if (it.ref.isNotEmpty()) why.add("ref " + it.ref)
             if (it.rep != null) why.add("${if (df.close == "final") "final minutes" else "closed"} ${d(it.reply)} by ${it.by}" + (if (it.code.isNotEmpty()) " · ${it.code}" else ""))
             else if (it.status == "Draft") why.add("draft only — final minutes not issued yet")
-            else if (it.why.isEmpty() && it.sub != null && df.close != "received") why.add("no reply yet · due ${dy(it.deadline)}")
+            else if (it.why.isEmpty() && it.sub != null && df.close != "received" && waiting != "Replied") why.add("no reply yet · due ${dy(it.deadline)}")
             if (it.why.isNotEmpty()) why.add(it.why)
             it.why = why.joinToString(" · ")
         }
@@ -311,6 +394,23 @@ object PhoneLog {
 
     // ---------------------------------------------------------------- your words → a log (same as the PC)
 
+    /** The words for each type: the built-in ones (construction) or your field's. */
+    fun typeWords(): List<Pair<String, Regex>> = if (builtin) TYPE_WORDS
+        else defsNow.filter { it.words.isNotBlank() || it.code == "MOM" }.map { it.code to Regex(if (it.code == "MOM") "\\bMOMs?\\b|\\bminutes\\b|\\bmeetings?\\b" else it.words, I) }
+
+    /** SQL patterns for a field type (the PC sends the regex; these are its usual words). */
+    private fun refLike(code: String): List<String> = when (code) {
+        "INV" -> listOf("%invoice%", "%INV%"); "PO" -> listOf("%PO %", "%PO-%", "%PO#%", "%Purchase Order%"); "PAY" -> listOf("%payment%")
+        "APR" -> listOf("%approv%"); "CTR" -> listOf("%contract%", "%agreement%", "%NDA%", "%addendum%", "%amendment%"); "NOT" -> listOf("%notice%", "%claim%")
+        "REV" -> listOf("%review%", "%comments%"); "TKT" -> listOf("%TICKET%", "%INC%", "%REQ%", "%RITM%", "%CHG%", "%CASE%"); "CHG" -> listOf("%change request%", "%CR-%", "%CR %")
+        "ACC" -> listOf("%access%"); "QT" -> listOf("%quot%", "%RFQ%", "%offer%", "%QTN%"); "ORD" -> listOf("%order%"); "REF" -> listOf("%Ref%", "%Reference%", "%-0%", "%-1%", "%-2%", "%#%")
+        "APP" -> listOf("%approval%", "%permit%", "%NOC%", "%licen%"); "CIR" -> listOf("%circular%", "%memo%"); "RFR" -> listOf("%referral%", "%referred%")
+        "RES" -> listOf("%result%"); "REQ" -> listOf("%request%", "%please%", "%kindly%"); "ASG" -> listOf("%assignment%", "%homework%", "%coursework%", "%submission%", "%essay%")
+        "PAR" -> listOf("%parent%", "%guardian%"); "EXM" -> listOf("%exam%", "%quiz%"); "Q" -> listOf("%question%"); "RFI" -> listOf("%RFI%"); "TQ" -> listOf("%TQ%", "%Technical Query%")
+        "NCR" -> listOf("%NCR%", "%conformance%"); "SUB" -> listOf("%submittal%", "%for review%", "%for approval%")
+        else -> listOf("%$code%")
+    }
+
     val TYPE_WORDS: List<Pair<String, Regex>> = listOf(
         "WIR" to "\\bWIRs?\\b|work inspections?", "MIR" to "\\bMIRs?\\b|material inspections?", "MAR" to "\\bMARs?\\b|material (approvals?|submittals?)",
         "MSS" to "\\bMSS\\b|method statements?", "SDS" to "\\bSDS\\b|\\bSHD\\b|shop ?drawings?", "SSM" to "\\bSSM\\b|\\bsamples?\\b", "TSR" to "\\bTSR\\b|test reports?",
@@ -326,16 +426,16 @@ object PhoneLog {
 
     fun wanted(q: String): Boolean {
         if (exactDoc.containsMatchIn(q)) return false
-        if (Regex("\\bsubmittal log\\b|\\b(WIR|MIR|MAR|RFI|EI|MOM|NCR|SOR) (log|register)\\b", I).containsMatchIn(q)) return true
-        return TYPE_WORDS.any { it.second.containsMatchIn(q) } && listWords.containsMatchIn(q)
+        if (Regex("\\bsubmittal log\\b|\\btracking log\\b|\\b(WIR|MIR|MAR|RFI|EI|MOM|NCR|SOR) (log|register)\\b", I).containsMatchIn(q)) return true
+        return typeWords().any { it.second.containsMatchIn(q) } && listWords.containsMatchIn(q)
     }
 
     fun fromWords(q: String, project: String): Options {
         val o = Options()
-        TYPE_WORDS.forEach { (code, rx) -> if (rx.containsMatchIn(q) && code !in o.types) o.types.add(code) }
+        typeWords().forEach { (code, rx) -> if (rx.containsMatchIn(q) && code !in o.types) o.types.add(code) }
         if ("RPT" in o.types && "DSR" in o.types && !Regex("\\b(weekly|monthly|progress)\\b", I).containsMatchIn(q)) o.types.remove("RPT")
         if (project.isNotBlank()) o.projects.add(project)
-        listOf("SLV", "RS5").forEach { if (Regex("\\b$it\\b", I).containsMatchIn(q) && it !in o.projects) o.projects.add(it) }
+        mentioned(q).forEach { if (o.projects.none { p -> p.equals(it, true) }) o.projects.add(it) }
         val pl = SubmittalPlace.of(q)
         o.tower = pl.tower; o.zone = pl.zone
         val lv = Regex("\\b(?:Level|L)\\s?(\\d{1,2})\\s*(?:to|-|–)\\s*(\\d{1,2})\\b", I).find(q)
@@ -358,9 +458,9 @@ object PhoneLog {
     }
 
     /** A follow-up (“only the overdue ones”, “now tower 2”, “level 5 to 8”, “this month”) applied to the last log; null when it is not one. */
-    fun follow(q: String, last: Options, projects: List<String> = listOf("SLV", "RS5")): Options? {
-        if (q.trim().split(Regex("\\s+")).size > 10 || TYPE_WORDS.any { it.second.containsMatchIn(q) }) return null
-        val pj = projects.filter { p -> Regex("(?<![\\p{L}\\p{N}])" + Regex.escape(p) + "(?![\\p{L}\\p{N}])", I).containsMatchIn(q) }
+    fun follow(q: String, last: Options, projects: List<String> = projectCodes()): Options? {
+        if (q.trim().split(Regex("\\s+")).size > 10 || typeWords().any { it.second.containsMatchIn(q) }) return null
+        val pj = (mentioned(q) + projects.filter { p -> Regex("(?<![\\p{L}\\p{N}])" + Regex.escape(p) + "(?![\\p{L}\\p{N}])", I).containsMatchIn(q) }).distinct()
         val allP = Regex("\\b(all|every|any) projects?\\b", I).containsMatchIn(q)
         if (pj.isNotEmpty() || allP) return last.copy().also { o -> o.projects = if (allP) ArrayList() else ArrayList(pj) }
         if (!Regex("\\b(only|now|just|instead|also|filter|overdue|closed|open|pending|tower|zone|level|floor|townhouses?|this (week|month)|last (week|month|\\d+ days)|code)\\b|\\bT\\d\\b|\\bL\\d{1,2}\\b", I).containsMatchIn(q)) return null
@@ -391,7 +491,7 @@ object PhoneLog {
         val dir = File(PcLink.dir(c), "fetched").apply { mkdirs() }
         val title = (if (r.opt.types.size in 1..4) r.opt.types.joinToString("-") else "Submittal") + " log " + (if (r.opt.projects.isEmpty()) "all projects" else r.opt.projects.joinToString("+"))
         val f = File(dir, "$title — ${SimpleDateFormat("dd MMM yyyy HHmm", Locale.UK).format(java.util.Date())}.xlsx")
-        val head = listOf("Project", "Via", "Type", "Document no.", "Rev", "Disc.", "Title", "Tower", "Zone", "Level", "Apt / TH", "Submitted", "Deadline", "Reply", "Replied by", "Code", "Status", "Why")
+        val head = listOf("Project", "Via", "Type", if (builtin) "Document no." else "Reference", "Rev", "Disc.", "Title", "Tower", "Zone", "Level", "Apt / TH", "Submitted", "Deadline", if (builtin) "$us reply" else "Reply", "Replied by", "Code", "Status", "Why")
         fun row(i: Item) = listOf(i.project, i.via, i.type, i.no, i.rev, i.disc, i.title, i.tower, i.zone, i.level, i.apt, d(i.submitted), dy(i.deadline), d(i.reply), i.by, i.code, i.status, i.why)
         val note = describe(r.opt) + " · ${r.items.size} item(s) from ${r.mails} emails on the phone · Designed by A.HAMROUNI"
         val sheets = ArrayList<Triple<String, List<String>?, List<List<String>>>>()
@@ -404,7 +504,7 @@ object PhoneLog {
         sum.add(listOf("") + sts + "Total")
         r.items.groupBy { "${it.project} · ${it.type}" }.toSortedMap().forEach { (k, l) -> sum.add(listOf(k) + sts.map { s -> l.count { it.status == s }.let { n -> if (n > 0) n.toString() else "" } } + l.size.toString()) }
         sheets.add(Triple("Summary", null, sum))
-        sheets.add(Triple("About", null, listOf(listOf("Made by", "Nova Enhance on the phone · 📋 Submittal log · Designed by A.HAMROUNI"), listOf("Your choices", describe(r.opt)),
+        sheets.add(Triple("About", null, listOf(listOf("Made by", "Nova Enhance on the phone · 📋 $logName · Designed by A.HAMROUNI"), listOf("Your choices", describe(r.opt)),
             listOf("Rules", "🧠 Nova Brain on your PC (📋 Submittal logs), received with the hourly update"))))
         writeBook(f, title, note, sheets)
         return f

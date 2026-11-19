@@ -1063,6 +1063,9 @@ class AskForm : NovaForm
         m.Items.Add(new ToolStripSeparator());
         Add("?", "❔ Unsorted");
         m.Items.Add(new ToolStripSeparator());
+        var found = new ToolStripMenuItem("＋ Projects found in your emails…  ✚ add · ⇢ merge · ✎ rename") { ForeColor = Th.Accent };
+        found.Click += (_, _) => Screens.ProjectsFound();
+        m.Items.Add(found);
         m.Items.Add("⚙ Sorting rules & progress…", null, (_, _) => Screens.Settings("📁 Email projects"));
         m.Show(projBtn, new Point(0, projBtn.Height));
     }

@@ -140,6 +140,7 @@ static class TestConnector
             "selfcheck" => "run the self-checks",
             "status" => "read Nova's status",
             "submittal" => $"run the 📋 Submittal log ({S(req, "types", "all types")} · {S(req, "project", "all projects")} · last {S(req, "days", "30")} days)",
+            "projects" => "read your 📁 projects list and the projects found in your emails",
             "brain_read" => "read the 🧠 Nova Brain rules" + (S(req, "section").Length > 0 ? $" (section {S(req, "section")})" : ""),
             "brain_update" => "PROPOSE changes to the 🧠 Nova Brain (you will see each change and approve it separately)",
             _ => tool
@@ -324,7 +325,7 @@ static class TestConnector
                 // 📋 The real log on the real emails — names hidden.
                 var o = new SubmittalLog.Options { From = DateTime.Today.AddDays(-Math.Clamp(I(a, "days", 30), 1, 800)) };
                 foreach (var t in S(a, "types").Split(new[] { ',', ' ', ';' }, StringSplitOptions.RemoveEmptyEntries)) o.Types.Add(t.ToUpperInvariant());
-                foreach (var t in S(a, "project").Split(new[] { ',', ' ', ';' }, StringSplitOptions.RemoveEmptyEntries)) o.Projects.Add(t.ToUpperInvariant());
+                foreach (var t in S(a, "project").Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) o.Projects.Add(Projects.Canon(t) is { Length: > 0 } pc ? pc : t.ToUpperInvariant());
                 o.Tower = S(a, "tower"); o.Status = S(a, "status");
                 var r = await Task.Run(() => SubmittalLog.Run(o));
                 var hide = new Activity.Hider();
@@ -333,7 +334,7 @@ static class TestConnector
                 var doc = S(a, "doc");
                 if (doc.Length > 0)
                 {
-                    var mza = Brain.ListOf("mza.match", "MZ ARCHITECTS, mz-architects.com");
+                    var mza = Brain.ListOf("mza.match", Tracker.Us);
                     foreach (var it in r.Items.Where(i => (i.No + " " + i.Title).Contains(doc, StringComparison.OrdinalIgnoreCase)).Take(10))
                     {
                         sb.AppendLine($"\n## {it.No} {it.Rev} · {it.Type} · {it.Status} {it.Code} · {hide.Hide(it.Why)}");
@@ -351,6 +352,24 @@ static class TestConnector
                 foreach (var g in r.Items.GroupBy(i => $"{i.Project} {i.Type} {i.Status}").OrderBy(g => g.Key)) sb.AppendLine($"  {g.Key}: {g.Count()}");
                 foreach (var i in r.Items.Take(Math.Clamp(I(a, "limit", 60), 1, 400)))
                     sb.AppendLine($"- {i.No} {i.Rev} · {i.Type} · {i.Status}{(i.Code.Length > 0 ? " · " + i.Code : "")} · {i.Via} · T:{i.Tower} Z:{i.Zone} L:{i.Level} A:{i.Apt} · sub {i.Submitted:dd MMM HH:mm} · due {i.Deadline:dd MMM} · reply {i.Reply:dd MMM HH:mm}\n  title: {hide.Hide(i.Title)}\n  why: {hide.Hide(i.Why)}{(i.Check.Length > 0 ? "\n  check: " + i.Check : "")}");
+                break;
+            }
+            case "projects":
+            {
+                // 📁 Every project Nova knows (codes, names, aliases, emails, folders), your field pack, and ＋ what it found in your emails.
+                var hide = new Activity.Hider();
+                sb.AppendLine($"🧩 Field: {Packs.Current.Name}{(Tracker.Builtin ? " · role " + Tracker.CurrentRole.Name : "")} · us = {Tracker.UsShort} ({Tracker.Us}) · log tracks: {Tracker.DefaultTypes}");
+                sb.AppendLine($"Email projects: {MailProjects.Sorted:N0} sorted of {MailProjects.Total:N0} · ❔ unsorted {MailProjects.CountOf("?"):N0} · GEN {MailProjects.CountOf(MailProjects.Gen):N0}");
+                foreach (var p in Projects.All().Where(p => p.Code.Length > 0).OrderBy(p => p.Order))
+                {
+                    var cfg = MailProjects.CfgOf(p.Code);
+                    sb.AppendLine($"- {p.Code} · {p.Name} · emails {MailProjects.CountOf(p.Code):N0} · also written as: {string.Join(", ", Projects.NamesOf(p).Where(n => n != p.Code && n != p.Name))} · {p.Folders.Count} folder(s) · {cfg.Folders.Count} Outlook folder(s) · {cfg.Senders.Count} sender rule(s)");
+                }
+                foreach (var k in MailProjects.Counts.Keys.Where(k => k.Length > 0 && k != MailProjects.Gen && Projects.Canon(k).Length == 0)) sb.AppendLine($"- {k} · (email project without a 📁 project) · emails {MailProjects.CountOf(k):N0}");
+                sb.AppendLine("
+＋ Found in your emails (not a project yet):");
+                foreach (var f in await Task.Run(() => ProjectFinder.Find(20)))
+                    sb.AppendLine($"- {f.Kind} “{f.Value}” · {f.Emails} emails · e.g. {hide.Hide(Cut(f.Sample, 120))}{(f.Target.Length > 0 ? " · looks like ⇢ " + f.Target : "")} · suggested code {f.Code}");
                 break;
             }
             case "brain_read":
@@ -407,7 +426,8 @@ static class TestConnector
             "{\"type\":\"object\",\"properties\":{\"days\":{\"type\":\"integer\",\"description\":\"1 to 30, default 1\"},\"feature\":{\"type\":\"string\",\"description\":\"e.g. email search, conversation, ai call\"},\"limit\":{\"type\":\"integer\"}}}"),
         ("errors", "Nova's error log for the last hours, plus the last crash and freeze notes (names hidden).", "{\"type\":\"object\",\"properties\":{\"hours\":{\"type\":\"integer\",\"description\":\"default 24\"}}}"),
         ("submittal", "Runs the 📋 Submittal log on the real emails (WIR, MIR, MAR, PQS, RFI, SDS · Thinkproject or plain Outlook · MZA reply on the same thread): numbers per status and the items with tower/zone/level, dates, code and why — names hidden.",
-            "{\"type\":\"object\",\"properties\":{\"types\":{\"type\":\"string\",\"description\":\"e.g. WIR,MIR (empty = all)\"},\"project\":{\"type\":\"string\",\"description\":\"e.g. SLV or RS5\"},\"days\":{\"type\":\"integer\",\"description\":\"submitted in the last N days, default 30\"},\"tower\":{\"type\":\"string\"},\"status\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"},\"doc\":{\"type\":\"string\",\"description\":\"one document number: every email of its thread\"}}}"),
+            "{\"type\":\"object\",\"properties\":{\"types\":{\"type\":\"string\",\"description\":\"e.g. WIR,MIR (empty = all)\"},\"project\":{\"type\":\"string\",\"description\":\"code, old code or name, e.g. SLV, RS5-C7, Nouran (comma for several)\"},\"days\":{\"type\":\"integer\",\"description\":\"submitted in the last N days, default 30\"},\"tower\":{\"type\":\"string\"},\"status\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"},\"doc\":{\"type\":\"string\",\"description\":\"one document number: every email of its thread\"}}}"),
+        ("projects", "Lists every project Nova knows (code, full name, old codes / aliases, emails, folders), the field pack (field, role, who is “us”, tracked types) and ＋ the projects found in the emails that are not in the list yet.", "{\"type\":\"object\",\"properties\":{}}"),
         ("brain_read", "Reads the 🧠 Nova Brain rules (all sections, or one).", "{\"type\":\"object\",\"properties\":{\"section\":{\"type\":\"string\"}}}"),
         ("brain_update", "Proposes changes to the 🧠 Nova Brain; the user sees each change on the PC and applies it with ✓ (a version is saved first).",
             "{\"type\":\"object\",\"properties\":{\"summary\":{\"type\":\"string\"},\"changes\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"op\":{\"type\":\"string\"},\"section\":{\"type\":\"string\"},\"id\":{\"type\":\"string\"},\"title\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"}}}}},\"required\":[\"changes\"]}"),

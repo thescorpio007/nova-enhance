@@ -82,6 +82,124 @@ static class Projects
         return best;
     }
 
+    // ------------------------------------------------------------------ 🏷 one project list everywhere (build 37)
+
+    /// <summary>Every way a project is written: its code, its other codes (old codes stay as aliases after a rename), its name and the extra names.</summary>
+    public static List<string> NamesOf(Project p)
+    {
+        var l = new List<string> { p.Code };
+        l.AddRange(p.Codes);
+        if (p.Name.Length > 2) l.Add(p.Name);
+        try { l.AddRange(MailProjects.CfgOf(p.Code).Names); } catch { }
+        return l.Select(x => (x ?? "").Trim()).Where(x => x.Length >= 2).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    /// <summary>The project code for anything written about it: “RS5” → RS5-C7, “Saadiyat” → Nouran, “Lucci Dubai” → Lucci. "" when none.</summary>
+    public static string Canon(string any)
+    {
+        any = (any ?? "").Trim();
+        if (any.Length == 0) return "";
+        var all = All();
+        foreach (var p in all) if (p.Code.Equals(any, StringComparison.OrdinalIgnoreCase)) return p.Code;
+        foreach (var p in all) if (p.Codes.Any(c => c.Trim().Equals(any, StringComparison.OrdinalIgnoreCase))) return p.Code;
+        foreach (var p in all) if (p.Name.Length > 2 && p.Name.Equals(any, StringComparison.OrdinalIgnoreCase)) return p.Code;
+        foreach (var p in all) { try { if (MailProjects.CfgOf(p.Code).Names.Any(n => n.Trim().Equals(any, StringComparison.OrdinalIgnoreCase))) return p.Code; } catch { } }
+        return "";
+    }
+
+    /// <summary>Your projects for every list (Submittal log, Search for email, intents, phone): code + name, in your order, then any other email project.</summary>
+    public static List<(string Code, string Name)> Known()
+    {
+        var l = All().Where(p => p.Code.Length > 0).OrderBy(p => p.Order).Select(p => (p.Code, p.Name.Equals(p.Code, StringComparison.OrdinalIgnoreCase) ? "" : p.Name)).ToList();
+        try
+        {
+            foreach (var k in MailProjects.Counts.OrderByDescending(x => x.Value).Select(x => x.Key))
+                if (k.Length > 0 && k != MailProjects.Gen && !l.Any(x => x.Code.Equals(k, StringComparison.OrdinalIgnoreCase)) && Canon(k) is var c && c.Length == 0) l.Add((k, ""));
+        }
+        catch { }
+        return l;
+    }
+
+    /// <summary>The projects named in a sentence, by code, old code or name (“only RS5”, “Nouran and Lucci”, “Khalifa City School”).</summary>
+    public static List<string> Mentioned(string q)
+    {
+        var res = new List<string>();
+        if (string.IsNullOrWhiteSpace(q)) return res;
+        foreach (var p in All().Where(p => p.Code.Length > 0))
+            foreach (var n in NamesOf(p))
+            {
+                bool caps = n.Length <= 6 && n.Any(char.IsLetter) && n == n.ToUpperInvariant();
+                // Short codes in capitals match in capitals only (“PR” the project, not “pr”); codes like RS5 match either way.
+                var opt = caps && !n.Any(char.IsDigit) && n.Length <= 3 ? RegexOptions.None : RegexOptions.IgnoreCase;
+                if (Regex.IsMatch(q, @"(?<![\p{L}\p{N}])" + Regex.Escape(n) + @"(?![\p{L}\p{N}])", opt)) { if (!res.Contains(p.Code)) res.Add(p.Code); break; }
+            }
+        return res;
+    }
+
+    /// <summary>✎ A new code (and name) for a project: the old code stays as an alias, and every sorted email, correction, rule and setting follows.</summary>
+    public static bool Rename(string oldCode, string newCode, string name = null)
+    {
+        oldCode = (oldCode ?? "").Trim(); newCode = (newCode ?? "").Trim();
+        if (oldCode.Length == 0 || newCode.Length == 0) return false;
+        var all = All();
+        var p = all.FirstOrDefault(x => x.Code.Equals(oldCode, StringComparison.OrdinalIgnoreCase));
+        if (p == null) return false;
+        if (!oldCode.Equals(newCode, StringComparison.OrdinalIgnoreCase) && all.Any(x => x != p && x.Code.Equals(newCode, StringComparison.OrdinalIgnoreCase))) return false;
+        var was = p.Code;
+        p.Code = newCode;
+        if (!was.Equals(newCode, StringComparison.Ordinal) && !p.Codes.Contains(was, StringComparer.OrdinalIgnoreCase)) p.Codes.Insert(0, was);
+        p.Codes.RemoveAll(c => c.Equals(newCode, StringComparison.OrdinalIgnoreCase) && !c.Equals(was, StringComparison.OrdinalIgnoreCase));
+        if (name != null && name.Trim().Length > 0) p.Name = name.Trim();
+        SaveAll(all);
+        if (was.Equals(newCode, StringComparison.Ordinal)) return true;
+        // Settings that hold a project code.
+        string Swap(string json) => Regex.Replace(json, "\"" + Regex.Escape(was) + "\"", "\"" + newCode.Replace("$", "$$") + "\"", RegexOptions.IgnoreCase);
+        foreach (var k in new[] { "win_readall_only", "win_proj_folders" }) { var v = Store.Str(k, ""); if (v.Length > 0) Store.Set(k, Swap(v)); }
+        if (Store.Str("win_ask_proj", "").Equals(was, StringComparison.OrdinalIgnoreCase)) Store.Set("win_ask_proj", newCode);
+        try
+        {
+            var rb = RuleBooks.Load("projects");
+            bool ch = false;
+            foreach (var r in rb.Rules)
+            {
+                if (r.Then.Equals(was, StringComparison.OrdinalIgnoreCase)) { r.Then = newCode; ch = true; }
+                for (int i = 0; i < r.Project.Count; i++) if (r.Project[i].Equals(was, StringComparison.OrdinalIgnoreCase)) { r.Project[i] = newCode; ch = true; }
+            }
+            if (ch) RuleBooks.Save("projects", rb);
+            var brief = RuleBooks.Load("brief");
+            ch = false;
+            for (int i = 0; i < brief.First.Count; i++) if (brief.First[i].Equals(was, StringComparison.OrdinalIgnoreCase)) { brief.First[i] = newCode; ch = true; }
+            foreach (var r in brief.Rules) for (int i = 0; i < r.Project.Count; i++) if (r.Project[i].Equals(was, StringComparison.OrdinalIgnoreCase)) { r.Project[i] = newCode; ch = true; }
+            if (ch) RuleBooks.Save("brief", brief);
+        }
+        catch (Exception e) { Log.Warn("projects", "rename rules: " + e.Message); }
+        MailProjects.RenameCode(was, newCode);
+        return true;
+    }
+
+    /// <summary>Build 37: the codes and names you gave (SAADIYAT → Nouran, PR → Lucci, LAR → LLAR, RS5 → RS5-C7) — once, only where those projects exist.</summary>
+    public static void MigrateNames()
+    {
+        if (Store.Int("win_proj_names_ver", 0) >= 37) return;
+        try
+        {
+            foreach (var (from, to, name) in new[]
+            {
+                ("SAADIYAT", "Nouran", "Saadiyat Marina Nouran Living"), ("PR", "Lucci", "Lucci Dubai"), ("LAR", "LLAR", "Lu'Luat Al Raha"), ("RS5", "RS5-C7", "RS5-C7"),
+                ("SAH", "SAH", "Said Al Hajeri Villa"), ("KCS", "KCS", "Khalifa City School"), ("SLV", "SLV", "Sea La Vie")
+            })
+            {
+                var p = All().FirstOrDefault(x => x.Code.Equals(from, StringComparison.OrdinalIgnoreCase));
+                if (p == null) continue;
+                // A name you already set yourself stays (except a name that was only the code).
+                var keepName = p.Name.Trim().Length > 0 && !p.Name.Trim().Equals(p.Code, StringComparison.OrdinalIgnoreCase) && from == to;
+                Rename(p.Code, to, keepName ? null : name);
+            }
+        }
+        catch (Exception e) { Log.Warn("projects", "names: " + e.Message); }
+        Store.SetInt("win_proj_names_ver", 37);
+    }
+
     /// <summary>All folders to read for a project: its own and the general reference folders.</summary>
     public static List<string> FoldersOf(Project p) => (p?.Folders ?? new()).Concat(General).Where(f => f.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 

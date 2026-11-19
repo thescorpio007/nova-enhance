@@ -59,7 +59,10 @@ static class Intent
             if (q.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length <= 5 && Has(q, key, def)) { r.Kind = Kind.Open; r.Window = win; r.Said = said; if (win == "log") r.Log = SubmittalLog.FromWords(q, project); return r; }
 
         // A follow-up on the last log: short, no new type, a filter word.
-        var projs = SubmittalLog.KnownProjects().Where(p => Regex.IsMatch(q, $@"(?<![\p{{L}}\p{{N}}]){Regex.Escape(p)}(?![\p{{L}}\p{{N}}])", RegexOptions.IgnoreCase)).ToList();
+        // Projects by code, old code or name (“only RS5” → RS5-C7, “Nouran”, “Khalifa City School”).
+        var projs = Projects.Mentioned(q);
+        foreach (var p in SubmittalLog.KnownProjects())
+            if (!projs.Contains(p, StringComparer.OrdinalIgnoreCase) && Regex.IsMatch(q, $@"(?<![\p{{L}}\p{{N}}]){Regex.Escape(p)}(?![\p{{L}}\p{{N}}])", RegexOptions.IgnoreCase)) projs.Add(p);
         bool allProj = Regex.IsMatch(q, @"\b(all|every|any) projects?\b", RegexOptions.IgnoreCase);
         if (lastLog != null && q.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length <= 10 && !SubmittalLog.TypeWords.Any(t => t.Rx.IsMatch(q))
             && (projs.Count > 0 || allProj || Regex.IsMatch(q, @"\b(only|now|just|instead|also|filter|export|excel|overdue|closed|open|pending|tower|zone|level|floor|townhouses?|this (week|month)|last (week|month|\d+ days)|since|from|between|discipline|code)\b|\bT\d\b|\bL\d{1,2}\b", RegexOptions.IgnoreCase)))

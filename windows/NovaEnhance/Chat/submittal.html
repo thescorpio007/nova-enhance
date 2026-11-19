@@ -24,16 +24,19 @@ td.tt{max-width:430px;overflow:hidden;text-overflow:ellipsis}.mono{font-family:C
 .chk{color:#FFB547;font-size:11px}
 #busy{color:#B9B0FF;font-size:12.5px}
 .foot{display:flex;gap:8px;align-items:center}
+.chip .nm{color:#8E96A8;margin-left:5px}
+.chip.new{border-style:dashed;border-color:#7C6CFF;color:#CFC8FF;background:transparent}
+.chip.plus{background:#7C6CFF;border-color:#7C6CFF;color:#fff;font-weight:700;padding:3px 12px}
 </style>
 </head>
 <body>
 <div id="wrap">
-  <div class="hd"><b>📋 Submittal log</b><span class="muted small">every submission found in Outlook · Thinkproject or direct email · checks if MZA replied on the same thread</span><span class="grow"></span><span id="brain" class="chip"></span></div>
+  <div class="hd"><b id="ttl">📋 Submittal log</b><span class="muted small" id="sub">every submission found in Outlook · Thinkproject or direct email · checks if MZA replied on the same thread</span><span class="grow"></span><span id="brain" class="chip"></span></div>
   <div class="f">
     <span class="lab">Project</span><span class="chips" id="cProj"></span>
     <span class="lab">Type</span><span class="chips" id="cType"></span>
     <span class="lab">Period (submitted)</span><span class="chips" id="cPer"><input type="date" class="d" id="from"> → <input type="date" class="d" id="to"></span>
-    <span class="lab">Where</span><span class="chips" id="cWhere"></span>
+    <span class="lab" id="lWhere">Where</span><span class="chips" id="cWhere"></span>
     <span class="lab">Discipline · status</span><span class="chips" id="cDisc"></span>
   </div>
   <div class="row"><input id="ask" placeholder="🧭 Ask: “only the overdue ones” · “now tower 2” · “level 5 to 8” · “EI this month” · “minutes of the progress meetings” · “export it”"><button class="primary" id="askBtn">Ask</button></div>
@@ -46,6 +49,7 @@ td.tt{max-width:430px;overflow:hidden;text-overflow:ellipsis}.mono{font-family:C
     <span class="muted small">click a row to open its email in Outlook · sheets: Log · Open &amp; overdue · Summary · Check · About</span><span class="grow"></span><span class="sign" id="sign"></span>
   </div>
 </div>
+<script src="projfound.js"></script>
 <script src="submittal.js"></script>
 </body>
 </html>

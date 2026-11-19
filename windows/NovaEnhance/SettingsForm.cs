@@ -295,6 +295,21 @@ class SettingsForm : NovaForm
         rr.Controls.Add(Th.L("Country", 10, Th.Text));
         var countryBox = Th.Box(false); countryBox.Width = 220; countryBox.Text = Persona.Country; countryBox.PlaceholderText = "optional";
         rr.Controls.Add(countryBox);
+        // 🧩 Field pack for the 📋 log: your role (construction), who is “us”. Your 🧠 Nova Brain still wins over all of this.
+        page.Add(Th.Section("🧩 My logs · what Nova tracks for me (Submittal / Tracking log)"));
+        Note("Construction: your role picks the types the log follows by default. Other fields: Nova tracks your field's items (invoices, tickets, contracts, approvals…). Rules you set in 🧠 Nova Brain always come first.");
+        var roleNow = Tracker.CurrentRole.Id;
+        var roleRow = page.Add(Th.Row());
+        var tip = new ToolTip();
+        foreach (var ro in Tracker.Roles) { var id = ro.Id; var rb = Th.Radio($"{ro.Icon} {ro.Name}", roleNow == id, () => roleNow = id); tip.SetToolTip(rb, ro.Hint + (ro.Types.Length > 0 ? " — " + ro.Types : "")); roleRow.Controls.Add(rb); }
+        var us = page.Add(Th.Row(false));
+        us.Controls.Add(Th.L("My company (names, email domains)", 10, Th.Text));
+        var usBox = Th.Box(false); usBox.Width = 360; usBox.Text = Store.Str("win_my_side", ""); usBox.PlaceholderText = Tracker.Us;
+        us.Controls.Add(usBox);
+        us.Controls.Add(Th.L("Short name", 10, Th.Text));
+        var usShort = Th.Box(false); usShort.Width = 90; usShort.Text = Store.Str("win_my_short", ""); usShort.PlaceholderText = Tracker.UsShort;
+        us.Controls.Add(usShort);
+        page.Add(Th.L($"Now: {Packs.Current.Icon} {Packs.Current.Name}{(Tracker.Builtin ? " · " + Tracker.CurrentRole.Name : "")} · tracks {Tracker.DefaultTypes} · “us” = {Tracker.UsShort}", 9.5f, Th.Muted));
         page.Add(Th.Section("Also good at · pick any"));
         var chosen = Modes.ChosenFields().ToHashSet();
         var row = page.Add(Th.Row());
@@ -321,6 +336,7 @@ class SettingsForm : NovaForm
             if (otherBox.Text.Trim().Length > 0) chosen.Add(otherBox.Text.Trim().Replace("|", " "));
             Store.ProfileFields = string.Join("|", chosen);
             Store.Set("win_field", fieldNow); Persona.Role = roleBox.Text; Persona.Country = countryBox.Text;
+            Store.Set("win_field_role", roleNow); Tracker.Us = usBox.Text; Tracker.UsShort = usShort.Text;
             Store.ProfileAbout = about.Text.Trim();
             Store.ProfileTerms = terms.Text.Trim();
             Store.SetBool("p_asked", true);
@@ -896,10 +912,15 @@ class SettingsForm : NovaForm
             var name = Prompt.Ask(this, "✎ Project", "Project name", p.Name); if (name == null) return;
             var code = Prompt.Ask(this, "✎ Project", "Project code", p.Code); if (code == null) return;
             var codes = Prompt.Ask(this, "✎ Project", "Codes in email subjects and file names (comma-separated)", string.Join(", ", p.Codes)); if (codes == null) return;
-            p.Name = name.Trim(); p.Code = code.Trim().ToUpperInvariant();
+            p.Name = name.Trim();
             p.Codes = codes.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
-            Projects.SaveAll(list); Draw("📁 Projects");
+            Projects.SaveAll(list);
+            // ✎ A new code: the old one stays as an alias and every sorted email, correction and rule follows.
+            var nc = code.Trim();
+            if (nc.Length >= 2 && nc != p.Code) Projects.Rename(p.Code, nc);
+            Draw("📁 Projects");
         }));
+        pr.Controls.Add(Th.B("＋ Projects found in your emails", () => Screens.ProjectsFound(), true));
         pr.Controls.Add(Th.B("➕ Add a folder", () =>
         {
             var p = Sel(); if (p == null) { MessageBox.Show(this, "Select a project first.", "Nova Enhance"); return; }

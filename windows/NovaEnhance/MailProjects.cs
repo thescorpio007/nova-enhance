@@ -112,6 +112,51 @@ static class MailProjects
     /// <summary>"↻ Sort everything again" (after you change codes, names, folders or rules). Your corrections are kept.</summary>
     public static void SortAgain() { redo = true; wake.Set(); }
 
+    /// <summary>✎ A project got a new code: its sorted emails, your corrections, its extra names / folders / senders and the restored corrections follow.</summary>
+    public static void RenameCode(string was, string now)
+    {
+        try
+        {
+            var cfg = Config;
+            var key = cfg.Keys.FirstOrDefault(k => k.Equals(was, StringComparison.OrdinalIgnoreCase));
+            if (key != null)
+            {
+                var c = cfg[key]; cfg.Remove(key);
+                if (cfg.TryGetValue(now, out var have)) { have.Names.AddRange(c.Names); have.Folders.AddRange(c.Folders); have.Senders.AddRange(c.Senders); }
+                else cfg[now] = c;
+                Config = cfg;
+            }
+            var pend = Store.Str("win_mproj_pending", "[]");
+            if (pend.Length > 2) Store.Set("win_mproj_pending", Regex.Replace(pend, "\"proj\"\\s*:\\s*\"" + Regex.Escape(was) + "\"", "\"proj\":\"" + now.Replace("$", "$$") + "\"", RegexOptions.IgnoreCase));
+            Ensure();
+            using var db = MailIndex.Open();
+            using (var bt = db.CreateCommand()) { bt.CommandText = "PRAGMA busy_timeout=30000;"; bt.ExecuteNonQuery(); }
+            using var cmd = db.CreateCommand();
+            cmd.CommandText = "UPDATE mproj SET proj=$n WHERE proj=$o COLLATE NOCASE; UPDATE mfix SET proj=$n WHERE proj=$o COLLATE NOCASE;";
+            cmd.Parameters.AddWithValue("$n", now); cmd.Parameters.AddWithValue("$o", was);
+            cmd.ExecuteNonQuery();
+            Reload(db);
+            Count(db);
+        }
+        catch (Exception e) { Log.Warn("email projects", "rename: " + e.Message); }
+    }
+
+    /// <summary>After a project, a code, a name or a folder is added: only the unsorted emails are read again (the sorted ones and the AI's answers stay).</summary>
+    public static void ResortUnsorted()
+    {
+        try
+        {
+            Ensure();
+            using var db = MailIndex.Open();
+            using (var bt = db.CreateCommand()) { bt.CommandText = "PRAGMA busy_timeout=30000;"; bt.ExecuteNonQuery(); }
+            using var cmd = db.CreateCommand();
+            cmd.CommandText = "DELETE FROM mproj WHERE proj=''";
+            cmd.ExecuteNonQuery();
+        }
+        catch (Exception e) { Log.Warn("email projects", "re-sort: " + e.Message); }
+        insertedSinceGraph = 1; wake.Set();
+    }
+
     // ------------------------------------------------------------------ your corrections
 
     public static void Move(IEnumerable<MailHit> hs, string code)
