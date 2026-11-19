@@ -74,6 +74,14 @@ static class SubmittalLog
     static Regex NumRx(IEnumerable<string> codes) => new(
         @"(?<![A-Za-z0-9])([A-Z][A-Z0-9]{1,5}(?:-[A-Z0-9]{1,6}){1,4}?-(" + string.Join("|", codes.Select(Regex.Escape)) + @")-(\d{2,6}))(?:[_\- ]*(?i:Rev|R)\.?\s?(\d{1,2}))?");
 
+    /// <summary>Your projects: SLV, RS5 and every email project Nova knows.</summary>
+    public static List<string> KnownProjects()
+    {
+        var l = new List<string> { "SLV", "RS5" };
+        try { foreach (var k in MailProjects.Counts.OrderByDescending(x => x.Value).Select(x => x.Key)) if (k.Length > 0 && !l.Contains(k, StringComparer.OrdinalIgnoreCase)) l.Add(k.ToUpperInvariant()); } catch { }
+        return l;
+    }
+
     /// <summary>The types switched on: [log.all = …] in the brain (else every built-in type).</summary>
     public static List<string> Enabled(JsonObject brain = null) =>
         Brain.ListOf("log.all", string.Join(", ", Types.Select(t => t.Code)), brain).Select(x => Alias.TryGetValue(x.ToUpperInvariant(), out var a) ? a : x.ToUpperInvariant()).Distinct().ToList();
@@ -292,13 +300,15 @@ static class SubmittalLog
             }
         }
         // Registers: a missing EI or meeting number in the sequence.
-        foreach (var g in groups.Values.Where(i => i.Num >= 0 && i.Type is "EI" or "MOM").GroupBy(i => i.Type + "|" + i.Project + "|" + i.Series))
+        // Only what was issued inside your period (an old EI mentioned in a recent reply does not open a false gap).
+        foreach (var g in groups.Values.Where(i => i.Num >= 0 && i.Type is "EI" or "MOM" && i.Sub != null && i.Submitted >= o.From && i.Submitted <= o.To
+                     && (o.Projects.Count == 0 || o.Projects.Any(p => p.Equals(i.Project, StringComparison.OrdinalIgnoreCase)))).GroupBy(i => i.Type + "|" + i.Project + "|" + i.Series))
         {
             var nums = g.Select(i => i.Num).Distinct().OrderBy(x => x).ToList();
             if (nums.Count < 2) continue;
             var miss = Enumerable.Range(nums[0], nums[^1] - nums[0] + 1).Except(nums).Take(20).ToList();
             var lab = g.First().Type == "EI" ? $"{g.First().Project} EI" : $"{g.First().Project} {g.First().Series}";
-            if (miss.Count > 0) res.Gaps.Add($"{lab}: no email found for no. {string.Join(", ", miss)} (between {nums[0]} and {nums[^1]})");
+            if (miss.Count > 0) res.Gaps.Add($"{lab}: no email found for no. {string.Join(", ", miss)} (issued in this period: {nums[0]} to {nums[^1]})");
         }
         foreach (var it in groups.Values)
         {

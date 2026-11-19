@@ -243,7 +243,9 @@ object PhoneLog {
             }
         }
         val gaps = ArrayList<String>()
-        for ((_, gl) in groups.values.filter { it.num >= 0 && it.type in setOf("EI", "MOM") }.groupBy { it.type + "|" + it.project + "|" + it.series }) {
+        // Only what was issued inside the period (an old EI mentioned in a recent reply does not open a false gap).
+        for ((_, gl) in groups.values.filter { it.num >= 0 && it.type in setOf("EI", "MOM") && it.sub != null && it.submitted!! >= o.from && it.submitted!! <= o.to &&
+                (o.projects.isEmpty() || o.projects.any { p -> p.equals(it.project, true) }) }.groupBy { it.type + "|" + it.project + "|" + it.series }) {
             val nums = gl.map { it.num }.distinct().sorted()
             if (nums.size < 2) continue
             val miss = (nums.first()..nums.last()).filter { it !in nums }.take(20)
@@ -356,8 +358,11 @@ object PhoneLog {
     }
 
     /** A follow-up (“only the overdue ones”, “now tower 2”, “level 5 to 8”, “this month”) applied to the last log; null when it is not one. */
-    fun follow(q: String, last: Options): Options? {
+    fun follow(q: String, last: Options, projects: List<String> = listOf("SLV", "RS5")): Options? {
         if (q.trim().split(Regex("\\s+")).size > 10 || TYPE_WORDS.any { it.second.containsMatchIn(q) }) return null
+        val pj = projects.filter { p -> Regex("(?<![\\p{L}\\p{N}])" + Regex.escape(p) + "(?![\\p{L}\\p{N}])", I).containsMatchIn(q) }
+        val allP = Regex("\\b(all|every|any) projects?\\b", I).containsMatchIn(q)
+        if (pj.isNotEmpty() || allP) return last.copy().also { o -> o.projects = if (allP) ArrayList() else ArrayList(pj) }
         if (!Regex("\\b(only|now|just|instead|also|filter|overdue|closed|open|pending|tower|zone|level|floor|townhouses?|this (week|month)|last (week|month|\\d+ days)|code)\\b|\\bT\\d\\b|\\bL\\d{1,2}\\b", I).containsMatchIn(q)) return null
         val o = last.copy(); val n = fromWords(q, "")
         if (n.tower.isNotEmpty()) o.tower = n.tower

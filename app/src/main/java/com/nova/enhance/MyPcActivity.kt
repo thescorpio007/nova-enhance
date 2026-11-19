@@ -570,7 +570,7 @@ class MyPcActivity : BaseActivity() {
     private fun route(q: String) {
         val t = q.trim(); if (t.isEmpty()) return
         val last = logOpt
-        val f = if (last != null && page == "log") PhoneLog.follow(t, last) else null
+        val f = if (last != null && page == "log") PhoneLog.follow(t, last, (listOf("SLV", "RS5") + (logRes?.items?.map { it.project } ?: emptyList())).filter { it.isNotBlank() }.distinct()) else null
         when {
             f != null -> { logSaid = "🧭 " + PhoneLog.describe(f); runLog(f) }
             PhoneLog.wanted(t) -> { val o = PhoneLog.fromWords(t, project); logSaid = "🧭 " + PhoneLog.describe(o); runLog(o) }
@@ -635,6 +635,12 @@ class MyPcActivity : BaseActivity() {
         for (st in listOf("Open", "Overdue", "Closed", "Code3/4")) pr.addView(Ui.chip(c, if (st == "Code3/4") "Code 3/4" else st, o.status == st) { o.status = if (o.status == st) "" else st; runLog(o) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
         body.addView(pv, Ui.lp(top = Ui.dp(c, 6)))
         val r = logRes
+        // Projects: the ones found in the log, plus SLV and RS5.
+        val projs = (listOf("SLV", "RS5") + (r?.items?.map { it.project } ?: emptyList()) + o.projects).filter { it.isNotBlank() }.distinct()
+        val (jv, jr) = Ui.chipRow(c)
+        jr.addView(Ui.chip(c, "All projects", o.projects.isEmpty()) { o.projects.clear(); runLog(o) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+        for (p in projs) jr.addView(Ui.chip(c, p, p in o.projects) { if (p in o.projects) o.projects.remove(p) else o.projects.add(p); runLog(o) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+        body.addView(jv, Ui.lp(top = Ui.dp(c, 6)))
         if (r != null) {
             val towers = r.items.map { it.tower }.filter { it.isNotEmpty() && !it.startsWith("TH") }.distinct().sorted()
             if (towers.isNotEmpty() || o.tower.isNotEmpty()) {

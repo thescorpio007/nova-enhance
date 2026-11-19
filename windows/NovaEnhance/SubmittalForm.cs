@@ -30,8 +30,7 @@ class SubmittalForm : WebPage
             case "init":
             {
                 var o = start ?? new SubmittalLog.Options();
-                var projects = new List<string>();
-                try { projects = MailProjects.Counts.OrderByDescending(x => x.Value).Select(x => x.Key).Where(k => k.Length > 0).Take(10).ToList(); } catch { }
+                var projects = SubmittalLog.KnownProjects().Take(14).ToList();
                 Post(new JsonObject
                 {
                     ["t"] = "setup", ["projects"] = A(projects), ["types"] = A(SubmittalLog.Enabled()),
@@ -116,7 +115,8 @@ class SubmittalForm : WebPage
                 ["t"] = "result", ["kpi"] = SubmittalLog.Kpis(r),
                 ["items"] = new JsonArray(r.Items.Take(3000).Select(i => (JsonNode)SubmittalLog.Json(i)).ToArray()),
                 ["towers"] = A(r.Items.Select(i => i.Tower).Where(x => x.Length > 0 && !x.StartsWith("TH")).Distinct().OrderBy(x => x)),
-                ["discs"] = A(r.Items.Select(i => i.Disc).Where(x => x.Length > 0).Distinct().OrderBy(x => x))
+                ["discs"] = A(r.Items.Select(i => i.Disc).Where(x => x.Length > 0).Distinct().OrderBy(x => x)),
+                ["projects"] = A(r.Items.Select(i => i.Project).Where(x => x.Length > 0).Distinct().OrderBy(x => x))
             };
         });
     }

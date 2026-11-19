@@ -102,7 +102,7 @@
     else if (m.t === "opt") { opt = m.opt; drawFilters(); if (m.said) $("busy").textContent = "🧭 " + m.said; }
     else if (m.t === "result") {
       $("busy").textContent = ""; items = m.items || [];
-      (m.towers || []).forEach(function (x) { towers[x] = 1; }); (m.discs || []).forEach(function (x) { discs[x] = 1; });
+      (m.towers || []).forEach(function (x) { towers[x] = 1; }); (m.discs || []).forEach(function (x) { discs[x] = 1; }); (m.projects || []).forEach(function (x) { if (allProjects.indexOf(x) < 0) allProjects.push(x); });
       show = ""; drawFilters(); drawKpi(m.kpi); drawTable();
       $("gaps").textContent = (m.kpi.gaps || []).length ? "⚠ Missing in the register: " + m.kpi.gaps.join(" · ") : "";
     }
