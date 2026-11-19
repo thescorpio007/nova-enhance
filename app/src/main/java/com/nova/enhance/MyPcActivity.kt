@@ -305,7 +305,7 @@ class MyPcActivity : BaseActivity() {
             val code = projs.getJSONObject(i).optString("code")
             row.addView(Ui.chip(c, "📁 $code", project == code) { project = if (project == code) "" else code; show(page) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
         }
-        body.addView(sv, Ui.lp(top = Ui.dp(c, 6)))
+        body.addView(stv, Ui.lp(top = Ui.dp(c, 6)))
     }
 
     // ------------------------------------------------------------------ 🔍 search
@@ -364,7 +364,7 @@ class MyPcActivity : BaseActivity() {
                 show("search")
             }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
         }
-        body.addView(sv, Ui.lp(top = Ui.dp(c, 6)))
+        body.addView(stv, Ui.lp(top = Ui.dp(c, 6)))
         val fdim = if (sortBy == "type" || sortBy == "proj") sortBy else "disc"
         val groups = hits.groupBy { dim(it, fdim) }.entries.sortedByDescending { it.value.size }
         if (groups.size >= 2) {
@@ -637,10 +637,10 @@ class MyPcActivity : BaseActivity() {
         }
         body.addView(pv, Ui.lp(top = Ui.dp(c, 6)))
         // Status: its own row, for every search.
-        val (sv, sr) = Ui.chipRow(c)
-        sr.addView(Ui.chip(c, "All statuses", o.status.isEmpty()) { o.status = ""; runLog(o) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
-        for (st in listOf("Open", "Overdue", "Closed", "Code3/4")) sr.addView(Ui.chip(c, if (st == "Code3/4") "Code 3/4" else st, o.status == st) { o.status = if (o.status == st) "" else st; runLog(o) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
-        body.addView(sv, Ui.lp(top = Ui.dp(c, 6)))
+        val (stv, stR) = Ui.chipRow(c)
+        stR.addView(Ui.chip(c, "All statuses", o.status.isEmpty()) { o.status = ""; runLog(o) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+        for (st in listOf("Open", "Overdue", "Closed", "Code3/4")) stR.addView(Ui.chip(c, if (st == "Code3/4") "Code 3/4" else st, o.status == st) { o.status = if (o.status == st) "" else st; runLog(o) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+        body.addView(stv, Ui.lp(top = Ui.dp(c, 6)))
         val r = logRes
         // Projects: your list from the PC (codes and names), then any other one found in the log · ＋ projects found in your emails.
         PhoneLog.prime(c)
