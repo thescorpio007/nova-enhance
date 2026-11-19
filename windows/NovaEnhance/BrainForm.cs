@@ -19,8 +19,14 @@ class BrainForm : WebPage
     {
         ["t"] = "state", ["exists"] = Brain.Exists, ["unlocked"] = Brain.Unlocked, ["pending"] = Brain.HasPending, ["version"] = Brain.Version,
         ["rules"] = Brain.RuleCount, ["lastBackup"] = Brain.LastBackupText, ["keepDaily"] = Brain.KeepDaily, ["keepMonthly"] = Brain.KeepMonthly,
-        ["drive"] = Backup.DriveCopy, ["brain"] = Brain.Unlocked ? Brain.Snapshot() : null, ["sign"] = Program.Sign
+        ["drive"] = Backup.DriveCopy, ["brain"] = Brain.Unlocked ? WithLog(Brain.Snapshot()) : null, ["sign"] = Program.Sign
     };
+
+    /// <summary>✎ My log settings shown as a read-only section (edited in the 📋 log, never saved into the brain file).</summary>
+    static JsonObject WithLog(JsonObject b)
+    {
+        try { var c = b.DeepClone().AsObject(); (c["sections"] as JsonArray)?.Add(LogPrefs.BrainSection()); return c; } catch { return b; }
+    }
 
     protected override void OnMessage(JsonObject m)
     {

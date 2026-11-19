@@ -58,7 +58,22 @@ static class SubmittalLog
     public record TypeDef(string Code, string Label, string Find, string Close, int Overdue, string Rx = "", string Like = "", string Done = "", string Words = "");
 
     /// <summary>The types of your field (🧩 Settings → About me): construction = the built-in ones below.</summary>
-    public static TypeDef[] Types => Tracker.Types;
+    public static TypeDef[] Types
+    {
+        get
+        {
+            // Your field's types + ✎ your own types (My log settings) — read again every few seconds, not for each item.
+            var now = DateTime.UtcNow;
+            if (typesCache == null || now - typesAt > TimeSpan.FromSeconds(3))
+            {
+                var b = Tracker.Types.ToList();
+                try { foreach (var t in LogPrefs.CustomTypes()) if (!b.Any(x => x.Code == t.Code)) b.Add(t); } catch { }
+                typesCache = b.ToArray(); typesAt = now;
+            }
+            return typesCache;
+        }
+    }
+    static TypeDef[] typesCache; static DateTime typesAt;
 
     public static readonly TypeDef[] Builtin =
     {
@@ -94,6 +109,14 @@ static class SubmittalLog
     /// <summary>Your projects (📁 Projects, with their names), then any other email project Nova knows.</summary>
     public static List<string> KnownProjects() => Projects.Known().Select(x => x.Code).ToList();
 
+    /// <summary>The project chips of the log: your order (✎ Edit), hidden ones left out.</summary>
+    public static List<(string Code, string Name)> LogProjects(bool withHidden = false)
+    {
+        var hide = LogPrefs.HiddenProjects; var order = LogPrefs.ProjectOrder;
+        return Projects.Known().Where(p => withHidden || !hide.Contains(p.Code))
+            .OrderBy(p => order.FindIndex(x => x.Equals(p.Code, StringComparison.OrdinalIgnoreCase)) is var i && i >= 0 ? i : 1000).ToList();
+    }
+
     /// <summary>Every way a project is written (code, old codes, names) → its code. For document numbers: “RS5-C7-ACC-…” → RS5-C7.</summary>
     static Dictionary<string, string> Aliases()
     {
@@ -106,7 +129,7 @@ static class SubmittalLog
 
     /// <summary>The types switched on: [log.all = …] in the brain (else every built-in type).</summary>
     public static List<string> Enabled(JsonObject brain = null) =>
-        Brain.ListOf("log.all", Tracker.DefaultTypes, brain).Where(x => Def(Alias.TryGetValue(x.ToUpperInvariant(), out var a0) ? a0 : x.ToUpperInvariant()) != null).Select(x => Alias.TryGetValue(x.ToUpperInvariant(), out var a) ? a : x.ToUpperInvariant()).Distinct().ToList();
+        Brain.ListOf("log.all", Tracker.DefaultTypes, brain).Concat(LogPrefs.CustomTypes().Select(t => t.Code)).Where(x => !LogPrefs.HiddenTypes.Contains(x)).Where(x => Def(Alias.TryGetValue(x.ToUpperInvariant(), out var a0) ? a0 : x.ToUpperInvariant()) != null).Select(x => Alias.TryGetValue(x.ToUpperInvariant(), out var a) ? a : x.ToUpperInvariant()).Distinct().ToList();
 
     static string Norm(string subj) => Regex.Replace(Strip.Replace(subj ?? "", "").ToLowerInvariant(), @"[^\p{L}\p{N}]+", " ").Trim();
 
@@ -352,6 +375,7 @@ static class SubmittalLog
                 if (it.RevNum < top && it.Status is "Open" or "Overdue" or "Reviewing") { it.Status = "Superseded"; it.Why += " · a later revision exists"; }
             }
         }
+        var hiddenP = LogPrefs.HiddenProjects; var hiddenD = LogPrefs.HiddenDiscs; var discGroups = LogPrefs.Groups();
         // Registers: a missing EI or meeting number in the sequence.
         // Only what was issued inside your period (an old EI mentioned in a recent reply does not open a false gap).
         foreach (var g in groups.Values.Where(i => i.Num >= 0 && i.Type is "EI" or "MOM" && i.Sub != null && i.Submitted >= o.From && i.Submitted <= o.To
@@ -374,14 +398,17 @@ static class SubmittalLog
             var when = it.Submitted ?? it.Reply;
             if (when == null || when < o.From || when > o.To) continue;
             if (o.Projects.Count > 0 && !o.Projects.Any(p => p.Equals(it.Project, StringComparison.OrdinalIgnoreCase))) continue;
+            if (o.Projects.Count == 0 && hiddenP.Contains(it.Project)) continue;          // ✎ hidden projects are out of “All”
+            if (it.Disc.Length > 0 && hiddenD.Contains(it.Disc) && !LogPrefs.DiscFits(o.Discipline, it.Disc, discGroups)) continue;
             if (o.Tower.Length > 0 && !it.Tower.Equals(o.Tower, StringComparison.OrdinalIgnoreCase) && !(o.Tower == "TH" && it.Tower.StartsWith("TH"))) continue;
             if (o.Zone.Length > 0 && !it.Zone.StartsWith(o.Zone, StringComparison.OrdinalIgnoreCase)) continue;
             if ((o.LevelFrom > -99 || o.LevelTo < 999) && (it.LevelNum == null || it.LevelNum < o.LevelFrom || it.LevelNum > o.LevelTo)) continue;
             res.Discs[it.Disc] = res.Discs.GetValueOrDefault(it.Disc) + 1;
-            if (o.Discipline.Length > 0 && !it.Disc.Equals(o.Discipline, StringComparison.OrdinalIgnoreCase)) continue;
-            foreach (var st in new[] { it.Status is "Open" or "Reviewing" or "Replied" or "Draft" or "Overdue" ? "Open" : "", it.Status, it.Code is "Code 3" or "Code 4" ? "Code3/4" : "" })
+            if (o.Discipline.Length > 0 && !LogPrefs.DiscFits(o.Discipline, it.Disc, discGroups)) continue;
+            foreach (var st in new[] { it.Status is "Open" or "Reviewing" or "Replied" or "Draft" or "Overdue" ? "Open" : "", it.Status, it.Code is "Code 3" or "Code 4" ? "Code3/4" : "", it.Code })
                 if (st.Length > 0) res.Statuses[st] = res.Statuses.GetValueOrDefault(st) + 1;
             if (o.Status.Length > 0 && !(o.Status == "Code3/4" ? it.Code is "Code 3" or "Code 4"
+                : o.Status.StartsWith("Code ") ? it.Code.Equals(o.Status, StringComparison.OrdinalIgnoreCase)
                 : o.Status == "Open" ? it.Status is "Open" or "Reviewing" or "Replied" or "Draft" or "Overdue"
                 : it.Status.Equals(o.Status, StringComparison.OrdinalIgnoreCase))) continue;
             res.Items.Add(it);
@@ -492,7 +519,7 @@ static class SubmittalLog
         string T = "", Z = "", L = "", A = ""; int? n = null;
         var x = Regex.Match(s, @"\b(?:Tower|T)\s?[-_]?\s?(\d)\b", RegexOptions.IgnoreCase);
         if (x.Success) T = "T" + x.Groups[1].Value;
-        else { x = Regex.Match(s, @"\bTH\s?([\d ,&]*\d)"); if (x.Success) T = "TH " + Regex.Replace(x.Groups[1].Value, @"\s", ""); }
+        else { x = Regex.Match(s, @"\bTH\s?[-_]?\s?(\d[\d ,&\-]*\d|\d)"); if (x.Success) T = "TH " + Regex.Replace(x.Groups[1].Value, @"\s", ""); }     // TH 17 · TH-30 · TH-25,26,27
         x = Regex.Match(s, @"\b(?:Zone|Z)\s?[-_]?\s?0?(\d)(?:\s?&\s?(\d))?\b", RegexOptions.IgnoreCase);
         if (x.Success) Z = "Z" + x.Groups[1].Value + (x.Groups[2].Success ? "–" + x.Groups[2].Value : "");
         var y = Regex.Match(s, @"\b(?:Level|L)\s?[-_]?\s?(\d{1,2})\s*(?:to|-|–)\s*(\d{1,2})\b", RegexOptions.IgnoreCase);

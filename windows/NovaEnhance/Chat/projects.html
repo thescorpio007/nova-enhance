@@ -26,6 +26,7 @@ td input{width:100%;padding:3px 6px}
   </div>
   <div class="card" id="pfHost"></div>
 </div>
+<script src="colresize.js"></script>
 <script src="projfound.js"></script>
 <script>
 (function () {
@@ -47,6 +48,7 @@ td input{width:100%;padding:3px 6px}
       var td5 = el("td"); td5.appendChild(b); r.appendChild(td5);
       t.appendChild(r);
     });
+    ColResize.attach(t, "projects");
   }
   if (W) W.addEventListener("message", function (ev) {
     var m = ev.data;

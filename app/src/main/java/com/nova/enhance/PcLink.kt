@@ -510,6 +510,9 @@ object PcLink {
     /** 🧩 The field pack from the PC: what the log tracks, who is “us” (null before the first update). */
     fun track(c: Context): JSONObject? = brain(c)?.optJSONObject("track")
 
+    /** ✎ My log settings from the PC (hidden projects / types / disciplines, your types, discipline groups, periods, status chips). */
+    fun logPrefs(c: Context): JSONObject? = brain(c)?.optJSONObject("logprefs")
+
     /** 🧠 A [name = value] setting of the Nova Brain on the PC (e.g. overdue.WIR), or [def]. */
     fun setting(c: Context, name: String, def: String): String = brain(c)?.optJSONObject("settings")?.optString(name.lowercase())?.takeIf { it.isNotBlank() } ?: def
     fun settingList(c: Context, name: String, def: String): List<String> = setting(c, name, def).split(',', ';', '|').map { it.trim() }.filter { it.isNotEmpty() }

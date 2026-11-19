@@ -248,6 +248,7 @@ class FileFinderForm : NovaForm
         };
         foreach (var (h, w) in new[] { ("Drawing no. / file", 300), ("Title", 300), ("Rev", 50), ("Status", 90), ("Document", 150), ("Discipline", 110), ("Level", 90), ("Type", 70), ("Project", 70), ("Modified", 100), ("Size", 70), ("Folder", 420) })
             lv.Columns.Add(h, w);
+        GridCols.Remember(lv, "filefinder");
         lv.DoubleClick += (_, _) => OpenSel();
         int sortCol = -1; bool desc = false;
         lv.ColumnClick += (_, e) =>

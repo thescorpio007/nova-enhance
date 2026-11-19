@@ -356,6 +356,7 @@ class FolderSearchForm : NovaForm
             BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.None, Font = Th.F(9.5f), OwnerDraw = true, HeaderStyle = ColumnHeaderStyle.Clickable
         };
         foreach (var (n, w) in cols) lv.Columns.Add(n, w);
+        GridCols.Remember(lv, "folder_" + System.Text.RegularExpressions.Regex.Replace(cols[0].Name, @"[^A-Za-z0-9]", "") + cols.Length);
         lv.DrawColumnHeader += (_, e) =>
         {
             using var b = new SolidBrush(Color.FromArgb(0x15, 0x19, 0x22));

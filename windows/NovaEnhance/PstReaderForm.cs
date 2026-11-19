@@ -70,6 +70,7 @@ class PstReaderForm : NovaForm
         var split2 = new SplitContainer { Dock = DockStyle.Fill, BackColor = Th.Bg };
         list = new ListView { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, HideSelection = false, VirtualMode = true, BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.None, Font = Th.F(9.5f) };
         list.Columns.Add("Date", 130); list.Columns.Add("From", 170); list.Columns.Add("Subject", 360); list.Columns.Add("📎", 30); list.Columns.Add("Folder", 160);
+        GridCols.Remember(list, "pst");
         list.RetrieveVirtualItem += (_, e) =>
         {
             var r = e.ItemIndex < rows.Count ? rows[e.ItemIndex] : null;

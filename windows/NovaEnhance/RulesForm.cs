@@ -170,6 +170,7 @@ class RulesForm : NovaForm
         br.Controls.Add(useBtn);
         lv = st.Add(new ListView { View = View.Details, CheckBoxes = true, FullRowSelect = true, HideSelection = false, MultiSelect = false, Height = 300, BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.None, Font = Th.F(9.5f) }, true);
         lv.Columns.Add("On · #", 60); lv.Columns.Add("When (all true)", 520); lv.Columns.Add("Except when", 140); lv.Columns.Add("Then", 120); lv.Columns.Add("Why", 220); lv.Columns.Add("Matches", 80);
+        GridCols.Remember(lv, "rules");
         lv.DoubleClick += (_, _) => EditRule(Sel());
         lv.ItemChecked += (_, e) => { if (filling || e.Item.Index >= book.Rules.Count) return; book.Rules[e.Item.Index].On = e.Item.Checked; Changed(); };
         lv.Click += (_, _) => { var i = Sel(); if (i >= 0 && report != null && i < report.Caught.Length) ShowCaught(i, false); };

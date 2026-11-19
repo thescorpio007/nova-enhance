@@ -26,6 +26,10 @@ td.tt{max-width:430px;overflow:hidden;text-overflow:ellipsis}.mono{font-family:C
 .foot{display:flex;gap:8px;align-items:center}
 .chip .nm{color:#8E96A8;margin-left:5px}
 .chip.new{border-style:dashed;border-color:#7C6CFF;color:#CFC8FF;background:transparent}
+.chip.edit{background:transparent;border-style:dashed;color:#B9B0FF}
+.edPop{position:fixed;left:50%;top:70px;transform:translateX(-50%);width:820px;max-width:calc(100vw - 40px);background:#151925;border:1px solid #3A3F55;border-radius:14px;padding:14px 16px;box-shadow:0 16px 50px rgba(0,0,0,.6);z-index:60;display:none}
+#colsPop{position:absolute;bottom:52px;left:340px;background:#151925;border:1px solid #3A3F55;border-radius:12px;padding:10px 12px;display:none;z-index:40;columns:3;column-gap:18px;width:520px}
+#colsPop label{display:block;padding:2px 0}#colsPop button{margin-top:6px}
 .chip.plus{background:#7C6CFF;border-color:#7C6CFF;color:#fff;font-weight:700;padding:3px 12px}
 </style>
 </head>
@@ -46,10 +50,11 @@ td.tt{max-width:430px;overflow:hidden;text-overflow:ellipsis}.mono{font-family:C
   <div id="busy"></div>
   <div id="tbl"></div>
   <div class="foot">
-    <button class="primary" id="xl">⬇ Excel log</button><button id="fold">📂 Open the folder</button><button id="upd">↻ Update</button>
-    <span class="muted small">click a row to open its email in Outlook · sheets: Log · Open &amp; overdue · Summary · Check · About</span><span class="grow"></span><span class="sign" id="sign"></span>
+    <button class="primary" id="xl">⬇ Excel log</button><button id="fold">📂 Open the folder</button><button id="upd">↻ Update</button><button id="colsBtn">▦ Columns</button><div id="colsPop"></div>
+    <span class="muted small">click a row to open its email in Outlook · drag a column edge to widen it, double-click to fit · sheets: Log · Open &amp; overdue · Summary · Check · About</span><span class="grow"></span><span class="sign" id="sign"></span>
   </div>
 </div>
+<script src="colresize.js"></script>
 <script src="projfound.js"></script>
 <script src="submittal.js"></script>
 </body>

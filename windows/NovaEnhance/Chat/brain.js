@@ -69,7 +69,8 @@
     h.appendChild(el("b", null, (s.icon ? s.icon + " " : "") + s.name)).style.fontSize = "16px";
     h.appendChild(el("span", "muted small", "used for: " + (s.tags || []).join(" · ")));
     h.appendChild(el("span", "grow"));
-    if (!editing) h.appendChild(btn("✎ Edit section", false, function () { editing = true; drawMid(); }));
+    if (s.readonly) { editing = false; h.appendChild(el("span", "muted small", "read-only · change it with ✎ Edit in the 📋 Submittal log")); }
+    else if (!editing) h.appendChild(btn("✎ Edit section", false, function () { editing = true; drawMid(); }));
     box.appendChild(h);
     var card = el("div", "card2"); card.style.marginTop = "10px";
     var rows = [];
@@ -124,7 +125,7 @@
       t.appendChild(tr);
       if (diffOf && diffOf.v === v.v) { var dr = el("tr"); var dc = el("td"); dc.colSpan = 5; dc.appendChild(diffBox(diffOf.diff)); dr.appendChild(dc); t.appendChild(dr); }
     });
-    box.appendChild(t);
+    box.appendChild(t); if (window.ColResize) ColResize.attach(t, "brain.versions");
     // Backups
     var h2 = el("div", "row"); h2.style.marginTop = "18px"; h2.appendChild(el("b", null, "💾 Brain backups")).style.fontSize = "16px"; h2.appendChild(el("span", "muted small", "encrypted · each one opened and checked")); box.appendChild(h2);
     var c = el("div", "card2"); c.style.marginTop = "8px";
@@ -149,7 +150,7 @@
       var td = el("td"); if (b.ok) td.appendChild(btn("↩ Restore", false, function () { if (confirm("Restore this backup? Your current brain is kept first as “before restore”.")) post({ t: "restoreBackup", file: b.file }); })); tr.appendChild(td);
       t2.appendChild(tr);
     });
-    box.appendChild(t2);
+    box.appendChild(t2); if (window.ColResize) ColResize.attach(t2, "brain.backups");
     var r3 = el("div", "row"); r3.style.marginTop = "10px";
     r3.appendChild(btn("💾 Back up the brain now", true, function () { post({ t: "backupNow" }); }));
     r3.appendChild(btn("📥 Restore from a file…", false, function () { post({ t: "restoreFile" }); }));
@@ -212,7 +213,7 @@
     if (m.rows.length) {
       var t = el("table"); var hr = el("tr"); ["Document", "Now", "With the new rule"].forEach(function (x) { hr.appendChild(el("th", null, x)); }); t.appendChild(hr);
       m.rows.forEach(function (r) { var tr = el("tr"); tr.title = r.why; tr.appendChild(el("td", "id", r.no)); tr.appendChild(el("td", null, r.now)); tr.appendChild(el("td", null, r.then)); t.appendChild(tr); });
-      box.appendChild(t);
+      box.appendChild(t); if (window.ColResize) ColResize.attach(t, "brain.test");
     }
   }
 

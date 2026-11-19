@@ -407,7 +407,8 @@ static class PhoneLink
         try { o["prompts"] = JsonNode.Parse(JsonSerializer.Serialize(NovaEnhance.Prompts.All(), JO)); } catch { }
         try { o["work"] = JsonNode.Parse(JsonSerializer.Serialize(Work.All(), JO)); } catch { }
         try { o["guide"] = NovaEnhance.Brain.ForPhone(); o["settings"] = NovaEnhance.Brain.AllSettings(); } catch { }
-        try { o["track"] = Tracker.ForPhone(); } catch { }   // 🧩 the field pack: what the log tracks, who is “us”   // 🧠 the same Nova Brain rules on the phone
+        try { o["track"] = Tracker.ForPhone(); } catch { }
+        try { o["logprefs"] = LogPrefs.Get(); } catch { }   // ✎ My log settings (hidden projects / types, your types, discipline groups, periods)   // 🧩 the field pack: what the log tracks, who is “us”   // 🧠 the same Nova Brain rules on the phone
         var text = o.ToJsonString();
         var h = Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes(text)));
         if (h == s.BrainHash) return;

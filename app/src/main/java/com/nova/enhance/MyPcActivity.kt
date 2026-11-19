@@ -639,12 +639,34 @@ class MyPcActivity : BaseActivity() {
         // Status: its own row, for every search.
         val (stv, stR) = Ui.chipRow(c)
         stR.addView(Ui.chip(c, "All statuses", o.status.isEmpty()) { o.status = ""; runLog(o) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
-        for (st in listOf("Open", "Overdue", "Closed", "Code3/4")) stR.addView(Ui.chip(c, if (st == "Code3/4") "Code 3/4" else st, o.status == st) { o.status = if (o.status == st) "" else st; runLog(o) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+        for (st in PhoneLog.statuses) stR.addView(Ui.chip(c, if (st == "Code3/4") "Code 3/4" else st, o.status == st) { o.status = if (o.status == st) "" else st; runLog(o) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
         body.addView(stv, Ui.lp(top = Ui.dp(c, 6)))
+        // ✎ Your periods and discipline groups (My log settings on the PC)
+        if (PhoneLog.periods.isNotEmpty()) {
+            val (pv2, pr2) = Ui.chipRow(c)
+            val df = SimpleDateFormat("yyyy-MM-dd", Locale.UK)
+            for ((n, f, t) in PhoneLog.periods) {
+                val a = runCatching { df.parse(f)!!.time }.getOrNull() ?: continue
+                val b = runCatching { df.parse(t)!!.time + 86_399_000L }.getOrNull() ?: (System.currentTimeMillis() + 86_400_000L)
+                pr2.addView(Ui.chip(c, n, Math.abs(o.from - a) < 86_400_000L) { o.from = a; o.to = b; runLog(o) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+            }
+            body.addView(pv2, Ui.lp(top = Ui.dp(c, 6)))
+        }
+        val discs = logRes?.items?.map { it.disc }?.filter { it.isNotEmpty() && it.uppercase() !in PhoneLog.hiddenDiscs }?.groupingBy { it }?.eachCount() ?: emptyMap()
+        if (discs.isNotEmpty() || o.disc.isNotEmpty()) {
+            val (dv, dr) = Ui.chipRow(c)
+            dr.addView(Ui.chip(c, "All disciplines", o.disc.isEmpty()) { o.disc = ""; runLog(o) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+            for ((g, codes) in PhoneLog.discGroups) {
+                val n = discs.filterKeys { k -> codes.any { it.equals(k, true) } }.values.sum()
+                dr.addView(Ui.chip(c, "▣ $g · $n", o.disc == g) { o.disc = if (o.disc == g) "" else g; runLog(o) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+            }
+            for ((d, n) in discs.toSortedMap()) dr.addView(Ui.chip(c, "$d · $n", o.disc == d) { o.disc = if (o.disc == d) "" else d; runLog(o) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+            body.addView(dv, Ui.lp(top = Ui.dp(c, 6)))
+        }
         val r = logRes
         // Projects: your list from the PC (codes and names), then any other one found in the log · ＋ projects found in your emails.
         PhoneLog.prime(c)
-        val projs = (PhoneLog.projectCodes() + (r?.items?.map { it.project } ?: emptyList()) + o.projects).filter { it.isNotBlank() }.distinct()
+        val projs = (PhoneLog.projectCodes() + (r?.items?.map { it.project } ?: emptyList()) + o.projects).filter { it.isNotBlank() && (it.uppercase() !in PhoneLog.hiddenProjects || it in o.projects) }.distinct()
         val (jv, jr) = Ui.chipRow(c)
         jr.addView(Ui.chip(c, "All projects", o.projects.isEmpty()) { o.projects.clear(); runLog(o) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
         for (p in projs) {

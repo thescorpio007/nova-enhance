@@ -681,6 +681,7 @@ class SettingsForm : NovaForm
         var fl = new ListView { View = View.Details, CheckBoxes = true, FullRowSelect = true, HeaderStyle = ColumnHeaderStyle.Nonclickable, Height = 360, BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.None, Font = Th.F(9.5f), ShowGroups = true, Width = Math.Max(700, page.ClientSize.Width - 70) };
         box.Controls.Add(fl);
         fl.Columns.Add("Folder", 520); fl.Columns.Add("Indexed", 110, HorizontalAlignment.Right); fl.Columns.Add("In Outlook", 110, HorizontalAlignment.Right);
+        GridCols.Remember(fl, "mailfolders");
         var filling = true;
         foreach (var g in folders.Where(f => f.Total > 0 || f.Indexed > 0).GroupBy(f => f.StoreName))
         {
@@ -837,6 +838,7 @@ class SettingsForm : NovaForm
             foreach (var h in new[] { "Folder", "Type", "Project name ✎", "Code ✎", "Email codes ✎", "Emails", "Files", "PDF", "Word/Excel", "CAD", "Size", "Last change", "Codes in file names", "Main subfolders" })
                 g.Columns.Add(h, h);
             foreach (DataGridViewColumn c in g.Columns) c.ReadOnly = !(c.Index == 0 || c.HeaderText.EndsWith("✎"));
+            GridCols.Remember(g, "projectscan");
             foreach (var p in lastScan)
             {
                 var kind = p.Kind switch { "project" => "Project", "general" => "General reference", "network" => "🌐 Network (not scanned)", "locked" => "🔒 never read", _ => "Not a project" };
@@ -1850,6 +1852,7 @@ class SettingsForm : NovaForm
         else sum.Text = "Nothing recorded yet for this period — use Nova normally, then come back.";
         var lv = page.Add(new ListView { View = View.Details, FullRowSelect = true, HideSelection = false, MultiSelect = false, Height = 260, BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.None, Font = Th.F(9.5f) }, true);
         lv.Columns.Add("Time", 140); lv.Columns.Add("Feature", 190); lv.Columns.Add("Task", 430); lv.Columns.Add("Time taken", 90); lv.Columns.Add("Result", 260);
+        GridCols.Remember(lv, "activity");
         var list = items.OrderByDescending(o => o["start"]?.ToString()).Take(800).ToList();
         foreach (var o in list)
         {
@@ -1966,6 +1969,7 @@ class SettingsForm : NovaForm
         var list = shown.Take(500).ToList();
         var lv = page.Add(new ListView { View = View.Details, FullRowSelect = true, HideSelection = false, MultiSelect = false, Height = 230, BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.None, Font = Th.F(9.5f) }, true);
         lv.Columns.Add("Time", 120); lv.Columns.Add("Level", 60); lv.Columns.Add("Where", 170); lv.Columns.Add("What happened", 520);
+        GridCols.Remember(lv, "errors");
         void Fill(string f)
         {
             lv.BeginUpdate(); lv.Items.Clear();

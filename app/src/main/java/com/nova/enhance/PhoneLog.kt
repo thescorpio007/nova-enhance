@@ -60,6 +60,14 @@ object PhoneLog {
     @Volatile var usMatch = "MZ ARCHITECTS, mz-architects.com"; private set
     @Volatile var logName = "Submittal log"; private set
     @Volatile private var defaults = ""
+    @Volatile var hiddenProjects: Set<String> = emptySet(); private set
+    @Volatile private var hiddenTypes: Set<String> = emptySet()
+    @Volatile var hiddenDiscs: Set<String> = emptySet(); private set
+    @Volatile var discGroups: Map<String, Set<String>> = emptyMap(); private set
+    @Volatile var statuses: List<String> = listOf("Open", "Overdue", "Closed", "Code3/4"); private set
+    @Volatile var periods: List<Triple<String, String, String>> = emptyList(); private set
+    private fun arr(o: org.json.JSONObject?, k: String): List<String> = o?.optJSONArray(k)?.let { a -> (0 until a.length()).map { a.optString(it) }.filter { it.isNotBlank() } } ?: emptyList()
+    fun discFits(choice: String, disc: String) = choice.equals(disc, true) || (discGroups[choice]?.any { it.equals(disc, true) } == true)
 
     /** Reads the PC's field pack (Settings → About me) and your projects with their names and old codes. */
     fun prime(c: Context) {
@@ -85,6 +93,29 @@ object PhoneLog {
             }
         }?.takeIf { it.isNotEmpty() } ?: TYPES
         if (!builtin && defsNow === TYPES) builtin = true
+        // ✎ My log settings (the same as the PC)
+        val lp = PcLink.logPrefs(c)
+        hiddenProjects = arr(lp, "hiddenProjects").map { it.uppercase() }.toSet()
+        hiddenTypes = arr(lp, "hiddenTypes").map { it.uppercase() }.toSet()
+        hiddenDiscs = arr(lp, "hiddenDiscs").map { it.uppercase() }.toSet()
+        statuses = arr(lp, "statuses").ifEmpty { listOf("Open", "Overdue", "Closed", "Code3/4") }
+        discGroups = lp?.optJSONArray("discGroups")?.let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it) }.associate { g -> g.optString("name") to arr(g, "codes").toSet() }.filterKeys { it.isNotBlank() } }
+            ?: mapOf("Architecture" to setOf("AR", "ARC", "CW", "ID", "LS"), "MEP" to setOf("MEP", "ES", "MS", "PLB", "FF", "ME"), "Structure" to setOf("ST"), "HSE" to setOf("HSE"))
+        periods = lp?.optJSONArray("periods")?.let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it) }.map { Triple(it.optString("name"), it.optString("from"), it.optString("to")) } } ?: emptyList()
+        val mine = ArrayList<Def>()
+        lp?.optJSONArray("customTypes")?.let { a ->
+            for (i in 0 until a.length()) {
+                val t = a.optJSONObject(i) ?: continue
+                val code = t.optString("code").trim().uppercase(); if (code.length < 2 || defsNow.any { it.code == code }) continue
+                fun rx(ws: List<String>) = ws.joinToString("|") { "\\b" + Regex.escape(it) + "\\b" }
+                val words = t.optString("words").split(',', ';').map { it.trim() }.filter { it.length > 1 }
+                val done = t.optString("done").split(',', ';').map { it.trim() }.filter { it.length > 1 }
+                val close = t.optString("close").ifBlank { "reply" }
+                if (t.optString("find", "code") == "code") mine.add(Def(code, t.optString("label", code), "code", if (close == "done") "reply" else close, t.optInt("overdue"), words = rx(words + code)))
+                else if (words.isNotEmpty()) mine.add(Def(code, t.optString("label", code), "ref", close, t.optInt("overdue"), rx(words), if (done.isNotEmpty()) rx(done) else "", rx(words + code)))
+            }
+        }
+        if (mine.isNotEmpty()) defsNow = defsNow + mine
     }
 
     /** Your project codes (in your order on the PC). */
@@ -123,7 +154,8 @@ object PhoneLog {
 
     fun enabled(c: Context): List<String> {
         prime(c)
-        return PcLink.settingList(c, "log.all", defaults.ifBlank { defsNow.joinToString(", ") { it.code } }).map { ALIAS[it.uppercase()] ?: it.uppercase() }.distinct().filter { def(it) != null }
+        return (PcLink.settingList(c, "log.all", defaults.ifBlank { defsNow.joinToString(", ") { it.code } }) + defsNow.filter { it.code !in TYPES.map { t -> t.code } && it.code !in defaults }.map { it.code })
+            .map { ALIAS[it.uppercase()] ?: it.uppercase() }.distinct().filter { def(it) != null && it !in hiddenTypes }
     }
     private fun norm(s: String) = strip.replace(s, "").lowercase().replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim()
     private val day = SimpleDateFormat("dd MMM HH:mm", Locale.UK)
@@ -343,12 +375,15 @@ object PhoneLog {
             val w = it.submitted ?: it.reply ?: continue
             if (w < o.from || w > o.to) continue
             if (o.projects.isNotEmpty() && o.projects.none { p -> p.equals(it.project, true) }) continue
+            if (o.projects.isEmpty() && it.project.uppercase() in hiddenProjects) continue
+            if (it.disc.isNotEmpty() && it.disc.uppercase() in hiddenDiscs && !discFits(o.disc, it.disc)) continue
             if (o.tower.isNotEmpty() && !it.tower.equals(o.tower, true) && !(o.tower == "TH" && it.tower.startsWith("TH"))) continue
             if (o.zone.isNotEmpty() && !it.zone.startsWith(o.zone, true)) continue
-            if (o.disc.isNotEmpty() && !it.disc.equals(o.disc, true)) continue
+            if (o.disc.isNotEmpty() && !discFits(o.disc, it.disc)) continue
             if ((o.levelFrom > -99 || o.levelTo < 999) && (it.levelNum == null || it.levelNum!! < o.levelFrom || it.levelNum!! > o.levelTo)) continue
             if (o.status.isNotEmpty() && !when (o.status) {
                     "Code3/4" -> it.code == "Code 3" || it.code == "Code 4"
+                    "Code 1", "Code 2" -> it.code == o.status
                     "Open" -> it.status in setOf("Open", "Reviewing", "Replied", "Draft", "Overdue")
                     else -> it.status.equals(o.status, true)
                 }) continue
@@ -556,7 +591,7 @@ object SubmittalPlace {
         val s = " " + title.replace('_', ' ') + " "
         var t = ""; var z = ""; var l = ""; var a = ""; var n: Int? = null
         Regex("\\b(?:Tower|T)\\s?[-_]?\\s?(\\d)\\b", I).find(s)?.let { t = "T" + it.groupValues[1] }
-            ?: Regex("\\bTH\\s?([\\d ,&]*\\d)").find(s)?.let { t = "TH " + it.groupValues[1].replace(Regex("\\s"), "") }
+            ?: Regex("\\bTH\\s?[-_]?\\s?(\\d[\\d ,&\\-]*\\d|\\d)").find(s)?.let { t = "TH " + it.groupValues[1].replace(Regex("\\s"), "") }
         Regex("\\b(?:Zone|Z)\\s?[-_]?\\s?0?(\\d)(?:\\s?&\\s?(\\d))?\\b", I).find(s)?.let { z = "Z" + it.groupValues[1] + (if (it.groupValues[2].isNotEmpty()) "–" + it.groupValues[2] else "") }
         val y = Regex("\\b(?:Level|L)\\s?[-_]?\\s?(\\d{1,2})\\s*(?:to|-|–)\\s*(\\d{1,2})\\b", I).find(s)
         if (y != null) { l = "L${y.groupValues[1].toInt()}–${y.groupValues[2].toInt()}"; n = y.groupValues[1].toInt() }

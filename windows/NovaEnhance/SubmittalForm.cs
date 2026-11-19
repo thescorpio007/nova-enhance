@@ -23,6 +23,18 @@ class SubmittalForm : WebPage
 
     static JsonArray A(IEnumerable<string> l) => new(l.Select(x => (JsonNode)x).ToArray());
 
+    static JsonArray P(IEnumerable<(string Code, string Name)> l) => new(l.Select(x => (JsonNode)new JsonObject { ["code"] = x.Code, ["name"] = x.Name }).ToArray());
+
+    /// <summary>Everything the page needs to draw its rows (and the ✎ Edit panels).</summary>
+    static JsonObject Setup(SubmittalLog.Options o) => new()
+    {
+        ["t"] = "setup", ["projects"] = P(SubmittalLog.LogProjects()), ["allProjects"] = P(SubmittalLog.LogProjects(true)), ["types"] = A(SubmittalLog.Enabled()),
+        ["allTypes"] = new JsonArray(SubmittalLog.Types.Select(t => (JsonNode)new JsonObject { ["code"] = t.Code, ["label"] = t.Label }).ToArray()),
+        ["prefs"] = LogPrefs.Get(), ["allStatuses"] = A(LogPrefs.AllStatuses),
+        ["builtin"] = Tracker.Builtin, ["us"] = Tracker.UsShort, ["name"] = Tracker.LogName, ["field"] = Packs.Current.Name,
+        ["opt"] = OptJson(o), ["sign"] = Program.Sign, ["brain"] = Brain.Unlocked ? $"🧠 rules: Nova Brain v{Brain.Version}" : "🧠 rules: built-in (Nova Brain locked)"
+    };
+
     protected override void OnMessage(JsonObject m)
     {
         switch (m["t"]?.ToString())
@@ -30,17 +42,27 @@ class SubmittalForm : WebPage
             case "init":
             {
                 var o = start ?? new SubmittalLog.Options();
-                Post(new JsonObject
-                {
-                    ["t"] = "setup", ["projects"] = ProjectFinder.ProjectsJson(), ["types"] = A(SubmittalLog.Enabled()),
-                    ["builtin"] = Tracker.Builtin, ["us"] = Tracker.UsShort, ["name"] = Tracker.LogName, ["field"] = Packs.Current.Name,
-                    ["opt"] = OptJson(o), ["sign"] = Program.Sign, ["brain"] = Brain.Unlocked ? $"🧠 rules: Nova Brain v{Brain.Version}" : "🧠 rules: built-in (Nova Brain locked)"
-                });
+                Post(Setup(o));
                 Run(o);
                 // ✚ New projects found in your emails (for the dashed chips and the ＋ panel) — after the log, quietly.
                 _ = Task.Run(() => { try { Thread.Sleep(1500); Post(ProjectFinder.Handle(new JsonObject { ["t"] = "pf.load" })); } catch (Exception e) { Log.Warn("projects found", e.Message); } });
                 break;
             }
+            case "prefs.save":
+            {
+                // ✎ Edit: your choices go to My log settings, then the chips and the log are drawn again.
+                if (m["prefs"] is JsonObject p) LogPrefs.Save(p.DeepClone().AsObject());
+                var o = cur ?? new SubmittalLog.Options();
+                var hidden = LogPrefs.HiddenProjects;
+                o.Projects.RemoveAll(x => hidden.Contains(x));
+                o.Types.RemoveAll(x => LogPrefs.HiddenTypes.Contains(x));
+                Post(Setup(o));
+                Run(o);
+                Post(new JsonObject { ["t"] = "busy", ["text"] = "✓ Saved in My log settings (also on the phone after the next update, and in 🧠 Nova Brain · My log settings)" });
+                break;
+            }
+            case "projectsWin": Screens.ProjectsFound(); break;
+            case "setup": Post(Setup(cur ?? new SubmittalLog.Options())); break;
             case "pf.load" or "pf.add" or "pf.merge" or "pf.ignore":
             {
                 var msg = m;
