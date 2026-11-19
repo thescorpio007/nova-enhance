@@ -34,7 +34,21 @@ static class SubmittalLog
         public int? LevelNum;
     }
 
-    public class Result { public List<Item> Items = new(); public int Mails; public Options Opt; public double Seconds; public List<string> Gaps = new(); }
+    public class Result
+    {
+        public List<Item> Items = new(); public int Mails; public Options Opt; public double Seconds; public List<string> Gaps = new();
+        /// <summary>Items per discipline before the discipline and status choices, and per status before the status choice (for the chips).</summary>
+        public Dictionary<string, int> Discs = new(StringComparer.OrdinalIgnoreCase), Statuses = new();
+    }
+
+    /// <summary>A level typed in a box: “5”, “L5”, “GF”, “FF”, “UG”, “B1”, “podium”, “roof”.</summary>
+    public static int? LevelOf(string s)
+    {
+        s = (s ?? "").Trim().ToUpperInvariant().Replace(" ", "");
+        if (s.Length == 0) return null;
+        if (int.TryParse(s.TrimStart('L'), out var n)) return n;
+        return s switch { "GF" or "G" or "GROUND" => 0, "FF" or "FIRST" => 1, "UG" => -1, "PODIUM" => 1, "ROOF" => 100, "ATTIC" => 99, _ => s.StartsWith("B") && int.TryParse(s[1..], out var b) ? -b : s == "B" ? -1 : null };
+    }
 
     /// <summary>
     /// One kind of document. Find: "code" = its code in the document number (…-WIR-00123), "words" = words in the subject.
@@ -362,8 +376,11 @@ static class SubmittalLog
             if (o.Projects.Count > 0 && !o.Projects.Any(p => p.Equals(it.Project, StringComparison.OrdinalIgnoreCase))) continue;
             if (o.Tower.Length > 0 && !it.Tower.Equals(o.Tower, StringComparison.OrdinalIgnoreCase) && !(o.Tower == "TH" && it.Tower.StartsWith("TH"))) continue;
             if (o.Zone.Length > 0 && !it.Zone.StartsWith(o.Zone, StringComparison.OrdinalIgnoreCase)) continue;
-            if (o.Discipline.Length > 0 && !it.Disc.Equals(o.Discipline, StringComparison.OrdinalIgnoreCase)) continue;
             if ((o.LevelFrom > -99 || o.LevelTo < 999) && (it.LevelNum == null || it.LevelNum < o.LevelFrom || it.LevelNum > o.LevelTo)) continue;
+            res.Discs[it.Disc] = res.Discs.GetValueOrDefault(it.Disc) + 1;
+            if (o.Discipline.Length > 0 && !it.Disc.Equals(o.Discipline, StringComparison.OrdinalIgnoreCase)) continue;
+            foreach (var st in new[] { it.Status is "Open" or "Reviewing" or "Replied" or "Draft" or "Overdue" ? "Open" : "", it.Status, it.Code is "Code 3" or "Code 4" ? "Code3/4" : "" })
+                if (st.Length > 0) res.Statuses[st] = res.Statuses.GetValueOrDefault(st) + 1;
             if (o.Status.Length > 0 && !(o.Status == "Code3/4" ? it.Code is "Code 3" or "Code 4"
                 : o.Status == "Open" ? it.Status is "Open" or "Reviewing" or "Replied" or "Draft" or "Overdue"
                 : it.Status.Equals(o.Status, StringComparison.OrdinalIgnoreCase))) continue;

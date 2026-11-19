@@ -78,7 +78,7 @@ class SubmittalForm : WebPage
     {
         ["projects"] = A(o.Projects), ["types"] = A(o.Types), ["from"] = o.From.ToString("yyyy-MM-dd"), ["to"] = o.To.ToString("yyyy-MM-dd"),
         ["tower"] = o.Tower, ["zone"] = o.Zone, ["disc"] = o.Discipline, ["status"] = o.Status,
-        ["lfrom"] = o.LevelFrom > -99 ? o.LevelFrom.ToString() : "", ["lto"] = o.LevelTo < 999 ? o.LevelTo.ToString() : ""
+        ["lfrom"] = o.LevelFrom > -99 ? (o.LevelFrom == 0 ? "GF" : o.LevelFrom.ToString()) : "", ["lto"] = o.LevelTo < 999 && o.LevelTo != o.LevelFrom ? (o.LevelTo == 0 ? "GF" : o.LevelTo.ToString()) : ""
     };
 
     static SubmittalLog.Options OptOf(JsonObject j)
@@ -90,8 +90,8 @@ class SubmittalForm : WebPage
         if (DateTime.TryParse(j["from"]?.ToString(), out var f)) o.From = f;
         if (DateTime.TryParse(j["to"]?.ToString(), out var t)) o.To = t.Date.AddDays(1).AddSeconds(-1);
         o.Tower = j["tower"]?.ToString() ?? ""; o.Zone = j["zone"]?.ToString() ?? ""; o.Discipline = j["disc"]?.ToString() ?? ""; o.Status = j["status"]?.ToString() ?? "";
-        if (int.TryParse(j["lfrom"]?.ToString(), out var a)) o.LevelFrom = a;
-        if (int.TryParse(j["lto"]?.ToString(), out var b)) o.LevelTo = b;
+        if (SubmittalLog.LevelOf(j["lfrom"]?.ToString()) is int a) o.LevelFrom = a;     // 5 · L5 · GF · FF · B1 · roof
+        if (SubmittalLog.LevelOf(j["lto"]?.ToString()) is int b) o.LevelTo = b;
         if (o.LevelFrom > -99 && o.LevelTo == 999) o.LevelTo = o.LevelFrom;
         return o;
     }
@@ -124,6 +124,8 @@ class SubmittalForm : WebPage
                 ["items"] = new JsonArray(r.Items.Take(3000).Select(i => (JsonNode)SubmittalLog.Json(i)).ToArray()),
                 ["towers"] = A(r.Items.Select(i => i.Tower).Where(x => x.Length > 0 && !x.StartsWith("TH")).Distinct().OrderBy(x => x)),
                 ["discs"] = A(r.Items.Select(i => i.Disc).Where(x => x.Length > 0).Distinct().OrderBy(x => x)),
+                ["discCounts"] = new JsonObject(r.Discs.Where(x => x.Key.Length > 0).Select(x => KeyValuePair.Create(x.Key, (JsonNode)x.Value))),
+                ["statCounts"] = new JsonObject(r.Statuses.Select(x => KeyValuePair.Create(x.Key, (JsonNode)x.Value))),
                 ["projects"] = A(r.Items.Select(i => i.Project).Where(x => x.Length > 0).Distinct().OrderBy(x => x))
             };
         });

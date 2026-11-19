@@ -635,8 +635,12 @@ class MyPcActivity : BaseActivity() {
             val on = Math.abs(o.from - (now - days * 86_400_000L)) < 2 * 86_400_000L
             pr.addView(Ui.chip(c, l, on) { o.from = System.currentTimeMillis() - days * 86_400_000L; o.to = System.currentTimeMillis() + 86_400_000L; runLog(o) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
         }
-        for (st in listOf("Open", "Overdue", "Closed", "Code3/4")) pr.addView(Ui.chip(c, if (st == "Code3/4") "Code 3/4" else st, o.status == st) { o.status = if (o.status == st) "" else st; runLog(o) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
         body.addView(pv, Ui.lp(top = Ui.dp(c, 6)))
+        // Status: its own row, for every search.
+        val (sv, sr) = Ui.chipRow(c)
+        sr.addView(Ui.chip(c, "All statuses", o.status.isEmpty()) { o.status = ""; runLog(o) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+        for (st in listOf("Open", "Overdue", "Closed", "Code3/4")) sr.addView(Ui.chip(c, if (st == "Code3/4") "Code 3/4" else st, o.status == st) { o.status = if (o.status == st) "" else st; runLog(o) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+        body.addView(sv, Ui.lp(top = Ui.dp(c, 6)))
         val r = logRes
         // Projects: your list from the PC (codes and names), then any other one found in the log · ＋ projects found in your emails.
         PhoneLog.prime(c)

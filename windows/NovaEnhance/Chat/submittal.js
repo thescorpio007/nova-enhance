@@ -5,6 +5,7 @@
   function $(id) { return document.getElementById(id); }
   function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
   var opt = { projects: [], types: [], from: "", to: "", tower: "", zone: "", disc: "", status: "", lfrom: "", lto: "" };
+  var stats = {};
   var allProjects = [], allTypes = [], towers = {}, discs = {}, items = [], show = "", sortKey = "", sortDir = 1;
 
   function chip(box, label, on, f) { var s = el("span", "chip" + (on ? " on" : ""), label); s.onclick = f; box.appendChild(s); return s; }
@@ -50,9 +51,13 @@
     var b = el("input", "n"); b.placeholder = "to"; b.value = opt.lto; b.onchange = function () { opt.lto = b.value.trim(); run(); }; w.appendChild(b);
     var d = $("cDisc"); d.innerHTML = "";
     chip(d, "All", !opt.disc, function () { opt.disc = ""; run(); });
-    Object.keys(discs).sort().forEach(function (x) { chip(d, x, opt.disc === x, function () { opt.disc = opt.disc === x ? "" : x; run(); }); });
-    d.appendChild(document.createTextNode(" · "));
-    ["Open", "Overdue", "Closed", "Code3/4"].forEach(function (x) { chip(d, x === "Code3/4" ? "Code 3/4" : x, opt.status === x, function () { opt.status = opt.status === x ? "" : x; run(); }); });
+    // Each discipline with its count for the projects, types, period and place chosen (a discipline the project does not use shows 0).
+    var dk = Object.keys(discs); if (opt.disc && dk.indexOf(opt.disc) < 0) dk.push(opt.disc);
+    dk.sort().forEach(function (x) { var n = discs[x] || 0; var c = chip(d, x + " · " + n.toLocaleString(), opt.disc === x, function () { opt.disc = opt.disc === x ? "" : x; run(); }); if (!n) c.style.opacity = ".5"; });
+    // Status: its own row, for every search.
+    var sr = $("cStat"); sr.innerHTML = "";
+    chip(sr, "All", !opt.status, function () { opt.status = ""; run(); });
+    ["Open", "Overdue", "Closed", "Code3/4"].forEach(function (x) { var n = stats[x]; chip(sr, (x === "Code3/4" ? "Code 3/4" : x) + (n != null ? " · " + n.toLocaleString() : ""), opt.status === x, function () { opt.status = opt.status === x ? "" : x; run(); }); });
   }
 
   function run() { drawFilters(); post({ t: "run", opt: opt }); }
@@ -130,7 +135,7 @@
     else if (m.t === "opt") { opt = m.opt; drawFilters(); if (m.said) $("busy").textContent = "🧭 " + m.said; }
     else if (m.t === "result") {
       $("busy").textContent = ""; items = m.items || [];
-      (m.towers || []).forEach(function (x) { towers[x] = 1; }); (m.discs || []).forEach(function (x) { discs[x] = 1; }); (m.projects || []).forEach(function (x) { if (!allProjects.some(function (p) { return p.code === x; }) && !fresh.some(function (s) { return s.value === x; })) allProjects.push({ code: x, name: "" }); });
+      (m.towers || []).forEach(function (x) { towers[x] = 1; }); discs = m.discCounts || {}; stats = m.statCounts || {}; (m.projects || []).forEach(function (x) { if (!allProjects.some(function (p) { return p.code === x; }) && !fresh.some(function (s) { return s.value === x; })) allProjects.push({ code: x, name: "" }); });
       show = ""; drawFilters(); drawKpi(m.kpi); drawTable();
       $("gaps").textContent = (m.kpi.gaps || []).length ? "⚠ Missing in the register: " + m.kpi.gaps.join(" · ") : "";
     }
