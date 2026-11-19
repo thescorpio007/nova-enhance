@@ -366,8 +366,7 @@ static class TestConnector
                     sb.AppendLine($"- {p.Code} · {p.Name} · emails {MailProjects.CountOf(p.Code):N0} · also written as: {string.Join(", ", Projects.NamesOf(p).Where(n => n != p.Code && n != p.Name))} · {p.Folders.Count} folder(s) · {cfg.Folders.Count} Outlook folder(s) · {cfg.Senders.Count} sender rule(s)");
                 }
                 foreach (var k in MailProjects.Counts.Keys.Where(k => k.Length > 0 && k != MailProjects.Gen && Projects.Canon(k).Length == 0)) sb.AppendLine($"- {k} · (email project without a 📁 project) · emails {MailProjects.CountOf(k):N0}");
-                sb.AppendLine("
-＋ Found in your emails (not a project yet):");
+                sb.AppendLine("\n＋ Found in your emails (not a project yet):");
                 foreach (var f in await Task.Run(() => ProjectFinder.Find(20)))
                     sb.AppendLine($"- {f.Kind} “{f.Value}” · {f.Emails} emails · e.g. {hide.Hide(Cut(f.Sample, 120))}{(f.Target.Length > 0 ? " · looks like ⇢ " + f.Target : "")} · suggested code {f.Code}");
                 break;
