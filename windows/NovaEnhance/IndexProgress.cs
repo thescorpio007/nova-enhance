@@ -125,7 +125,7 @@ static class IndexProgress
         var gentle = s.Rate > 0.05 && !Rushing ? TimeSpan.FromSeconds(left / s.Rate) : (TimeSpan?)null;
         using var f = new Form
         {
-            Text = "⚡ Index now", FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, ShowInTaskbar = false,
+            Text = "⚡ Index now", FormBorderStyle = FormBorderStyle.Sizable, MaximizeBox = false, MinimizeBox = false, ShowInTaskbar = false,
             StartPosition = owner == null ? FormStartPosition.CenterScreen : FormStartPosition.CenterParent, BackColor = Th.Bg, ForeColor = Th.Text,
             Font = Th.F(10), ClientSize = new Size(520, 250), Padding = new Padding(16), Icon = Th.AppIcon
         };

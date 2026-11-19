@@ -507,6 +507,10 @@ object PcLink {
             ".\nNever change document numbers, revisions (Rev01, R00), approval codes (Code 1, Code 2), dates, numbers, e-mail addresses or project codes."
     }
 
+    /** 🧠 A [name = value] setting of the Nova Brain on the PC (e.g. overdue.WIR), or [def]. */
+    fun setting(c: Context, name: String, def: String): String = brain(c)?.optJSONObject("settings")?.optString(name.lowercase())?.takeIf { it.isNotBlank() } ?: def
+    fun settingList(c: Context, name: String, def: String): List<String> = setting(c, name, def).split(',', ';', '|').map { it.trim() }.filter { it.isNotEmpty() }
+
     /** 🧠 Nova Brain: the user's own rules (same as the PC) for the sections that apply to this task. */
     fun guide(c: Context, vararg tags: String): String {
         val g = brain(c)?.optJSONObject("guide") ?: return ""

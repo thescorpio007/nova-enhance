@@ -68,7 +68,7 @@
     var t = el("table"), hr = el("tr");
     COLS.forEach(function (c) { var th = el("th", null, c[1] + (sortKey === c[0] ? (sortDir > 0 ? " ▲" : " ▼") : "")); th.onclick = function () { sortDir = sortKey === c[0] ? -sortDir : 1; sortKey = c[0]; drawTable(); }; hr.appendChild(th); });
     t.appendChild(hr);
-    var l = items.filter(function (i) { return !show || (show === "check" ? i.check : show === "Open" ? (i.status === "Open" || i.status === "Reviewing") : i.status === show); });
+    var l = items.filter(function (i) { return !show || (show === "check" ? i.check : show === "Open" ? (i.status === "Open" || i.status === "Reviewing" || i.status === "Replied" || i.status === "Draft") : show === "Closed" ? (i.status === "Closed" || i.status === "Received") : i.status === show); });
     if (sortKey) l = l.slice().sort(function (a, b) { var x = a[sortKey], y = b[sortKey]; if (sortKey === "sub" || sortKey === "reply" || sortKey === "due") { x = Date.parse(x) || 0; y = Date.parse(y) || 0; } return (x > y ? 1 : x < y ? -1 : 0) * sortDir; });
     l.forEach(function (i) {
       var tr = el("tr", "r");
@@ -77,6 +77,7 @@
         if (c[0] === "status") { td.appendChild(el("span", "st " + (v === "?" ? "Superseded" : v), v === "?" ? "check" : v)); if (i.check) td.appendChild(el("span", "chk", " ⚠")); }
         else td.textContent = v == null || v === "" ? "–" : v;
         if (c[0] === "title") td.title = i.title + "\n" + i.why + (i.check ? "\n⚠ " + i.check : "");
+        if (c[0] === "type") td.title = i.label || "";
         tr.appendChild(td);
       });
       tr.onclick = function () { if (i.entry) post({ t: "open", entry: i.entry, store: i.store }); };
@@ -90,15 +91,20 @@
   $("fold").onclick = function () { post({ t: "folder" }); };
   $("upd").onclick = run;
   $("brain").onclick = function () { post({ t: "brain" }); };
+  function ask() { var t = $("ask").value.trim(); if (!t) return; post({ t: "ask", text: t }); $("ask").value = ""; }
+  $("askBtn").onclick = ask;
+  $("ask").onkeydown = function (e) { if (e.key === "Enter") ask(); };
 
   if (W) W.addEventListener("message", function (ev) {
     var m = ev.data;
     if (m.t === "setup") { allProjects = m.projects || []; allTypes = m.types || []; opt = m.opt; $("sign").textContent = m.sign || ""; $("brain").textContent = m.brain; drawFilters(); }
     else if (m.t === "busy") { $("busy").textContent = "⏳ " + m.text; }
+    else if (m.t === "opt") { opt = m.opt; drawFilters(); if (m.said) $("busy").textContent = "🧭 " + m.said; }
     else if (m.t === "result") {
       $("busy").textContent = ""; items = m.items || [];
       (m.towers || []).forEach(function (x) { towers[x] = 1; }); (m.discs || []).forEach(function (x) { discs[x] = 1; });
       show = ""; drawFilters(); drawKpi(m.kpi); drawTable();
+      $("gaps").textContent = (m.kpi.gaps || []).length ? "⚠ Missing in the register: " + m.kpi.gaps.join(" · ") : "";
     }
     else if (m.t === "saved") $("busy").textContent = "✓ Saved and opened: " + m.path;
     else if (m.t === "error") $("busy").textContent = "⚠ " + m.text;

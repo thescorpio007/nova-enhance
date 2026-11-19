@@ -490,7 +490,7 @@ static class Prompts
 
     public static SavedPrompt AskSave(IWin32Window owner, SavedPrompt p)
     {
-        using var f = new NovaForm { Text = "⭐ Save this prompt", Width = 560, Height = 560, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, StartPosition = FormStartPosition.CenterParent };
+        using var f = new NovaForm { Text = "⭐ Save this prompt", Width = 560, Height = 560, FormBorderStyle = FormBorderStyle.Sizable, MaximizeBox = false, MinimizeBox = false, StartPosition = FormStartPosition.CenterParent };
         var s = new Stack(); f.Controls.Add(s);
         s.Add(Th.L("NAME", 8.5f, Th.Muted, true));
         var name = s.Add(Th.Box(false), true); name.Text = p.Name;

@@ -586,6 +586,10 @@ class AskForm : NovaForm
     Button undoBtn;
     readonly TextBox question, follow;
     readonly Label understood, info, message, idx;
+    readonly LinkLabel wordsLink;
+    bool skipIntent;
+    SubmittalLog.Options lastLog;
+    SubmittalForm logForm;
     readonly FlowLayoutPanel examples, chips, bottom;
     readonly MailList list;
     readonly Button micBtn;
@@ -850,6 +854,9 @@ class AskForm : NovaForm
             surf.MouseDown += (_, _) => { if (QuickEditing >= 0) question.Focus(); };
 
         understood = stack.Add(Th.Wrap("", 9.5f, Th.Text));
+        // 🧭 Nova understood your words as a feature: one click searches the words instead.
+        wordsLink = stack.Add(new LinkLabel { Text = "↩ search the words instead", AutoSize = true, LinkColor = Th.AccentText, ActiveLinkColor = Th.Accent, Font = Th.F(9), Margin = new Padding(0, 0, 0, 2), Visible = false });
+        wordsLink.LinkClicked += (_, _) => { skipIntent = true; Run(question.Text, false); };
         planBox = stack.Add(new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, BackColor = Color.Transparent, Margin = new Padding(0, 2, 0, 2), Visible = false });
         info = stack.Add(Th.Wrap("", 9, Th.AccentText));
         resultRow = stack.Add(Th.Row());
@@ -1025,6 +1032,13 @@ class AskForm : NovaForm
 
     async void Run(string q, bool followUp) => await RunAsync(q, followUp, false);
 
+    /// <summary>📋 The log asked for in the search box: one window that follows your follow-ups.</summary>
+    void ShowLog(SubmittalLog.Options o, bool export)
+    {
+        if (logForm == null || logForm.IsDisposed) { logForm = new SubmittalForm(o, export); Screens.ShowForm(logForm); }
+        else { logForm.Apply(o, export); Screens.ShowForm(logForm); }
+    }
+
     void SetProject(string code)
     {
         Project = code;
@@ -1081,13 +1095,45 @@ class AskForm : NovaForm
         if (q == box.Text && !fromTalk) { Speller.FixBeforeSearch(box, () => Run(box.Text, followUp)); q = box.Text; }
         q = (q ?? "").Trim();
         if (q.Length == 0) return;
-        // “WIR log Tower 4, 1 Oct – 19 Nov, open ones” → the 📋 Submittal log with those choices.
-        if (!followUp && SubmittalLog.Wanted(q))
+        // 🧭 What you mean first: a group, a log, a follow-up on the log, a window — else the search below.
+        wordsLink.Visible = false;
+        if (!skipIntent)
         {
-            Screens.Submittal(SubmittalLog.FromWords(q, Project));
-            info.Text = "📋 Opened the Submittal log for: " + q;
-            return;
+            var intent = Intent.Read(q, Project, lastLog);
+            if (intent.Kind != Intent.Kind.Search)
+            {
+                understood.Text = "🧭 " + intent.Said;
+                wordsLink.Visible = true;
+                examples.Visible = false; message.Visible = false;
+                switch (intent.Kind)
+                {
+                    case Intent.Kind.Open:
+                        if (intent.Window == "brain") Screens.Brain();
+                        else if (intent.Window == "history") Screens.SearchHistory();
+                        else if (intent.Window == "settings") Screens.Settings();
+                        else { lastLog = intent.Log; ShowLog(intent.Log, false); }
+                        info.Text = intent.Said;
+                        return;
+                    case Intent.Kind.Log:
+                    case Intent.Kind.Follow:
+                        lastLog = intent.Log;
+                        ShowLog(intent.Log, intent.Export);
+                        info.Text = "📋 In the Submittal log window · ask a follow-up here (“only the overdue ones”, “now tower 2”, “export it”)";
+                        try { SearchHistory.Add("email", q, "📋 Submittal log · " + Intent.Describe(intent.Log), new System.Text.Json.Nodes.JsonArray(), "log"); } catch { }
+                        return;
+                    case Intent.Kind.Group:
+                    {
+                        var proj = Project;
+                        info.Text = "⏳ " + intent.Said + "…";
+                        var g = await Task.Run(() => Intent.GroupHits(intent, proj));
+                        hits = rawHits = g; list.Nova = null; filterVal = ""; ShowList();
+                        info.Text = $"{intent.Said} · {g.Count} email(s){(g.Count >= 500 ? " (the newest 500)" : "")}";
+                        return;
+                    }
+                }
+            }
         }
+        skipIntent = false;
         if (Store.EmailSource == "m365")
         {
             ShowMessage("Microsoft 365 connection comes in build 2 (your IT admin approves it once). Choose \"Outlook on this PC\" or \"Both\" in Settings → Email & AI to search now.");

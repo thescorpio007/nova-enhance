@@ -1315,6 +1315,36 @@ static class MailIndex
         return Convert.ToInt32(cmd.ExecuteScalar());
     }
 
+    /// <summary>📋 Submittal log: every email whose subject (or attachment names) match one of these LIKE patterns, between two dates, with the start of the body.</summary>
+    public static List<MailHit> SubmittalsLike(IEnumerable<string> subjectLikes, IEnumerable<string> attLikes, DateTime after, DateTime before, int max = 80000, int bodyChars = 6000)
+    {
+        var list = new List<MailHit>();
+        using var c = Open();
+        using var cmd = c.CreateCommand();
+        var ors = new List<string>();
+        int i = 0;
+        foreach (var l in subjectLikes.Distinct()) { ors.Add($"m.subject LIKE $s{i}"); cmd.Parameters.AddWithValue("$s" + i, l); i++; }
+        foreach (var l in attLikes.Distinct()) { ors.Add($"m.att_names LIKE $s{i}"); cmd.Parameters.AddWithValue("$s" + i, l); i++; }
+        if (ors.Count == 0) return list;
+        cmd.CommandText = $"SELECT m.id,m.entry,m.store,m.conv,m.folder,m.sent,m.date,m.from_name,m.from_addr,m.to_list,m.cc_list,m.to_addr,m.cc_addr,m.subject,substr(m.body,1,{Math.Clamp(bodyChars, 200, 20000)}),m.att_names,m.unread,m.importance FROM mail m " +
+                          $"WHERE ({string.Join(" OR ", ors)}) AND m.date >= $a AND m.date <= $b ORDER BY m.date LIMIT {Math.Clamp(max, 1, 300000)}";
+        cmd.Parameters.AddWithValue("$a", new DateTimeOffset(after).ToUnixTimeMilliseconds());
+        cmd.Parameters.AddWithValue("$b", new DateTimeOffset(before).ToUnixTimeMilliseconds());
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+        {
+            string Str(int k) => r.IsDBNull(k) ? "" : r.GetString(k);
+            list.Add(new MailHit
+            {
+                Id = r.GetInt64(0), Entry = Str(1), StoreId = Str(2), Conv = Str(3), Folder = Str(4), Sent = r.GetInt64(5) == 1,
+                Date = DateTimeOffset.FromUnixTimeMilliseconds(r.GetInt64(6)).LocalDateTime,
+                FromName = Str(7), FromAddr = Str(8), To = Str(9), Cc = Str(10), ToAddr = Str(11), CcAddr = Str(12),
+                Subject = Str(13), Body = Str(14), AttNames = Str(15), Unread = r.GetInt64(16) == 1, Importance = (int)r.GetInt64(17)
+            });
+        }
+        return list.GroupBy(h => (h.Subject, h.Date, h.FromAddr)).Select(g => g.First()).ToList();
+    }
+
     /// <summary>📋 Submittal log: every email whose subject holds one of these document types (e.g. “-WIR-”), between two dates, with the start of the body.</summary>
     public static List<MailHit> Submittals(IEnumerable<string> types, DateTime after, DateTime before, int max = 60000, int bodyChars = 6000)
     {

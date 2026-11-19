@@ -210,6 +210,7 @@ class MyPcActivity : BaseActivity() {
             "search" -> searchPage()
             "find" -> findPage()
             "deep" -> deepPage()
+            "log" -> logPage()
             "history" -> historyPage()
             "brief" -> briefPage()
             "files" -> filesPage()
@@ -262,12 +263,13 @@ class MyPcActivity : BaseActivity() {
         val sr = Ui.row(c)
         val q = Ui.input(c, "🔍 Search emails, files and drawings…", false).apply {
             imeOptions = EditorInfo.IME_ACTION_SEARCH
-            setOnEditorActionListener { v, _, _ -> v.text.toString().let { if (DeepPhone.wanted(it)) runDeep(it) else runFind(it) }; true }
+            setOnEditorActionListener { v, _, _ -> v.text.toString().let { route(it) }; true }
         }
         sr.addView(q, Ui.lp(0, weight = 1f, end = Ui.dp(c, 8)))
-        sr.addView(Ui.button(c, "🔍", true) { q.text.toString().let { if (DeepPhone.wanted(it)) runDeep(it) else runFind(it) } }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+        sr.addView(Ui.button(c, "🔍", true) { q.text.toString().let { route(it) } }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
         sr.addView(Ui.button(c, "🔎 Deep") { runDeep(q.text.toString()) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT))
         body.addView(sr)
+        body.addView(Ui.smallButton(c, "📋 Submittal log (WIR · EI · MOM · RFI…)") { runLog(logOpt ?: PhoneLog.fromWords("", project)) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, top = Ui.dp(c, 6)))
         projectChips()
         Thread {
             val n = PcLink.count(c, "mail"); val f = PcLink.count(c, "files"); val old = PcLink.oldest(c); val size = PcLink.sizeOnPhone(c)
@@ -555,6 +557,125 @@ class MyPcActivity : BaseActivity() {
     }
 
     // ------------------------------------------------------------------ 🔎 deep search (round after round: phone + Google Drive)
+
+    // ------------------------------------------------------------------ 🧭 what you mean · 📋 the log on the phone
+
+    private var logOpt: PhoneLog.Options? = null
+    private var logRes: PhoneLog.Result? = null
+    private var logBusy = false
+    private var logShow = ""
+    private var logSaid = ""
+
+    /** 🧭 A log, a follow-up on the log, the unsorted emails, a deep question — or the quick search. */
+    private fun route(q: String) {
+        val t = q.trim(); if (t.isEmpty()) return
+        val last = logOpt
+        val f = if (last != null && page == "log") PhoneLog.follow(t, last) else null
+        when {
+            f != null -> { logSaid = "🧭 " + PhoneLog.describe(f); runLog(f) }
+            PhoneLog.wanted(t) -> { val o = PhoneLog.fromWords(t, project); logSaid = "🧭 " + PhoneLog.describe(o); runLog(o) }
+            Regex("\\b(unsorted|not sorted|no project|without project|unassigned)\\b", RegexOption.IGNORE_CASE).containsMatchIn(t) -> runUnsorted(t)
+            DeepPhone.wanted(t) -> runDeep(t)
+            else -> runFind(t)
+        }
+    }
+
+    private fun runUnsorted(q: String) {
+        lastQuery = q; filter = ""; fromPc = false
+        say("⏳ Emails not sorted into a project…")
+        val c = applicationContext
+        work({
+            val out = ArrayList<PcLink.Hit>()
+            PcLink.Db.get(c).rawQuery("SELECT id, d, s, fn, fa, too, cc, sub, an, p, f, substr(b,1,600) FROM mail WHERE p IS NULL OR p = '' ORDER BY d DESC LIMIT 500", null).use { cu ->
+                while (cu.moveToNext()) out.add(PcLink.Hit(cu.getLong(0), cu.getLong(1), cu.getInt(2) != 0, cu.getString(3) ?: "", cu.getString(4) ?: "", cu.getString(5) ?: "", cu.getString(6) ?: "",
+                    cu.getString(7) ?: "", cu.getString(8) ?: "", cu.getString(9) ?: "", cu.getString(10) ?: "", first = cu.getString(11) ?: ""))
+            }
+            out
+        }) { h -> hits = h; explain = "🧭 ❔ Emails not sorted into a project · ${h.size}" + (if (h.size >= 500) " (the newest 500)" else ""); show("search") }
+    }
+
+    private fun runLog(o: PhoneLog.Options) {
+        logOpt = o; logBusy = true; logShow = ""
+        show("log")
+        val c = applicationContext
+        Thread {
+            val r = runCatching { PhoneLog.run(c, o) }
+            main.post {
+                logBusy = false
+                r.onSuccess { logRes = it; Thread { PhoneHistory.quick(c, "find", "📋 " + PhoneLog.describe(o), it.items.size, "${it.items.size} item(s) · Submittal log", it.items.take(12).map { i -> "${i.no} ${i.rev} · ${i.status}" }) }.start() }
+                    .onFailure { status.text = "⚠ " + (it.message ?: "the log failed") }
+                if (page == "log") show("log")
+            }
+        }.start()
+    }
+
+    private fun logPage() {
+        val c = this
+        val sr = Ui.row(c)
+        val q = Ui.input(c, "🧭 Ask: “only the overdue ones” · “now tower 2” · “EI this month” · “minutes of meetings”", false).apply {
+            imeOptions = EditorInfo.IME_ACTION_SEARCH
+            setOnEditorActionListener { v, _, _ -> route(v.text.toString()); true }
+        }
+        sr.addView(q, Ui.lp(0, weight = 1f, end = Ui.dp(c, 8)))
+        sr.addView(Ui.button(c, "Ask", true) { route(q.text.toString()) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT))
+        body.addView(sr)
+        val o = logOpt ?: PhoneLog.Options().also { logOpt = it }
+        if (logSaid.isNotEmpty()) body.addView(Ui.text(c, logSaid, 12f, Ui.ACCENT), Ui.lp(top = Ui.dp(c, 4)))
+        // Types · period · status · towers
+        val (tv, tr) = Ui.chipRow(c)
+        tr.addView(Ui.chip(c, "All", o.types.isEmpty()) { o.types.clear(); runLog(o) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+        for (t in PhoneLog.enabled(c)) tr.addView(Ui.chip(c, t, t in o.types) { if (t in o.types) o.types.remove(t) else o.types.add(t); runLog(o) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+        body.addView(tv, Ui.lp(top = Ui.dp(c, 8)))
+        val (pv, pr) = Ui.chipRow(c)
+        val now = System.currentTimeMillis()
+        for ((l, days) in listOf("7 days" to 7, "30 days" to 30, "90 days" to 90, "1 year" to 365)) {
+            val on = Math.abs(o.from - (now - days * 86_400_000L)) < 2 * 86_400_000L
+            pr.addView(Ui.chip(c, l, on) { o.from = System.currentTimeMillis() - days * 86_400_000L; o.to = System.currentTimeMillis() + 86_400_000L; runLog(o) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+        }
+        for (st in listOf("Open", "Overdue", "Closed", "Code3/4")) pr.addView(Ui.chip(c, if (st == "Code3/4") "Code 3/4" else st, o.status == st) { o.status = if (o.status == st) "" else st; runLog(o) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+        body.addView(pv, Ui.lp(top = Ui.dp(c, 6)))
+        val r = logRes
+        if (r != null) {
+            val towers = r.items.map { it.tower }.filter { it.isNotEmpty() && !it.startsWith("TH") }.distinct().sorted()
+            if (towers.isNotEmpty() || o.tower.isNotEmpty()) {
+                val (wv, wr) = Ui.chipRow(c)
+                wr.addView(Ui.chip(c, "All towers", o.tower.isEmpty()) { o.tower = ""; runLog(o) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+                for (t in (towers + o.tower).filter { it.isNotEmpty() }.distinct()) wr.addView(Ui.chip(c, t, o.tower == t) { o.tower = if (o.tower == t) "" else t; runLog(o) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+                body.addView(wv, Ui.lp(top = Ui.dp(c, 6)))
+            }
+        }
+        if (logBusy) { body.addView(Ui.text(c, "⏳ Reading every submission and its reply on this phone…", 13f, Ui.ACCENT), Ui.lp(top = Ui.dp(c, 10))); return }
+        if (r == null) return
+        val open = r.items.count { it.status in setOf("Open", "Reviewing", "Replied", "Draft") }
+        val (kv, kr) = Ui.chipRow(c)
+        for ((l, f) in listOf("${r.items.size} found" to "", "${r.items.count { it.status == "Closed" || it.status == "Received" }} closed" to "Closed", "$open open" to "Open",
+                "${r.items.count { it.status == "Overdue" }} overdue" to "Overdue", "${r.items.count { it.check.isNotEmpty() }} to check" to "check"))
+            kr.addView(Ui.chip(c, l, logShow == f && f.isNotEmpty()) { logShow = if (logShow == f) "" else f; show("log") }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+        body.addView(kv, Ui.lp(top = Ui.dp(c, 8)))
+        body.addView(Ui.text(c, "${r.mails} emails read on the phone · %.1f s · rules: 🧠 Nova Brain".format(r.secs), 11f, Ui.MUTED))
+        if (r.gaps.isNotEmpty()) body.addView(Ui.text(c, "⚠ Missing in the register: " + r.gaps.joinToString(" · "), 12f, Ui.BAD), Ui.lp(top = Ui.dp(c, 4)))
+        val br = Ui.row(c)
+        br.addView(Ui.chip(c, "⬇ Excel · share", true) { work({ PhoneLog.excel(applicationContext, r) }) { f ->
+            startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType(mimeOf(f)).putExtra(Intent.EXTRA_STREAM, uriOf(f)).putExtra(Intent.EXTRA_SUBJECT, f.nameWithoutExtension).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), "↗ Share the log"))
+        } }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+        br.addView(Ui.chip(c, "💾 Save", false) { work({ saveToDownloads(PhoneLog.excel(applicationContext, r)) }) { where -> status.text = "✓ Saved: $where"; Ui.toast(c, "Saved: $where") } }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT))
+        body.addView(br, Ui.lp(top = Ui.dp(c, 6)))
+        val list = r.items.filter { i -> when (logShow) { "" -> true; "check" -> i.check.isNotEmpty(); "Open" -> i.status in setOf("Open", "Reviewing", "Replied", "Draft"); "Closed" -> i.status == "Closed" || i.status == "Received"; else -> i.status == logShow } }
+        if (list.isEmpty()) body.addView(Ui.text(c, "Nothing found for these choices.", 13f, Ui.MUTED), Ui.lp(top = Ui.dp(c, 10)))
+        for (i in list.take(400)) {
+            val k = Ui.card(c)
+            k.addView(Ui.text(c, "${i.no} ${i.rev}".trim() + " · " + i.type + (if (i.project.isNotEmpty()) " · " + i.project else ""), 12f, Ui.MUTED))
+            k.addView(Ui.text(c, i.title.ifBlank { "(no title)" }, 14f, Ui.TEXT, true))
+            val place = listOf(i.tower, i.zone, i.level, i.apt).filter { it.isNotEmpty() }.joinToString(" · ")
+            val col = when (i.status) { "Closed", "Received" -> Ui.GOOD; "Overdue" -> Ui.BAD; else -> Ui.ACCENT }
+            k.addView(Ui.text(c, (if (place.isNotEmpty()) "📍 $place · " else "") + i.status + (if (i.code.isNotEmpty()) " · " + i.code else ""), 12.5f, col, true))
+            k.addView(Ui.text(c, i.why + (if (i.check.isNotEmpty()) "\n⚠ " + i.check else ""), 11.5f, Ui.MUTED))
+            val h = i.rep ?: i.sub
+            if (h != null) k.setOnClickListener { openMail(h) }
+            body.addView(k, Ui.lp(top = Ui.dp(c, 6)))
+        }
+        if (list.size > 400) body.addView(Ui.text(c, "… ${list.size - 400} more — ⬇ Excel has them all", 12f, Ui.MUTED))
+    }
 
     private var deep: DeepPhone.Result? = null
     private var deepRunning = false

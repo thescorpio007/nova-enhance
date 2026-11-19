@@ -380,7 +380,7 @@ class WorkForm : NovaForm
 
     DateTime? PickDate(string title, DateTime value, bool withTime)
     {
-        using var f = new NovaForm { Text = title, Width = 360, Height = 190, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, StartPosition = FormStartPosition.CenterParent };
+        using var f = new NovaForm { Text = title, Width = 360, Height = 190, FormBorderStyle = FormBorderStyle.Sizable, MaximizeBox = false, MinimizeBox = false, StartPosition = FormStartPosition.CenterParent };
         var s = new Stack(); f.Controls.Add(s);
         var p = new DateTimePicker { Format = DateTimePickerFormat.Custom, CustomFormat = withTime ? "ddd dd MMM yyyy  HH:mm" : "ddd dd MMM yyyy", Value = value < DateTimePicker.MinimumDateTime ? DateTime.Today : value, Width = 280, Font = Th.F(11) };
         s.Add(p);

@@ -230,6 +230,18 @@ static class Brain
         catch { return ""; }
     }
 
+    /// <summary>Every [name = value] setting of the brain (the newest rule wins) — the phone reads the same ones.</summary>
+    public static JsonObject AllSettings()
+    {
+        var o = new JsonObject();
+        foreach (var (_, r) in Rules(Snapshot()))
+        {
+            if (r["off"]?.GetValue<bool>() == true) continue;
+            foreach (Match m in SetRx.Matches(r["text"]?.ToString() ?? "")) o[m.Groups[1].Value.ToLowerInvariant()] = m.Groups[2].Value.Trim();
+        }
+        return o;
+    }
+
     /// <summary>The rules as text for the phone (the same brain there).</summary>
     public static JsonObject ForPhone()
     {
@@ -510,7 +522,7 @@ static class Brain
                     R("DS-01", "Whole system first", "Search the whole system first (e.g. the approved waterproofing system), then each of its parts, then the document numbers found on the way."),
                     R("DS-02", "Follow approvals", "For each document found, look for its approval status and its later revisions before answering.")),
                 S("submittal", "📋", "Submittal logs", "SL", new[] { "submittal", "search" },
-                    R("SL-01", "Document types", "Logged types: [log.types = WIR, MIR, MAR, PQS, RFI, SDS]. WIR = work inspection request, MIR = material inspection request, MAR = material approval request, PQS = prequalification, RFI = request for information, SDS = shop drawing submittal."),
+                    R("SL-01", "Document types", "Main types: WIR = work inspection request, MIR = material inspection request, MAR = material approval request, PQS = prequalification, RFI = request for information, SDS = shop drawing submittal."),
                     R("SL-02", "Submission · Thinkproject", "Thinkproject (SLV): the submission is the notification “SLV # WIR <number>_RevNN_<title>”. Its table gives the Deadline and the Date of creation (dd/mm/yyyy)."),
                     R("SL-03", "Closed · Thinkproject", "Thinkproject: closed when a “Re:” on the same thread from MZA carries “Approval completed: yes”. The code is the “Approval result” line (e.g. Code 2 Make Corrections Noted and Proceed) or the “-C2.pdf” file."),
                     R("SL-04", "Submission · Outlook only", "Projects without Thinkproject (RS5): the submission is the email “RS5-C7-ACC-AR-WIR-00409-R01_<title>” with the PDF attached."),
@@ -519,7 +531,24 @@ static class Brain
                     R("SL-07", "Revisions", "Rev01 / R01 after a Code 3 is a resubmission: the older revision becomes “Superseded”."),
                     R("SL-08", "Counted once", "“(Updated)” notifications, forwards (FW:), automatic replies and “_with MZA Response” copies are counted once."),
                     R("SL-09", "Overdue", "Overdue when past the Thinkproject Deadline; otherwise after [overdue.WIR = 2] days for WIR, [overdue.MIR = 2] MIR, [overdue.RFI = 7] RFI, [overdue.MAR = 14] MAR, [overdue.PQS = 14] PQS, [overdue.SDS = 14] SDS."),
-                    R("SL-10", "Never drop silently", "Anything without its submission email, or a WIR/MIR without tower, zone or level, goes to the “Check” sheet with the reason.")),
+                    R("SL-10", "Never drop silently", "Anything without its submission email, or a WIR/MIR without tower, zone or level, goes to the “Check” sheet with the reason."),
+                    R("SL-11", "All types", "Logged types (every project): [log.all = WIR, MIR, MAR, MSS, SDS, SSM, TSR, PQS, RFI, RPT, HSE, CAL, RTS, HOV, PLN, LTR, PAY, DSR, VO, AUTH, SOR, NCR, EI, MOM]. SHD folder = SDS in emails (shop drawings, “SLV # DRW //”); REP folder = RPT in emails (weekly/monthly reports). GEN is not logged, except HSE that comes as …-HSE-GEN-…. Contract documents and Technical assessments are not transmittals (searchable only)."),
+                    R("SL-12", "Closed by MZA code", "WIR, MIR, MAR, MSS, SDS, SSM, TSR, PQS, RFI, RPT, HSE, CAL, RTS, HOV, PLN: closed by MZA's reply on the same thread with a code — Thinkproject “Approval completed: yes”, a signed or coded file (-C2, Code2), or a “_with MZA Response” copy."),
+                    R("SL-13", "Closed by a reply", "LTR (contractor letters) and VO (variations): closed when MZA replies. PAY (payment applications: letters or emails about payment, IPC, IPA, statement of account): closed when MZA replies or certifies. AUTH (ADCD, Civil Defence, ADM, Municipality, DMT, Aldar, Miral, NOC — any local authority): closed by any reply on the same thread. VO and AUTH have no document code: found by their words, one row per email thread."),
+                    R("SL-14", "Issued by MZA", "SOR and NCR are issued by MZA (…-MZA-…-SOR/NCR-…): closed only when MZA confirms closure after the contractor's reply (until then “Replied”). EI = Engineer’s Instruction (MZA letter “Engineer’s Instruction no. 083 …”, ref MZA-ZUB-…-L-2026-616): closed when the contractor acknowledges on the same thread or letter. An “Engineer’s Determination for EI No. 51” is shown on EI 51."),
+                    R("SL-15", "Meetings", "MOM = minutes of meetings, kick-off meetings and any meeting record (“MOM-00077-DRAFT”, “Progress Meeting No. 115 held on …”, “Kick-Off Meeting”, “Draft MoM”): Open while only the DRAFT exists, Closed when the final minutes are issued. Each series is a register: a missing meeting or EI number is listed in Check."),
+                    R("SL-16", "Daily reports", "DSR (contractor daily reports) are listed as “Received”: nothing to close."),
+                    R("SL-17", "Project codes", "A project code read wrong from a subject (“FSLV”, “LV”) is corrected to the known project (SLV, RS5…)."),
+                    R("SL-18", "Overdue · other types", "Overdue after [overdue.MSS = 14] MSS, [overdue.SSM = 14] SSM, [overdue.TSR = 14] TSR, [overdue.RPT = 14] RPT, [overdue.HSE = 14] HSE, [overdue.CAL = 14] CAL, [overdue.RTS = 7] RTS, [overdue.HOV = 14] HOV, [overdue.PLN = 14] PLN, [overdue.LTR = 14] LTR, [overdue.PAY = 14] PAY, [overdue.VO = 14] VO, [overdue.AUTH = 14] AUTH, [overdue.SOR = 7] SOR, [overdue.NCR = 14] NCR, [overdue.EI = 7] EI, [overdue.MOM = 7] MOM days.")),
+                // 🧭 How Nova reads what you type in the search box (used on the PC and the phone, never sent to the AI).
+                S("intent", "🧭", "What I mean", "IN", new[] { "local" },
+                    R("IN-01", "Unsorted", "Show the emails not sorted into a project when I say [intent.unsorted = unsorted, not sorted, no project, without project, unassigned]."),
+                    R("IN-02", "Unread", "Show unread emails when I say [intent.unread = unread, not read, new emails]."),
+                    R("IN-03", "Waiting for me", "Show emails waiting for my reply when I say [intent.waiting = waiting for my reply, need my reply, needs my reply, not answered, unanswered, to reply, I didn't answer]."),
+                    R("IN-04", "No answer to me", "Show my emails nobody answered when I say [intent.noanswer = no answer to me, no reply to me, they didn't reply, nobody replied, follow up]."),
+                    R("IN-05", "Logs", "A type (WIR, EI, MOM, RFI, letters, meetings…) with a list word (which, list, log, register, open, overdue, pending, this month…) opens the 📋 Submittal log with those filters; [intent.pending = pending, outstanding, still open, not closed, waiting] means Open."),
+                    R("IN-06", "Windows", "Open a window by name: [intent.brain = open the brain, nova brain, my rules] · [intent.history = search history, my searches, my history] · [intent.settings = open settings, settings] · [intent.log = submittal log, open the log]."),
+                    R("IN-07", "Follow-ups", "After a log, “only the overdue ones”, “now tower 2”, “level 5 to 8”, “export it”, “this month” change that log instead of starting a new search.")),
                 S("projects", "🏗", "Projects & document numbers", "PJ", new[] { "all" },
                     R("PJ-01", "SLV", "SLV = Sea La Vie, uses Thinkproject. Numbers like SLV-ZUC-<discipline>-<type>-<number>_RevNN (ZUC = Züblin)."),
                     R("PJ-02", "RS5", "RS5 = Outlook only (no Thinkproject). Numbers like RS5-C7-ACC-<discipline>-<type>-<number>-RNN (ACC = contractor)."),

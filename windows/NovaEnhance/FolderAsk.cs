@@ -154,7 +154,7 @@ class ConfirmSend : NovaForm
     {
         Text = "Nova Enhance";
         Width = 600; Height = 330;
-        FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false; MinimizeBox = false; TopMost = true;
+        FormBorderStyle = FormBorderStyle.Sizable; MaximizeBox = false; MinimizeBox = false; TopMost = true;
         var s = new Stack();
         Controls.Add(s);
         s.Add(Th.L(title, 12.5f, Th.Text, true));

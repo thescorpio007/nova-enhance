@@ -181,6 +181,40 @@ class NovaForm : Form
 
     protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); Th.DarkTitle(this); Th.SetIcons(this); }
 
+    // ⤢ Size and place remembered per window (only for windows you can resize; not while it is a side panel).
+    string BoundsKey => GetType() == typeof(NovaForm) ? "" : "win_bounds_" + GetType().Name;
+
+    protected override void OnLoad(EventArgs e)
+    {
+        base.OnLoad(e);
+        try
+        {
+            if (BoundsKey.Length == 0 || FormBorderStyle != FormBorderStyle.Sizable || sideOn) return;
+            var v = Store.Str(BoundsKey, "").Split(',');
+            if (v.Length < 4 || !v.Take(4).All(x => int.TryParse(x, out _))) return;
+            var r = new Rectangle(int.Parse(v[0]), int.Parse(v[1]), int.Parse(v[2]), int.Parse(v[3]));
+            if (r.Width < MinimumSize.Width || r.Height < MinimumSize.Height || r.Width < 300 || r.Height < 200) return;
+            if (!Screen.AllScreens.Any(s => s.WorkingArea.IntersectsWith(r) && Rectangle.Intersect(s.WorkingArea, r).Width > 200)) return;
+            StartPosition = FormStartPosition.Manual;
+            Bounds = r;
+            if (v.Length > 4 && v[4] == "max") WindowState = FormWindowState.Maximized;
+        }
+        catch { }
+    }
+
+    void SaveBounds()
+    {
+        try
+        {
+            if (BoundsKey.Length == 0 || FormBorderStyle != FormBorderStyle.Sizable || sideOn || placing || WindowState == FormWindowState.Minimized) return;
+            var r = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+            Store.Set(BoundsKey, $"{r.X},{r.Y},{r.Width},{r.Height}{(WindowState == FormWindowState.Maximized ? ",max" : "")}");
+        }
+        catch { }
+    }
+
+    protected override void OnFormClosing(FormClosingEventArgs e) { SaveBounds(); base.OnFormClosing(e); }
+
     // ------------------------------------------------------------------ ⇥ Side window (like Copilot) or ⇤ floating window
 
     string sideKey;
@@ -244,6 +278,7 @@ class NovaForm : Form
     {
         base.OnResizeEnd(e);
         if (sideOn && !placing) { SideWidth = Width; AppBar.Dock(this, SideWidth, ref placing); }
+        SaveBounds();
     }
 
     protected override void WndProc(ref Message m)
@@ -327,7 +362,36 @@ class Stack : FlowLayoutPanel
     protected override void OnResize(EventArgs e) { base.OnResize(e); FitAll(); }
     protected override void OnControlAdded(ControlEventArgs e) { base.OnControlAdded(e); Fit(e.Control); }
 
-    public void FitAll() { SuspendLayout(); foreach (Control c in Controls) Fit(c); ResumeLayout(); }
+    public void FitAll() { SuspendLayout(); foreach (Control c in Controls) Fit(c); Grow(); ResumeLayout(); }
+
+    // ⇕ Lists, tables and big text boxes take the free height of the window (down to the bottom edge); their first height is the least they keep.
+    readonly Dictionary<Control, int> baseH = new();
+    bool growing;
+    static bool Tall(Control c) => c.Visible && (c is ListView or DataGridView or ListBox or TreeView || (c is TextBoxBase t && t.Multiline && c.Height >= 150));
+
+    public void Grow()
+    {
+        if (growing || ClientSize.Height < 100) return;
+        growing = true;
+        try
+        {
+            var tall = Controls.Cast<Control>().Where(Tall).ToList();
+            if (tall.Count == 0) return;
+            foreach (var c in tall) if (!baseH.ContainsKey(c)) { baseH[c] = c.Height; c.Disposed += (_, _) => baseH.Remove(c); }
+            int used = Padding.Vertical + 6;
+            foreach (Control c in Controls) if (c.Visible) used += (Tall(c) ? baseH[c] : c.Height) + c.Margin.Vertical;
+            var extra = ClientSize.Height - used;
+            var each = extra > 0 ? extra / tall.Count : 0;
+            foreach (var c in tall)
+            {
+                var h = baseH[c] + each;
+                if (c.Height != h) c.Height = h;
+                var w = Avail - c.Margin.Horizontal;
+                if (w > 200 && c.Width != w) c.Width = w;
+            }
+        }
+        finally { growing = false; }
+    }
 
     void Fit(Control c)
     {
@@ -366,7 +430,7 @@ static class Prompt
 
     public static string Ask(IWin32Window owner, string title, string label, string value = "", bool password = false)
     {
-        using var f = new NovaForm { Text = title, Width = 460, Height = 210, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, TopMost = true };
+        using var f = new NovaForm { Text = title, Width = 460, Height = 210, FormBorderStyle = FormBorderStyle.Sizable, MaximizeBox = false, MinimizeBox = false, TopMost = true };
         var s = new Stack();
         f.Controls.Add(s);
         s.Add(Th.Wrap(label, 10, Th.Text));

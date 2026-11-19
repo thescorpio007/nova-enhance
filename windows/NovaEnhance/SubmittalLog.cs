@@ -15,141 +15,374 @@ static class SubmittalLog
     public class Options
     {
         public List<string> Projects = new();   // SLV, RS5 … (empty = all)
-        public List<string> Types = new();      // WIR, MIR … (empty = the brain's list)
+        public List<string> Types = new();      // WIR, EI, MOM … (empty = every type the brain enables)
         public DateTime From = DateTime.Today.AddDays(-30), To = DateTime.Today.AddDays(1).AddSeconds(-1);
         public string Tower = "", Zone = "", Discipline = "", Status = "";
         public int LevelFrom = -99, LevelTo = 999;
+        public Options Copy() { var o = (Options)MemberwiseClone(); o.Projects = new(Projects); o.Types = new(Types); return o; }
     }
 
     public class Item
     {
         public string Project = "", Via = "", Type = "", No = "", Rev = "", Disc = "", Title = "", Tower = "", Zone = "", Level = "", Apt = "";
         public DateTime? Submitted, Deadline, Reply;
-        public string By = "", Code = "", Status = "", Why = "", Check = "";
-        public int RevNum, Emails;
+        public string By = "", Code = "", Status = "", Why = "", Check = "", Ref = "", Series = "";
+        public int RevNum, Emails, Num = -1;
         public MailHit Sub, Rep;
+        public List<MailHit> Mails = new();
         public int Days => Submitted is { } s ? (int)((Reply ?? DateTime.Now) - s).TotalDays : 0;
         public int? LevelNum;
     }
 
-    public class Result { public List<Item> Items = new(); public int Mails; public Options Opt; public double Seconds; }
+    public class Result { public List<Item> Items = new(); public int Mails; public Options Opt; public double Seconds; public List<string> Gaps = new(); }
 
-    static readonly Regex Prefix = new(@"^\s*((re|aw|antw|fw|fwd|tr)\s*:\s*)+", RegexOptions.IgnoreCase);
+    /// <summary>
+    /// One kind of document. Find: "code" = its code in the document number (…-WIR-00123), "words" = words in the subject.
+    /// Close: code (MZA reply with code / approval completed / signed file) · reply (the other party replies) · anyreply (anyone replies) ·
+    /// contractor (the contractor acknowledges) · mzaconfirm (MZA confirms closure after the contractor's reply) · final (MOM: final minutes issued) · received.
+    /// </summary>
+    public record TypeDef(string Code, string Label, string Find, string Close, int Overdue);
 
-    static Regex NumRx(IEnumerable<string> types) => new(
-        @"\b([A-Z0-9]{2,6}(?:-[A-Z0-9]{1,6}){1,4}?-(" + string.Join("|", types.Select(Regex.Escape)) + @")-(\d{2,6}))(?:[_\- ]*(?:Rev|R)\s?(\d{1,2}))?",
-        RegexOptions.IgnoreCase);
+    public static readonly TypeDef[] Types =
+    {
+        new("WIR", "Work inspection request", "code", "code", 2), new("MIR", "Material inspection request", "code", "code", 2),
+        new("MAR", "Material approval request", "code", "code", 14), new("MSS", "Method statement", "code", "code", 14),
+        new("SDS", "Shop drawing", "code", "code", 14), new("SSM", "Sample", "code", "code", 14), new("TSR", "Test report", "code", "code", 14),
+        new("PQS", "Prequalification", "code", "code", 14), new("RFI", "Request for information", "code", "code", 7),
+        new("RPT", "Report", "code", "code", 14), new("HSE", "HSE submittal", "code", "code", 14), new("CAL", "Calculation", "code", "code", 14),
+        new("RTS", "Request to start", "code", "code", 7), new("HOV", "Handover", "code", "code", 14), new("PLN", "Planning", "code", "code", 14),
+        new("LTR", "Letter", "code", "reply", 14), new("PAY", "Payment application", "words", "reply", 14), new("DSR", "Daily report", "code", "received", 0),
+        new("VO", "Variation", "words", "reply", 14), new("AUTH", "Authority submission", "words", "anyreply", 14),
+        new("SOR", "Site observation report (MZA)", "code", "mzaconfirm", 7), new("NCR", "Non-conformance report (MZA)", "code", "mzaconfirm", 14),
+        new("EI", "Engineer's instruction (MZA)", "words", "contractor", 7), new("MOM", "Minutes of meeting", "words", "final", 7)
+    };
+    public static TypeDef Def(string code) => Types.FirstOrDefault(t => t.Code == code);
+    static readonly Dictionary<string, string> Alias = new() { ["SHD"] = "SDS", ["REP"] = "RPT", ["VOR"] = "VO", ["PAYMENT"] = "PAY", ["AUTHORITY"] = "AUTH" };
+
+    static readonly Regex ReplyRx = new(@"^\s*((re|aw|antw)\s*:\s*|\[external\]\s*)+", RegexOptions.IgnoreCase);
+    static readonly Regex FwdRx = new(@"^\s*((fw|fwd|tr)\s*:|automatic reply|auto(matic)?[- ]reply|out of office)", RegexOptions.IgnoreCase);
+    static readonly Regex Strip = new(@"^\s*((re|aw|antw|fw|fwd|tr)\s*:\s*|\[external\]\s*|\[ext\]\s*)+", RegexOptions.IgnoreCase);
+    static readonly Regex EiRx = new(@"Engineer\W{0,2}s?\s+Instruction|\bEI\s*No\.?\s*\d+", RegexOptions.IgnoreCase);
+    static readonly Regex EiNum = new(@"(?:Instruction|\bEI)\s*(?:no\.?|number|#)?\s*0*(\d{1,4})\b", RegexOptions.IgnoreCase);
+    static readonly Regex DetRx = new(@"Engineer\W{0,2}s?\s+Determination", RegexOptions.IgnoreCase);
+    static readonly Regex MomRx = new(@"\bMoM\b|Minutes of|Meeting\s*No\.?\s*\d+|Kick[\s-]?Off\s+Meeting|-MOM-", RegexOptions.IgnoreCase);
+    static readonly Regex PayRx = new(@"payment|\bIPC\b|\bIPA\b|statement of account|interim payment", RegexOptions.IgnoreCase);
+    static readonly Regex VoRx = new(@"\bvariations?\b|\bVOR?\b|\bV\.O\.", RegexOptions.IgnoreCase);
+    static readonly Regex AuthRx = new(@"\bADCD\b|civil defen[cs]e|\bADM\b|municipality|\bDMT\b|\bAldar\b|\bMiral\b|\bNOC\b|\bADDC\b|\bADQCC\b", RegexOptions.IgnoreCase);
+    static readonly Regex LetterRef = new(@"\b(?:[A-Z]{2,5}-){2,4}\d{2}-\d{3,4}-L-\d{4}-\d{2,4}\b|\b[A-Z0-9]{2,6}-[A-Z]{2,5}-PM-LTR-\d{3,6}\b");
+
+    static Regex NumRx(IEnumerable<string> codes) => new(
+        @"(?<![A-Za-z0-9])([A-Z][A-Z0-9]{1,5}(?:-[A-Z0-9]{1,6}){1,4}?-(" + string.Join("|", codes.Select(Regex.Escape)) + @")-(\d{2,6}))(?:[_\- ]*(?i:Rev|R)\.?\s?(\d{1,2}))?");
+
+    /// <summary>The types switched on: [log.all = …] in the brain (else every built-in type).</summary>
+    public static List<string> Enabled(JsonObject brain = null) =>
+        Brain.ListOf("log.all", string.Join(", ", Types.Select(t => t.Code)), brain).Select(x => Alias.TryGetValue(x.ToUpperInvariant(), out var a) ? a : x.ToUpperInvariant()).Distinct().ToList();
+
+    static string Norm(string subj) => Regex.Replace(Strip.Replace(subj ?? "", "").ToLowerInvariant(), @"[^\p{L}\p{N}]+", " ").Trim();
 
     public static Result Run(Options o, JsonObject brain = null, CancellationToken ct = default)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         brain ??= Brain.Snapshot();
-        var types = (o.Types.Count > 0 ? o.Types : Brain.ListOf("log.types", "WIR, MIR, MAR, PQS, RFI, SDS", brain)).Select(t => t.ToUpperInvariant()).ToList();
+        var want = (o.Types.Count > 0 ? o.Types.Select(t => Alias.TryGetValue(t.ToUpperInvariant(), out var a) ? a : t.ToUpperInvariant()).ToList() : Enabled(brain)).ToHashSet();
         var mza = Brain.ListOf("mza.match", "MZ ARCHITECTS, mz-architects.com", brain);
         var closedFiles = Brain.ListOf("closed.files", "signed, -C1, -C2, -C3, -C4, reply", brain);
-        var rx = NumRx(types);
-        // Replies come after the submission: read up to today.
-        var mails = MailIndex.Submittals(types, o.From.AddDays(-3), DateTime.Now.AddDays(1));
+        var codeTypes = Types.Where(t => t.Find == "code" && want.Contains(t.Code)).Select(t => t.Code).ToList();
+        if (want.Contains("HSE") && !codeTypes.Contains("GEN")) codeTypes.Add("GEN");      // HSE comes as …-HSE-GEN-…
+        if (want.Contains("PAY") && !codeTypes.Contains("LTR")) codeTypes.Add("LTR");      // payment applications come as letters
+        var rx = codeTypes.Count > 0 ? NumRx(codeTypes) : null;
+        var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "SLV", "RS5" };
+        try { foreach (var k in MailProjects.Counts.Keys) if (k.Length > 0) known.Add(k); } catch { }
+        string ProjOf(MailHit h) { try { var p = MailProjects.Of(h.Id); return string.IsNullOrEmpty(p) ? "" : p; } catch { return ""; } }
+
+        // Every email that can belong to a log: document codes in the subject, and the words of EI · MOM · VO · Authority · Payment.
+        var subj = codeTypes.Select(c => "%-" + c + "-%").ToList();
+        if (want.Contains("EI")) subj.AddRange(new[] { "%Engineer%Instruction%", "%EI No%", "%Engineer%Determination%" });
+        if (want.Contains("MOM")) subj.AddRange(new[] { "%Minutes%", "%MOM%", "%Meeting No%", "%Kick%Off%" });
+        if (want.Contains("VO")) subj.AddRange(new[] { "%Variation%", "% VO %", "% VO-%", "%VOR%", "%V.O.%" });
+        if (want.Contains("AUTH")) subj.AddRange(new[] { "%ADCD%", "%Civil Defen%", "%ADM %", "%Municipality%", "%DMT%", "%Aldar%", "%Miral%", "%NOC%", "%ADDC%" });
+        if (want.Contains("PAY")) subj.AddRange(new[] { "%Payment%", "%IPC%", "%IPA%", "%Statement of Account%" });
+        var atts = want.Contains("MOM") ? new List<string> { "%-MOM-%", "%MOM%" } : new List<string>();
+        var mails = MailIndex.SubmittalsLike(subj, atts, o.From.AddDays(-3), DateTime.Now.AddDays(1));
         ct.ThrowIfCancellationRequested();
 
         bool IsMza(MailHit h) => h.Sent || mza.Any(m => (h.FromName ?? "").Contains(m, StringComparison.OrdinalIgnoreCase) || (h.FromAddr ?? "").Contains(m, StringComparison.OrdinalIgnoreCase));
 
-        var docs = new Dictionary<string, Dictionary<int, Item>>(StringComparer.OrdinalIgnoreCase);
+        var groups = new Dictionary<string, Item>(StringComparer.OrdinalIgnoreCase);
+        var determ = new Dictionary<string, MailHit>();
+        Item G(string key, Func<Item> make) { if (!groups.TryGetValue(key, out var it)) groups[key] = it = make(); return it; }
+
         foreach (var h in mails.OrderBy(h => h.Date))
         {
-            var subj = h.Subject ?? "";
-            var m = rx.Match(subj);
-            if (!m.Success) continue;
-            var no = m.Groups[1].Value.ToUpperInvariant();
-            var type = m.Groups[2].Value.ToUpperInvariant();
-            int rev = int.TryParse(m.Groups[4].Value, out var rv) ? rv : 0;
-            var proj = no.Split('-')[0];
-            if (o.Projects.Count > 0 && !o.Projects.Any(p => p.Equals(proj, StringComparison.OrdinalIgnoreCase))) continue;
-            if (!docs.TryGetValue(no, out var revs)) docs[no] = revs = new();
-            if (!revs.TryGetValue(rev, out var it))
-                revs[rev] = it = new Item { No = no, Type = type, Project = proj, RevNum = rev, Disc = no.Split('-').Length >= 4 ? no.Split('-')[^3] : "" };
-            it.Emails++;
-            var isReply = Regex.IsMatch(subj, @"^\s*(re|aw|antw)\s*:", RegexOptions.IgnoreCase);
-            var isFwd = Regex.IsMatch(subj, @"^\s*(fw|fwd|tr)\s*:", RegexOptions.IgnoreCase) || Regex.IsMatch(subj, @"^\s*(automatic reply|auto|out of office)", RegexOptions.IgnoreCase);
-            var thinkproject = (h.FromAddr ?? "").Contains("thinkproject", StringComparison.OrdinalIgnoreCase) || (h.Body ?? "").Contains("thinkproject", StringComparison.OrdinalIgnoreCase);
-            if (thinkproject) it.Via = "Thinkproject"; else if (it.Via.Length == 0) it.Via = "Outlook";
-            var title = TitleOf(subj, m);
-            if (it.Title.Length == 0 || (!isReply && !isFwd)) it.Title = title.Length > 0 ? title : it.Title;
-
-            if (!isReply && !isFwd && !IsMza(h))
+            ct.ThrowIfCancellationRequested();
+            var s = h.Subject ?? "";
+            var clean = Strip.Replace(s, "");
+            // 1 · Engineer's Instructions (MZA letters “Engineer’s Instruction no. 083 …”); a Determination joins its EI.
+            if (want.Contains("EI") && (EiRx.IsMatch(s) || DetRx.IsMatch(s)))
             {
-                if (it.Sub == null)
+                var n = EiNum.Match(s);
+                if (n.Success)
                 {
-                    it.Sub = h; it.Submitted = h.Date;
-                    if (thinkproject) { var (dl, created) = TpDates(h.Body); it.Deadline = dl; if (created != null && created < h.Date.Date.AddDays(1)) it.Submitted = h.Date; }
+                    var p = ProjFrom(s, known) is { Length: > 0 } pp ? pp : ProjOf(h);
+                    var num = int.Parse(n.Groups[1].Value);
+                    if (DetRx.IsMatch(s)) { determ.TryAdd(p + "|" + num, h); continue; }
+                    var it = G($"EI|{p}|{num}", () => new Item { Type = "EI", Project = p, Num = num, No = $"EI {num:000}", Via = "Letter" });
+                    it.Mails.Add(h);
+                    if (it.Title.Length == 0 || !ReplyRx.IsMatch(s)) it.Title = Regex.Replace(Regex.Replace(clean, @"^.*?(?:Instruction|EI)\s*(?:no\.?|#)?\s*0*\d{1,4}\s*[-–:]*\s*", "", RegexOptions.IgnoreCase), @"\s*//.*$", "").Trim();
+                    if (it.Ref.Length == 0 && LetterRef.Match(s) is { Success: true } lr) it.Ref = lr.Value;
+                    continue;
                 }
+            }
+            // 2 · Minutes of meetings (draft → final), kick-off meetings, any meeting record.
+            if (want.Contains("MOM") && (MomRx.IsMatch(s) || Regex.IsMatch(h.AttNames ?? "", @"-MOM-|\bMoM\b", RegexOptions.IgnoreCase)) && !(rx?.IsMatch(s) == true && !Regex.IsMatch(s, "-MOM-")))
+            {
+                var p = ProjFrom(s + " " + h.AttNames, known) is { Length: > 0 } pp ? pp : ProjOf(h);
+                var (series, num, held) = MomOf(clean, h.AttNames ?? "");
+                var key = num >= 0 ? $"MOM|{p}|{series}|{num}" : $"MOM|{p}|{Norm(Regex.Replace(clean, @"draft", "", RegexOptions.IgnoreCase))}";
+                var it = G(key, () => new Item { Type = "MOM", Project = p, Num = num, Series = series, No = num >= 0 ? $"MOM {num:000}" : "MOM", Via = "Meeting" });
+                it.Mails.Add(h);
+                if (it.Title.Length == 0 || (!ReplyRx.IsMatch(s) && !Regex.IsMatch(s, "draft", RegexOptions.IgnoreCase))) it.Title = series + (held.Length > 0 ? " · held " + held : "");
                 continue;
             }
-            if (isReply && IsMza(h))
+            // 3 · Document numbers: SLV-ZUC-CW-WIR-15280_Rev00, RS5-C7-ACC-AR-WIR-00409-R01, SLV-ZUC-HSE-GEN-00090 …
+            var m = rx?.Match(s);
+            if (m is { Success: true })
             {
-                var body = h.Body ?? "";
-                var atts = h.AttNames ?? "";
-                bool done;
-                if (thinkproject)
-                    done = Regex.IsMatch(body, @"Approval completed[\s\S]{0,600}?\byes\b", RegexOptions.IgnoreCase) || Regex.IsMatch(body, @"Final step", RegexOptions.IgnoreCase)
-                           || Regex.IsMatch(body + " " + atts, @"-C[1-5]\.pdf", RegexOptions.IgnoreCase);
-                else
-                    done = closedFiles.Any(f => atts.Contains(f, StringComparison.OrdinalIgnoreCase) || subj.Contains(f, StringComparison.OrdinalIgnoreCase)) || h.Sent || Regex.IsMatch(body, @"\bcode\s*[1-5]\b|approved|no objection|rejected|revise and resubmit", RegexOptions.IgnoreCase);
-                var code = CodeOf(body, atts, subj);
-                if (done && (it.Rep == null || h.Date < it.Rep.Date))
+                var no = m.Groups[1].Value.ToUpperInvariant();
+                var type = m.Groups[2].Value.ToUpperInvariant();
+                if (type == "GEN") { if (!no.Contains("-HSE-GEN-")) continue; type = "HSE"; }
+                if (type == "LTR" && PayRx.IsMatch(s)) type = "PAY";
+                if (!want.Contains(type)) goto words;
+                // A project code read wrong (“FSLV”, “LV”…) is put right from the known projects.
+                var proj = no.Split('-')[0];
+                if (!known.Contains(proj))
                 {
-                    it.Rep = h; it.Reply = h.Date; it.By = h.Sent ? "MZA (me)" : (h.FromName ?? "");
-                    if (code.Length > 0) it.Code = code;
+                    var k = known.FirstOrDefault(x => proj.EndsWith(x, StringComparison.OrdinalIgnoreCase) && x.Length >= 2);
+                    if (k != null) { no = k + no[proj.Length..]; proj = k; }
+                    else { var pj = ProjOf(h); if (pj.Length > 0) proj = pj; }
                 }
-                else if (!done && it.Rep == null && it.Status.Length == 0) it.Status = "Reviewing";
-                if (it.Code.Length == 0 && code.Length > 0 && done) it.Code = code;
+                int rev = int.TryParse(m.Groups[4].Value, out var rv) ? rv : 0;
+                var parts = no.Split('-');
+                var it = G($"{type}|{no}|{rev}", () => new Item { No = no, Type = type, Project = proj, RevNum = rev, Disc = parts.Length >= 4 ? parts[^3] : "" });
+                it.Mails.Add(h);
+                var title = TitleOf(s, m);
+                if (it.Title.Length == 0 || (!ReplyRx.IsMatch(s) && !FwdRx.IsMatch(s))) it.Title = title.Length > 0 ? title : it.Title;
+                continue;
+            }
+            words:
+            // 4 · Words only: payment applications, variations, authority submissions — one row per email thread.
+            foreach (var (code, wrx) in new[] { ("PAY", PayRx), ("VO", VoRx), ("AUTH", AuthRx) })
+            {
+                if (!want.Contains(code) || !wrx.IsMatch(s)) continue;
+                var p = ProjFrom(s, known) is { Length: > 0 } pp ? pp : ProjOf(h);
+                var key = $"{code}|{(string.IsNullOrEmpty(h.Conv) ? Norm(s) : Norm(s))}";
+                var it = G(key, () => new Item { Type = code, Project = p, No = code, Via = "Email" });
+                it.Mails.Add(h);
+                if (it.Title.Length == 0 || !ReplyRx.IsMatch(s)) it.Title = clean.Trim();
+                break;
             }
         }
+        foreach (var (k, d) in determ)
+            if (groups.TryGetValue("EI|" + k, out var ei)) ei.Why = $"Engineer’s Determination {d.Date:dd MMM yyyy}";
 
+        // ---------------------------------------------------------------- each document: submitted · replied · closed
         var res = new Result { Mails = mails.Count, Opt = o };
-        foreach (var (no, revs) in docs)
+        foreach (var it in groups.Values)
         {
-            var order = revs.Keys.OrderBy(x => x).ToList();
-            foreach (var rv in order)
+            var def = Def(it.Type) ?? Types[0];
+            var ms = it.Mails.OrderBy(x => x.Date).ToList();
+            it.Emails = ms.Count;
+            var thinkproject = ms.Any(x => (x.FromAddr ?? "").Contains("thinkproject", StringComparison.OrdinalIgnoreCase) || (x.Body ?? "").Contains("thinkproject", StringComparison.OrdinalIgnoreCase));
+            if (thinkproject) it.Via = "Thinkproject"; else if (it.Via.Length == 0) it.Via = "Outlook";
+            bool mzaIssues = def.Close is "mzaconfirm" or "contractor" || (def.Code is "LTR" or "VO" or "AUTH" or "MOM" && ms.FirstOrDefault(x => !ReplyRx.IsMatch(x.Subject ?? "") && !FwdRx.IsMatch(x.Subject ?? "")) is { } f0 && IsMza(f0));
+            // The submission (or the issue): the first email that is not a reply or a forward — from the contractor, or from MZA for what MZA issues.
+            it.Sub = ms.FirstOrDefault(x => !ReplyRx.IsMatch(x.Subject ?? "") && !FwdRx.IsMatch(x.Subject ?? "") && (mzaIssues || def.Close == "received" || def.Code is "AUTH" or "MOM" || !IsMza(x)))
+                     ?? (def.Code is "EI" or "MOM" or "AUTH" or "VO" or "PAY" or "LTR" ? ms.FirstOrDefault(x => !FwdRx.IsMatch(x.Subject ?? "")) : null);
+            it.Submitted = it.Sub?.Date;
+            if (thinkproject && it.Sub != null) it.Deadline = TpDates(it.Sub.Body).Item1;
+            var after = ms.Where(x => it.Sub == null || x.Date > it.Sub.Date).ToList();
+            string reviewing = "";
+            switch (def.Close)
             {
-                var it = revs[rv];
-                bool latest = rv == order[^1];
-                it.Rev = (it.Project.Equals("SLV", StringComparison.OrdinalIgnoreCase) || it.Via == "Thinkproject" ? "Rev" : "R") + rv.ToString("00");
-                (it.Tower, it.Zone, it.Level, it.Apt, it.LevelNum) = Place(it.Title);
-                if (it.Rep != null) it.Status = "Closed";
-                else if (it.Sub == null) it.Status = "?";
-                else
+                case "code":
+                    foreach (var x in after)
+                    {
+                        var s = x.Subject ?? ""; var body = x.Body ?? ""; var at = x.AttNames ?? "";
+                        bool fromMza = IsMza(x);
+                        bool withResponse = s.Contains("with MZA Response", StringComparison.OrdinalIgnoreCase);
+                        if (!fromMza && !withResponse) continue;
+                        bool done = withResponse || (thinkproject
+                            ? Regex.IsMatch(body, @"Approval completed[\s\S]{0,600}?\byes\b", RegexOptions.IgnoreCase) || Regex.IsMatch(body, @"Final step", RegexOptions.IgnoreCase) || Regex.IsMatch(body + " " + at, @"-C[1-5]\.pdf", RegexOptions.IgnoreCase)
+                            : closedFiles.Any(c => at.Contains(c, StringComparison.OrdinalIgnoreCase)) || Regex.IsMatch(s + " " + at, @"code\s*-?\s*[1-5]", RegexOptions.IgnoreCase) || (ReplyRx.IsMatch(s) && (x.Sent || Regex.IsMatch(body.Length > 1500 ? body[..1500] : body, @"\bcode\s*[1-5]\b|approved|no objection|rejected|revise and resubmit", RegexOptions.IgnoreCase))));
+                        var code = CodeOf(body, at, s);
+                        if (done) { Close(it, x, code); break; }
+                        if (ReplyRx.IsMatch(s) && fromMza) reviewing = "Reviewing";
+                    }
+                    break;
+                case "reply":
                 {
-                    var lim = Brain.Num("overdue." + it.Type, it.Type is "WIR" or "MIR" ? 2 : it.Type == "RFI" ? 7 : 14, brain);
-                    var due = it.Deadline ?? it.Submitted!.Value.AddDays(lim);
-                    it.Status = DateTime.Now > due ? "Overdue" : it.Status == "Reviewing" ? "Reviewing" : "Open";
-                    if (it.Deadline == null) it.Deadline = due;
+                    bool issuerMza = it.Sub != null && IsMza(it.Sub);
+                    var r = after.FirstOrDefault(x => IsMza(x) != issuerMza && !FwdRx.IsMatch(x.Subject ?? ""));
+                    if (r != null) Close(it, r, CodeOf(r.Body, r.AttNames, r.Subject));
+                    break;
                 }
-                if (!latest && it.Status is "Open" or "Overdue" or "Reviewing") it.Status = "Superseded";
-                var why = new List<string>();
-                if (it.Sub != null) why.Add($"submitted {it.Submitted:dd MMM HH:mm} by {it.Sub.FromName} ({it.Via})");
-                if (it.Rep != null) why.Add($"closed: MZA reply {it.Reply:dd MMM HH:mm} by {it.By}" + (it.Code.Length > 0 ? " · " + it.Code : ""));
-                else if (it.Status == "Superseded") why.Add("a later revision exists");
-                else if (it.Sub != null) why.Add($"no MZA reply yet · due {it.Deadline:dd MMM}");
-                it.Why = string.Join(" · ", why);
-                var chk = new List<string>();
-                if (it.Sub == null) chk.Add("its submission email is not in the index for this period (only a reply or forward was found)");
-                if (it.Type is "WIR" or "MIR" && it.Tower.Length + it.Zone.Length + it.Level.Length == 0) chk.Add("no tower / zone / level in the title");
-                it.Check = string.Join("; ", chk);
-                // Your filters (the period is the submission date; items without submission are kept by their reply date).
-                var when = it.Submitted ?? it.Reply;
-                if (when == null || when < o.From || when > o.To) continue;
-                if (o.Tower.Length > 0 && !it.Tower.Equals(o.Tower, StringComparison.OrdinalIgnoreCase) && !(o.Tower == "TH" && it.Tower.StartsWith("TH"))) continue;
-                if (o.Zone.Length > 0 && !it.Zone.StartsWith(o.Zone, StringComparison.OrdinalIgnoreCase)) continue;
-                if (o.Discipline.Length > 0 && !it.Disc.Equals(o.Discipline, StringComparison.OrdinalIgnoreCase)) continue;
-                if ((o.LevelFrom > -99 || o.LevelTo < 999) && (it.LevelNum == null || it.LevelNum < o.LevelFrom || it.LevelNum > o.LevelTo)) continue;
-                if (o.Status.Length > 0 && !(o.Status == "Code3/4" ? it.Code is "Code 3" or "Code 4" : it.Status.Equals(o.Status, StringComparison.OrdinalIgnoreCase))) continue;
-                res.Items.Add(it);
+                case "anyreply":
+                {
+                    var r = after.FirstOrDefault(x => !FwdRx.IsMatch(x.Subject ?? "") && (it.Sub == null || !string.Equals(x.FromAddr, it.Sub.FromAddr, StringComparison.OrdinalIgnoreCase)));
+                    if (r != null) Close(it, r, "");
+                    break;
+                }
+                case "contractor":
+                {
+                    var r = after.FirstOrDefault(x => !IsMza(x) && !FwdRx.IsMatch(x.Subject ?? ""));
+                    if (r != null) Close(it, r, "");
+                    break;
+                }
+                case "mzaconfirm":
+                {
+                    var c = after.FirstOrDefault(x => !IsMza(x) && !FwdRx.IsMatch(x.Subject ?? ""));
+                    if (c != null)
+                    {
+                        var conf = after.FirstOrDefault(x => x.Date > c.Date && IsMza(x) && Regex.IsMatch((x.Subject ?? "") + " " + (x.AttNames ?? "") + " " + First(x.Body, 1200), @"\bclosed?\b|closure|accepted|verified|rectified", RegexOptions.IgnoreCase));
+                        if (conf != null) Close(it, conf, "");
+                        else { reviewing = "Replied"; it.Why = $"contractor replied {c.Date:dd MMM HH:mm} · waiting for MZA to close it"; }
+                    }
+                    break;
+                }
+                case "final":
+                {
+                    var fin = ms.FirstOrDefault(x => !Regex.IsMatch((x.Subject ?? "") + " " + (x.AttNames ?? ""), @"draft", RegexOptions.IgnoreCase) && !ReplyRx.IsMatch(x.Subject ?? ""));
+                    it.Sub ??= ms.FirstOrDefault();
+                    it.Submitted = it.Sub?.Date;
+                    if (fin != null) { it.Rep = fin; it.Reply = fin.Date; it.By = fin.Sent ? "MZA (me)" : fin.FromName ?? ""; }
+                    else reviewing = "Draft";
+                    break;
+                }
             }
+            if (it.Num >= 0 && it.Type == "MOM" && it.Series.Length > 0) it.No = $"MOM {it.Num:000}";
+            (it.Tower, it.Zone, it.Level, it.Apt, it.LevelNum) = Place(it.Title);
+            if (def.Close == "received") it.Status = "Received";
+            else if (it.Rep != null) it.Status = "Closed";
+            else if (it.Sub == null) it.Status = "?";
+            else
+            {
+                var lim = Brain.Num("overdue." + it.Type, def.Overdue, brain);
+                var due = it.Deadline ?? it.Submitted!.Value.AddDays(lim);
+                it.Status = lim > 0 && DateTime.Now > due ? "Overdue" : reviewing.Length > 0 ? reviewing : "Open";
+                if (reviewing == "Draft" && it.Status == "Overdue") it.Status = "Draft";
+                it.Deadline ??= due;
+            }
+            var why = new List<string>();
+            if (it.Sub != null) why.Add($"{(def.Close is "mzaconfirm" or "contractor" ? "issued" : "submitted")} {it.Submitted:dd MMM HH:mm} by {it.Sub.FromName} ({it.Via})");
+            if (it.Ref.Length > 0) why.Add("ref " + it.Ref);
+            if (it.Rep != null) why.Add($"{(def.Close == "final" ? "final minutes" : "closed")} {it.Reply:dd MMM HH:mm} by {it.By}" + (it.Code.Length > 0 ? " · " + it.Code : ""));
+            else if (it.Status == "Draft") why.Add("draft only — final minutes not issued yet");
+            else if (it.Why.Length == 0 && it.Sub != null && def.Close != "received") why.Add($"no {(def.Close switch { "contractor" => "contractor acknowledgement", "anyreply" => "reply", _ => "MZA reply" })} yet · due {it.Deadline:dd MMM}");
+            if (it.Why.Length > 0) why.Add(it.Why);
+            it.Why = string.Join(" · ", why);
+        }
+        // Revisions: an older revision still waiting is superseded by the newer one.
+        foreach (var g in groups.Values.Where(i => Def(i.Type)?.Find == "code").GroupBy(i => i.Type + "|" + i.No))
+        {
+            var top = g.Max(i => i.RevNum);
+            foreach (var it in g)
+            {
+                it.Rev = (it.Via == "Thinkproject" || it.Project.Equals("SLV", StringComparison.OrdinalIgnoreCase) ? "Rev" : "R") + it.RevNum.ToString("00");
+                if (it.RevNum < top && it.Status is "Open" or "Overdue" or "Reviewing") { it.Status = "Superseded"; it.Why += " · a later revision exists"; }
+            }
+        }
+        // Registers: a missing EI or meeting number in the sequence.
+        foreach (var g in groups.Values.Where(i => i.Num >= 0 && i.Type is "EI" or "MOM").GroupBy(i => i.Type + "|" + i.Project + "|" + i.Series))
+        {
+            var nums = g.Select(i => i.Num).Distinct().OrderBy(x => x).ToList();
+            if (nums.Count < 2) continue;
+            var miss = Enumerable.Range(nums[0], nums[^1] - nums[0] + 1).Except(nums).Take(20).ToList();
+            var lab = g.First().Type == "EI" ? $"{g.First().Project} EI" : $"{g.First().Project} {g.First().Series}";
+            if (miss.Count > 0) res.Gaps.Add($"{lab}: no email found for no. {string.Join(", ", miss)} (between {nums[0]} and {nums[^1]})");
+        }
+        foreach (var it in groups.Values)
+        {
+            var chk = new List<string>();
+            if (it.Sub == null) chk.Add("its first email is not in the index for this period (only a reply or forward was found)");
+            if (it.Type is "WIR" or "MIR" && it.Tower.Length + it.Zone.Length + it.Level.Length == 0) chk.Add("no tower / zone / level in the title");
+            if (it.Project.Length == 0) chk.Add("project not recognised");
+            it.Check = string.Join("; ", chk);
+            // Your filters (the period is the submission date; items without submission are kept by their reply date).
+            var when = it.Submitted ?? it.Reply;
+            if (when == null || when < o.From || when > o.To) continue;
+            if (o.Projects.Count > 0 && !o.Projects.Any(p => p.Equals(it.Project, StringComparison.OrdinalIgnoreCase))) continue;
+            if (o.Tower.Length > 0 && !it.Tower.Equals(o.Tower, StringComparison.OrdinalIgnoreCase) && !(o.Tower == "TH" && it.Tower.StartsWith("TH"))) continue;
+            if (o.Zone.Length > 0 && !it.Zone.StartsWith(o.Zone, StringComparison.OrdinalIgnoreCase)) continue;
+            if (o.Discipline.Length > 0 && !it.Disc.Equals(o.Discipline, StringComparison.OrdinalIgnoreCase)) continue;
+            if ((o.LevelFrom > -99 || o.LevelTo < 999) && (it.LevelNum == null || it.LevelNum < o.LevelFrom || it.LevelNum > o.LevelTo)) continue;
+            if (o.Status.Length > 0 && !(o.Status == "Code3/4" ? it.Code is "Code 3" or "Code 4"
+                : o.Status == "Open" ? it.Status is "Open" or "Reviewing" or "Replied" or "Draft" or "Overdue"
+                : it.Status.Equals(o.Status, StringComparison.OrdinalIgnoreCase))) continue;
+            res.Items.Add(it);
         }
         res.Items = res.Items.OrderByDescending(i => i.Submitted ?? i.Reply).ToList();
         res.Seconds = sw.Elapsed.TotalSeconds;
         return res;
+    }
+
+    static void Close(Item it, MailHit x, string code)
+    {
+        it.Rep = x; it.Reply = x.Date; it.By = x.Sent ? "MZA (me)" : (x.FromName ?? "");
+        if (!string.IsNullOrEmpty(code)) it.Code = code;
+    }
+
+    static string First(string s, int n) => string.IsNullOrEmpty(s) ? "" : s.Length > n ? s[..n] : s;
+
+    /// <summary>The project named in a subject: a document number (SLV-…, RS5-…) or the project's name.</summary>
+    static string ProjFrom(string s, HashSet<string> known)
+    {
+        foreach (Match m in Regex.Matches(s ?? "", @"(?<![A-Za-z0-9])([A-Z][A-Z0-9]{1,6})-[A-Z0-9]"))
+            if (known.Contains(m.Groups[1].Value)) return m.Groups[1].Value.ToUpperInvariant();
+        if (Regex.IsMatch(s ?? "", @"Sea\s*La\s*Vie|\bSLV\b", RegexOptions.IgnoreCase)) return "SLV";
+        if (Regex.IsMatch(s ?? "", @"\bRS5\b", RegexOptions.IgnoreCase)) return "RS5";
+        foreach (var k in known) if (k.Length >= 3 && Regex.IsMatch(s ?? "", $@"\b{Regex.Escape(k)}\b", RegexOptions.IgnoreCase)) return k.ToUpperInvariant();
+        return "";
+    }
+
+    /// <summary>A meeting: its series (“Sea La Vie · Progress”, “Weekly Progress”, “QA/QC”, “Kick-off”…), number and the day it was held.</summary>
+    static (string Series, int Num, string Held) MomOf(string s, string atts)
+    {
+        string held = "";
+        var hm = Regex.Match(s, @"held on\s*(\d{1,2}[-\s][A-Za-z]{3,9}[-\s]\d{4})", RegexOptions.IgnoreCase);
+        if (hm.Success) held = hm.Groups[1].Value;
+        else if (Regex.Match(s, @"\b(\d{2}-\d{2}-\d{4})\b") is { Success: true } dm) held = dm.Groups[1].Value;
+        int num = -1; string series = "";
+        var a = Regex.Match(s, @"(?:^|\|)\s*([^|]*?)\s*\|?\s*([A-Za-z/ &]*?)\s*Meeting\s*No\.?\s*0*(\d{1,4})", RegexOptions.IgnoreCase);
+        var b = Regex.Match(s, @"-MOM-0*(\d{1,4})", RegexOptions.IgnoreCase);
+        var c = Regex.Match(s, @"\bMoM\s*(?:no\.?|#)\s*0*(\d{1,4})", RegexOptions.IgnoreCase);
+        var k = Regex.Match(s, @"(.*?)\|?\s*Kick[\s-]?Off\s+Meeting", RegexOptions.IgnoreCase);
+        if (b.Success)
+        {
+            num = int.Parse(b.Groups[1].Value);
+            var w = Regex.Match(s, @"Minutes of\s+(.+?)\s+Meeting", RegexOptions.IgnoreCase);
+            series = w.Success ? w.Groups[1].Value.Trim() : "Weekly Progress";
+        }
+        else if (a.Success)
+        {
+            num = int.Parse(a.Groups[3].Value);
+            var where = a.Groups[1].Value.Trim().Trim('|').Trim();
+            var kind = a.Groups[2].Value.Trim();
+            series = (where.Length > 0 && where.Length < 60 ? where + " · " : "") + (kind.Length > 0 ? kind : "Meeting");
+        }
+        else if (c.Success)
+        {
+            num = int.Parse(c.Groups[1].Value);
+            var w = Regex.Match(s, @"\|\s*([^|]*?)\s*(?:DRAFT\s*)?MoM", RegexOptions.IgnoreCase);
+            series = w.Success ? w.Groups[1].Value.Trim() : "Meeting";
+        }
+        else if (k.Success) series = (k.Groups[1].Value.Trim().Trim('|').Trim() is { Length: > 0 and < 70 } kw ? kw + " · " : "") + "Kick-off";
+        else
+        {
+            var w = Regex.Split(s, @"\|").Select(x => x.Trim()).Where(x => x.Length > 0 && !Regex.IsMatch(x, @"draft|mom|minutes", RegexOptions.IgnoreCase)).FirstOrDefault();
+            series = w ?? "Meeting";
+        }
+        series = Regex.Replace(series, @"\s{2,}", " ").Trim(' ', '-', '·');
+        return (series.Length > 0 ? series : "Meeting", num, held);
     }
 
     static string TitleOf(string subj, Match m)
@@ -225,7 +458,7 @@ static class SubmittalLog
         ["tower"] = i.Tower, ["zone"] = i.Zone, ["level"] = i.Level, ["apt"] = i.Apt,
         ["sub"] = i.Submitted?.ToString("dd MMM yyyy HH:mm") ?? "", ["due"] = i.Deadline?.ToString("dd MMM yyyy") ?? "", ["reply"] = i.Reply?.ToString("dd MMM yyyy HH:mm") ?? "",
         ["by"] = hide != null && i.By.Length > 0 ? hide.Hide(i.By) : i.By, ["code"] = i.Code, ["days"] = i.Submitted != null ? i.Days : null, ["status"] = i.Status,
-        ["why"] = hide != null ? hide.Hide(i.Why) : i.Why, ["check"] = i.Check,
+        ["why"] = hide != null ? hide.Hide(i.Why) : i.Why, ["check"] = i.Check, ["series"] = i.Series, ["ref"] = i.Ref, ["label"] = Def(i.Type)?.Label ?? i.Type,
         ["entry"] = (i.Rep ?? i.Sub)?.Entry ?? "", ["store"] = (i.Rep ?? i.Sub)?.StoreId ?? "", ["subEntry"] = i.Sub?.Entry ?? "", ["subStore"] = i.Sub?.StoreId ?? ""
     };
 
@@ -234,10 +467,10 @@ static class SubmittalLog
         var closed = r.Items.Where(i => i.Submitted != null && i.Reply != null).ToList();
         return new JsonObject
         {
-            ["found"] = r.Items.Count, ["closed"] = r.Items.Count(i => i.Status == "Closed"), ["open"] = r.Items.Count(i => i.Status is "Open" or "Reviewing"),
+            ["found"] = r.Items.Count, ["closed"] = r.Items.Count(i => i.Status == "Closed"), ["open"] = r.Items.Count(i => i.Status is "Open" or "Reviewing" or "Replied" or "Draft"),
             ["overdue"] = r.Items.Count(i => i.Status == "Overdue"), ["check"] = r.Items.Count(i => i.Check.Length > 0),
             ["avg"] = closed.Count > 0 ? Math.Round(closed.Average(i => (i.Reply!.Value - i.Submitted!.Value).TotalDays), 1) : null,
-            ["mails"] = r.Mails, ["secs"] = Math.Round(r.Seconds, 1)
+            ["mails"] = r.Mails, ["secs"] = Math.Round(r.Seconds, 1), ["gaps"] = new JsonArray(r.Gaps.Select(g => (JsonNode)g).ToArray())
         };
     }
 
@@ -268,8 +501,8 @@ static class SubmittalLog
         var sheets = new List<XSheet>
         {
             new("Log", "📋 " + title, choices + $" · {r.Items.Count} item(s) from {r.Mails:N0} emails · Designed by A.HAMROUNI", head, widths, r.Items.Select(Row).ToList(), 17),
-            new("Open & overdue", $"⏳ Waiting for MZA · oldest first", "Overdue = past the Thinkproject Deadline, else the days set in 🧠 Nova Brain (📋 Submittal logs)", head, widths,
-                r.Items.Where(i => i.Status is "Open" or "Overdue" or "Reviewing").OrderBy(i => i.Submitted).Select(Row).ToList(), 17),
+            new("Open & overdue", $"⏳ Still waiting · oldest first", "Overdue = past the Thinkproject Deadline, else the days set in 🧠 Nova Brain (📋 Submittal logs)", head, widths,
+                r.Items.Where(i => i.Status is "Open" or "Overdue" or "Reviewing" or "Replied" or "Draft").OrderBy(i => i.Submitted).Select(Row).ToList(), 17),
         };
         // Summary
         var sum = new List<string[]>();
@@ -280,11 +513,13 @@ static class SubmittalLog
                 sum.Add(new[] { g.Key }.Concat(cols.Select(c => { var n = g.Count(i => hit(i, c)); return n > 0 ? n.ToString() : ""; })).Append(g.Count().ToString()).ToArray());
             sum.Add(new[] { "" });
         }
-        Block("By project and type", i => $"{i.Project} · {i.Type}", new[] { "Closed", "Open", "Reviewing", "Overdue", "Superseded" }, (i, c) => i.Status == c);
+        Block("By project and type", i => $"{i.Project} · {i.Type}", new[] { "Closed", "Open", "Reviewing", "Replied", "Draft", "Overdue", "Superseded", "Received" }, (i, c) => i.Status == c);
         Block("By tower (WIR / MIR)", i => i.Type is "WIR" or "MIR" ? (i.Tower.Length > 0 ? i.Tower : "— not stated") : null, new[] { "Closed", "Open", "Overdue" }, (i, c) => i.Status == c);
         Block("MZA codes", i => i.Code.Length > 0 ? $"{i.Project} · {i.Type}" : null, new[] { "Code 1", "Code 2", "Code 3", "Code 4" }, (i, c) => i.Code == c);
-        sheets.Add(new("Summary", "📊 Summary", choices, null, new[] { 26, 11, 11, 11, 11, 11, 9 }, sum, -1));
+        sheets.Add(new("Summary", "📊 Summary", choices, null, new[] { 30, 10, 10, 10, 10, 10, 10, 10, 10, 9 }, sum, -1));
         var chk = r.Items.Where(i => i.Check.Length > 0).Select(i => Row(i).Append(i.Check).ToArray()).ToList();
+        // Registers: a missing EI or meeting number.
+        foreach (var g in r.Gaps) chk.Insert(0, new[] { "", "", "", "", "", "", "⚠ " + g }.Concat(Enumerable.Repeat("", head.Length - 7)).Append("missing number in the register").ToArray());
         sheets.Add(new("Check", $"🔍 Check · {chk.Count} item(s) Nova could not fully place", "Nothing is dropped silently: each line says why", head.Append("Why it is here").ToArray(), widths.Append(60).ToArray(), chk, 17));
         var about = new List<string[]>
         {
@@ -365,7 +600,7 @@ static class SubmittalLog
             {
                 bool header = sh.Head == null && row.Length > 1 && row[0] == "";
                 bool block = sh.Head == null && row.Length == 1 && row[0].Length > 0;
-                Row(rr++, row, (c, v) => header ? 1 : block ? 8 : c == sh.StatusCol ? v switch { "Closed" => 4, "Open" => 5, "Overdue" => 6, "Superseded" => 7, "Reviewing" => 9, _ => 0 } : (sh.Head == null && c == 0 ? 8 : 0));
+                Row(rr++, row, (c, v) => header ? 1 : block ? 8 : c == sh.StatusCol ? v switch { "Closed" => 4, "Received" => 4, "Open" => 5, "Draft" => 5, "Overdue" => 6, "Superseded" => 7, "Reviewing" => 9, "Replied" => 9, _ => 0 } : (sh.Head == null && c == 0 ? 8 : 0));
             }
             sb.Append("</sheetData>");
             if (sh.Head != null) sb.Append($"<autoFilter ref=\"A4:{Col(sh.Head.Length - 1)}{Math.Max(5, sh.Rows.Count + 4)}\"/>");
@@ -376,14 +611,38 @@ static class SubmittalLog
 
     // ================================================================ “WIR log Tower 4, open ones” typed in Search for email
 
-    static readonly Regex AskRx = new(@"\b(WIR|MIR|MAR|PQS|RFI|SDS|submittal|inspection request)s?\b[\s\S]*\blog\b|\blog\b[\s\S]*\b(WIR|MIR|MAR|PQS|RFI|SDS|submittals?)\b", RegexOptions.IgnoreCase);
-    public static bool Wanted(string q) => AskRx.IsMatch(q ?? "");
+    /// <summary>Your words for each type (“method statements”, “engineer instructions”, “minutes”…).</summary>
+    public static readonly (string Code, Regex Rx)[] TypeWords = new (string, string)[]
+    {
+        ("WIR", @"\bWIRs?\b|work inspections?"), ("MIR", @"\bMIRs?\b|material inspections?"), ("MAR", @"\bMARs?\b|material (approvals?|submittals?)"),
+        ("MSS", @"\bMSS\b|method statements?"), ("SDS", @"\bSDS\b|\bSHD\b|shop ?drawings?"), ("SSM", @"\bSSM\b|\bsamples?\b"), ("TSR", @"\bTSR\b|test reports?"),
+        ("PQS", @"\bPQS\b|pre-?qualifications?"), ("RFI", @"\bRFIs?\b|requests? for information"), ("RPT", @"\bRPT\b|\bREP\b|(weekly|monthly|progress) reports?"),
+        ("HSE", @"\bHSE\b"), ("CAL", @"\bCAL\b|calculations?"), ("RTS", @"\bRTS\b|requests? to start"), ("HOV", @"\bHOV\b|hand-?over"),
+        ("PLN", @"\bPLN\b|planning|programmes?"), ("LTR", @"\bLTRs?\b|\bletters?\b"), ("PAY", @"\bpayments?\b|\bIPCs?\b|\bIPAs?\b"),
+        ("DSR", @"\bDSRs?\b|daily (site )?reports?"), ("VO", @"\bVOs?\b|\bvariations?\b"),
+        ("AUTH", @"authorit(y|ies)|\bADCD\b|civil defen[cs]e|\bNOCs?\b|municipality|\bAldar\b|\bMiral\b"),
+        ("SOR", @"\bSORs?\b|site observations?"), ("NCR", @"\bNCRs?\b|non-?conformances?"), ("EI", @"\bEIs?\b|engineer\W{0,2}s? instructions?"),
+        ("MOM", @"\bMOMs?\b|\bminutes\b|\bmeetings?\b|kick-?off")
+    }.Select(x => (x.Item1, new Regex(x.Item2, RegexOptions.IgnoreCase))).ToArray();
+
+    static readonly Regex ListWords = new(@"\b(log|register|list|show|which|how many|open|closed|overdue|pending|status|still|outstanding|issued|submitted|replied|not (yet )?(closed|replied|answered)|this (week|month)|last (week|month|\d+ days)|all (the )?)\b", RegexOptions.IgnoreCase);
+    static readonly Regex ExactDoc = new(@"\b[A-Z0-9]{2,6}(?:-[A-Z0-9]{1,6}){2,5}-\d{3,6}\b");
+
+    /// <summary>“Which WIRs in tower 4 are still open?”, “EI log this month”, “minutes of the progress meetings” → the 📋 log (a question about one exact document stays a search).</summary>
+    public static bool Wanted(string q)
+    {
+        q ??= "";
+        if (ExactDoc.IsMatch(q)) return false;
+        if (Regex.IsMatch(q, @"\bsubmittal log\b|\b(WIR|MIR|MAR|RFI|EI|MOM|NCR|SOR) (log|register)\b", RegexOptions.IgnoreCase)) return true;
+        return TypeWords.Any(t => t.Rx.IsMatch(q)) && ListWords.IsMatch(q);
+    }
 
     /// <summary>Options read from your words: types, project, tower, zone, level, period, status.</summary>
     public static Options FromWords(string q, string project)
     {
         var o = new Options();
-        foreach (Match m in Regex.Matches(q, @"\b(WIR|MIR|MAR|PQS|RFI|SDS)s?\b", RegexOptions.IgnoreCase)) if (!o.Types.Contains(m.Groups[1].Value.ToUpperInvariant())) o.Types.Add(m.Groups[1].Value.ToUpperInvariant());
+        foreach (var (code, rx) in TypeWords) if (rx.IsMatch(q) && !o.Types.Contains(code)) o.Types.Add(code);
+        if (o.Types.Contains("RPT") && o.Types.Contains("DSR") && !Regex.IsMatch(q, @"\b(weekly|monthly|progress)\b", RegexOptions.IgnoreCase)) o.Types.Remove("RPT");
         if (Regex.IsMatch(q, @"inspection request", RegexOptions.IgnoreCase) && o.Types.Count == 0) o.Types.AddRange(new[] { "WIR", "MIR" });
         if (!string.IsNullOrEmpty(project) && project != "?") o.Projects.Add(project);
         foreach (var p in new[] { "SLV", "RS5" }) if (Regex.IsMatch(q, $@"\b{p}\b", RegexOptions.IgnoreCase) && !o.Projects.Contains(p)) o.Projects.Add(p);

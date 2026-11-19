@@ -153,7 +153,7 @@ static class TestConnector
                 {
                     using var f = new Form
                     {
-                        Text = "🔌 Claude asks to test Nova", TopMost = true, StartPosition = FormStartPosition.CenterScreen, FormBorderStyle = FormBorderStyle.FixedDialog,
+                        Text = "🔌 Claude asks to test Nova", TopMost = true, StartPosition = FormStartPosition.CenterScreen, FormBorderStyle = FormBorderStyle.Sizable,
                         MaximizeBox = false, MinimizeBox = false, ClientSize = new Size(620, 190), BackColor = Th.Bg, ForeColor = Th.Text, Font = Th.F(10.5f), ShowInTaskbar = true
                     };
                     f.Controls.Add(new Label { Text = $"Claude ({via}) asks to {what}.\n\nThe answer holds subjects, document numbers, dates and steps — names hidden, never email bodies or 🔒 private emails.", Left = 18, Top = 16, Width = 584, Height = 100 });
@@ -328,6 +328,24 @@ static class TestConnector
                 o.Tower = S(a, "tower"); o.Status = S(a, "status");
                 var r = await Task.Run(() => SubmittalLog.Run(o));
                 var hide = new Activity.Hider();
+                foreach (var g in r.Gaps) sb.AppendLine("gap: " + g);
+                // One document in detail: every email of its thread, who sent it (MZA or not), subject and files.
+                var doc = S(a, "doc");
+                if (doc.Length > 0)
+                {
+                    var mza = Brain.ListOf("mza.match", "MZ ARCHITECTS, mz-architects.com");
+                    foreach (var it in r.Items.Where(i => (i.No + " " + i.Title).Contains(doc, StringComparison.OrdinalIgnoreCase)).Take(10))
+                    {
+                        sb.AppendLine($"\n## {it.No} {it.Rev} · {it.Type} · {it.Status} {it.Code} · {hide.Hide(it.Why)}");
+                        foreach (var h in it.Mails.OrderBy(x => x.Date))
+                        {
+                            bool isMza = h.Sent || mza.Any(x => (h.FromName ?? "").Contains(x, StringComparison.OrdinalIgnoreCase) || (h.FromAddr ?? "").Contains(x, StringComparison.OrdinalIgnoreCase));
+                            var dom = (h.FromAddr ?? "").Contains('@') ? h.FromAddr![(h.FromAddr!.IndexOf('@') + 1)..] : "";
+                            sb.AppendLine($"- {h.Date:dd MMM HH:mm} · {(h.Sent ? "SENT by me" : "from " + hide.Hide(h.FromName ?? "") + " @" + dom)} · MZA:{(isMza ? "yes" : "no")} · {hide.Hide(h.Subject ?? "")} · files: {hide.Hide(Cut(h.AttNames ?? "", 200))}");
+                        }
+                    }
+                    break;
+                }
                 sb.AppendLine($"Submittal log · {(o.Types.Count > 0 ? string.Join(",", o.Types) : "all types")} · {(o.Projects.Count > 0 ? string.Join(",", o.Projects) : "all projects")} · since {o.From:dd MMM yyyy}");
                 sb.AppendLine(SubmittalLog.Kpis(r).ToJsonString());
                 foreach (var g in r.Items.GroupBy(i => $"{i.Project} {i.Type} {i.Status}").OrderBy(g => g.Key)) sb.AppendLine($"  {g.Key}: {g.Count()}");
@@ -389,7 +407,7 @@ static class TestConnector
             "{\"type\":\"object\",\"properties\":{\"days\":{\"type\":\"integer\",\"description\":\"1 to 30, default 1\"},\"feature\":{\"type\":\"string\",\"description\":\"e.g. email search, conversation, ai call\"},\"limit\":{\"type\":\"integer\"}}}"),
         ("errors", "Nova's error log for the last hours, plus the last crash and freeze notes (names hidden).", "{\"type\":\"object\",\"properties\":{\"hours\":{\"type\":\"integer\",\"description\":\"default 24\"}}}"),
         ("submittal", "Runs the 📋 Submittal log on the real emails (WIR, MIR, MAR, PQS, RFI, SDS · Thinkproject or plain Outlook · MZA reply on the same thread): numbers per status and the items with tower/zone/level, dates, code and why — names hidden.",
-            "{\"type\":\"object\",\"properties\":{\"types\":{\"type\":\"string\",\"description\":\"e.g. WIR,MIR (empty = all)\"},\"project\":{\"type\":\"string\",\"description\":\"e.g. SLV or RS5\"},\"days\":{\"type\":\"integer\",\"description\":\"submitted in the last N days, default 30\"},\"tower\":{\"type\":\"string\"},\"status\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"}}}"),
+            "{\"type\":\"object\",\"properties\":{\"types\":{\"type\":\"string\",\"description\":\"e.g. WIR,MIR (empty = all)\"},\"project\":{\"type\":\"string\",\"description\":\"e.g. SLV or RS5\"},\"days\":{\"type\":\"integer\",\"description\":\"submitted in the last N days, default 30\"},\"tower\":{\"type\":\"string\"},\"status\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"},\"doc\":{\"type\":\"string\",\"description\":\"one document number: every email of its thread\"}}}"),
         ("brain_read", "Reads the 🧠 Nova Brain rules (all sections, or one).", "{\"type\":\"object\",\"properties\":{\"section\":{\"type\":\"string\"}}}"),
         ("brain_update", "Proposes changes to the 🧠 Nova Brain; the user sees each change on the PC and applies it with ✓ (a version is saved first).",
             "{\"type\":\"object\",\"properties\":{\"summary\":{\"type\":\"string\"},\"changes\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"op\":{\"type\":\"string\"},\"section\":{\"type\":\"string\"},\"id\":{\"type\":\"string\"},\"title\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"}}}}},\"required\":[\"changes\"]}"),

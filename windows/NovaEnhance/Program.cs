@@ -375,6 +375,8 @@ static class Screens
     static HistoryForm hist;
     static BrainForm brainForm;
 
+    public static void ShowForm(Form f) => Show(f);
+
     /// <summary>🧠 Nova Brain window.</summary>
     public static void Brain()
     {

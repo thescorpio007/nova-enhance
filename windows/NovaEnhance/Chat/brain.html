@@ -9,7 +9,7 @@ body{overflow:hidden}
 #top{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid #232836}#top b.t{font-size:19px}
 .pill{border-radius:10px;padding:2px 9px;font-size:11.5px;font-weight:700}.pg{background:#16382A;color:#3DDC97}.pw{background:#3A3016;color:#FFB547}
 #cols{display:grid;grid-template-columns:260px 1fr 440px;height:calc(100% - 56px)}
-#secs{border-right:1px solid #232836;padding:10px;overflow:auto}
+#secs{padding:10px}
 .sec{padding:7px 10px;border-radius:8px;margin-bottom:2px;display:flex;justify-content:space-between;color:#C9CED8;cursor:pointer}.sec:hover{background:#1A1F2A}.sec.on{background:#232A3A;color:#fff;font-weight:600}
 #mid{padding:14px 18px;overflow:auto}
 #chat{border-left:1px solid #232836;display:flex;flex-direction:column;padding:12px;min-height:0}
@@ -36,9 +36,9 @@ select{background:#232A3A;color:#ECEEF3;border:0;border-radius:6px;padding:4px 8
 <div id="top"><b class="t">🧠 Nova Brain</b><span id="pill"></span><span class="muted small" id="meta"></span><span class="grow"></span>
   <button id="bBackup">💾 Back up now</button><button id="bVers">🕘 Versions &amp; backups</button><button id="bLock">🔒 Lock</button></div>
 <div id="cols">
-  <div id="secs"></div>
+  <div id="secsWrap" data-split="left" data-col="0" data-min="180" data-max="520" style="border-right:1px solid #232836;overflow:auto"><div id="secs"></div></div>
   <div id="mid"></div>
-  <div id="chat">
+  <div id="chat" data-split="right" data-col="2" data-min="300" data-max="900">
     <b>💬 Talk to the brain</b>
     <div class="muted small" style="margin:2px 0 8px">tell it in your own words · it proposes the exact change · nothing changes without ✓ Apply</div>
     <div id="msgs2"></div>
@@ -52,5 +52,6 @@ select{background:#232A3A;color:#ECEEF3;border:0;border-radius:6px;padding:4px 8
 <div id="lock" class="hide"><div class="box" id="lockBox"></div></div>
 <div id="toast"></div>
 <script src="brain.js"></script>
+<script src="split.js"></script>
 </body>
 </html>

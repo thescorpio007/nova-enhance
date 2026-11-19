@@ -21,7 +21,7 @@ class SettingsForm : NovaForm
         MinimumSize = new Size(760, 520);
         nav = new ListBox
         {
-            Dock = DockStyle.Left, Width = 210, BackColor = Color.FromArgb(0x0E, 0x11, 0x16), ForeColor = Th.Text, BorderStyle = BorderStyle.None,
+            Dock = DockStyle.Left, Width = Math.Clamp(Store.Int("win_set_nav_w", 250), 160, 520), BackColor = Color.FromArgb(0x0E, 0x11, 0x16), ForeColor = Th.Text, BorderStyle = BorderStyle.None,
             Font = Th.F(10.5f), DrawMode = DrawMode.OwnerDrawFixed, ItemHeight = 38, IntegralHeight = false
         };
         Sections = Visible(); nav.Items.AddRange(Sections);
@@ -39,6 +39,10 @@ class SettingsForm : NovaForm
         nav.SelectedIndexChanged += (_, _) => Draw(Sections[Math.Max(0, nav.SelectedIndex)]);
         host = new Panel { Dock = DockStyle.Fill, BackColor = Th.Bg };
         Controls.Add(host);
+        // ⇔ Drag the line between the menu and the page.
+        var navSplit = new Splitter { Dock = DockStyle.Left, Width = 5, BackColor = Color.FromArgb(0x23, 0x2A, 0x3A), MinSize = 160, MinExtra = 400, Cursor = Cursors.VSplit };
+        navSplit.SplitterMoved += (_, _) => Store.SetInt("win_set_nav_w", nav.Width);
+        Controls.Add(navSplit);
         Controls.Add(nav);
         live = new System.Windows.Forms.Timer { Interval = 2000 };
         live.Tick += (_, _) =>
@@ -51,7 +55,7 @@ class SettingsForm : NovaForm
         // 🛡 If a page did not finish opening last time, start on the simple About page.
         var stuck = Store.Str("win_set_drawing", "");
         if (stuck.Length > 0) { Store.Set("win_set_drawing", ""); Log.Warn("settings", $"the page “{stuck}” did not open last time — starting on About"); nav.SelectedIndex = Array.IndexOf(Sections, "About"); }
-        else nav.SelectedIndex = Ai.WithKeys.Length == 0 ? 0 : 3;
+        else nav.SelectedIndex = Math.Max(0, Array.IndexOf(Sections, Ai.WithKeys.Length == 0 ? "AI & API keys" : "Email & AI"));
     }
 
     public void Go(string section)
@@ -109,6 +113,7 @@ class SettingsForm : NovaForm
         act.Mark("page drawn");
         page.Add(Th.Signature());
         host.ResumeLayout();
+        try { BeginInvoke(new Action(() => { if (page != null && !page.IsDisposed) page.FitAll(); })); } catch { }
         page.FitAll();
     }
 
