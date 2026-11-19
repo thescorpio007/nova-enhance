@@ -305,7 +305,7 @@ class MyPcActivity : BaseActivity() {
             val code = projs.getJSONObject(i).optString("code")
             row.addView(Ui.chip(c, "📁 $code", project == code) { project = if (project == code) "" else code; show(page) }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
         }
-        body.addView(stv, Ui.lp(top = Ui.dp(c, 6)))
+        body.addView(sv, Ui.lp(top = Ui.dp(c, 6)))
     }
 
     // ------------------------------------------------------------------ 🔍 search
@@ -364,7 +364,7 @@ class MyPcActivity : BaseActivity() {
                 show("search")
             }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
         }
-        body.addView(stv, Ui.lp(top = Ui.dp(c, 6)))
+        body.addView(sv, Ui.lp(top = Ui.dp(c, 6)))
         val fdim = if (sortBy == "type" || sortBy == "proj") sortBy else "disc"
         val groups = hits.groupBy { dim(it, fdim) }.entries.sortedByDescending { it.value.size }
         if (groups.size >= 2) {
