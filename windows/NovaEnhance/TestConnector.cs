@@ -332,9 +332,7 @@ static class TestConnector
                 sb.AppendLine(SubmittalLog.Kpis(r).ToJsonString());
                 foreach (var g in r.Items.GroupBy(i => $"{i.Project} {i.Type} {i.Status}").OrderBy(g => g.Key)) sb.AppendLine($"  {g.Key}: {g.Count()}");
                 foreach (var i in r.Items.Take(Math.Clamp(I(a, "limit", 60), 1, 400)))
-                    sb.AppendLine($"- {i.No} {i.Rev} · {i.Type} · {i.Status}{(i.Code.Length > 0 ? " · " + i.Code : "")} · {i.Via} · T:{i.Tower} Z:{i.Zone} L:{i.Level} A:{i.Apt} · sub {i.Submitted:dd MMM HH:mm} · due {i.Deadline:dd MMM} · reply {i.Reply:dd MMM HH:mm}
-  title: {hide.Hide(i.Title)}
-  why: {hide.Hide(i.Why)}{(i.Check.Length > 0 ? "\n  check: " + i.Check : "")}");
+                    sb.AppendLine($"- {i.No} {i.Rev} · {i.Type} · {i.Status}{(i.Code.Length > 0 ? " · " + i.Code : "")} · {i.Via} · T:{i.Tower} Z:{i.Zone} L:{i.Level} A:{i.Apt} · sub {i.Submitted:dd MMM HH:mm} · due {i.Deadline:dd MMM} · reply {i.Reply:dd MMM HH:mm}\n  title: {hide.Hide(i.Title)}\n  why: {hide.Hide(i.Why)}{(i.Check.Length > 0 ? "\n  check: " + i.Check : "")}");
                 break;
             }
             case "brain_read":
