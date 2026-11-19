@@ -397,7 +397,7 @@ static class PhoneLink
         o["rules"] = rules;
         try { o["prompts"] = JsonNode.Parse(JsonSerializer.Serialize(NovaEnhance.Prompts.All(), JO)); } catch { }
         try { o["work"] = JsonNode.Parse(JsonSerializer.Serialize(Work.All(), JO)); } catch { }
-        try { o["guide"] = Brain.ForPhone(); } catch { }   // 🧠 the same Nova Brain rules on the phone
+        try { o["guide"] = NovaEnhance.Brain.ForPhone(); } catch { }   // 🧠 the same Nova Brain rules on the phone
         var text = o.ToJsonString();
         var h = Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes(text)));
         if (h == s.BrainHash) return;
