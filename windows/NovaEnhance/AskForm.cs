@@ -751,6 +751,10 @@ class AskForm : NovaForm
         var fbtn = Th.B("📁 Search inside a folder instead", () => Screens.FolderSearch(null));
         fbtn.Margin = new Padding(16, 2, 0, 0);
         head.Controls.Add(fbtn);
+        // 📋 Every WIR · MIR · MAR · PQS · RFI · SDS and its MZA reply, as a table and an Excel log.
+        var lbtn = Th.B("📋 Submittal log", () => Screens.Submittal(new SubmittalLog.Options { Projects = Project.Length > 0 && Project != "?" ? new List<string> { Project } : new() }), true);
+        lbtn.Margin = new Padding(8, 2, 0, 0);
+        head.Controls.Add(lbtn);
 
         var qrow = stack.Add(new TableLayoutPanel { ColumnCount = 8, RowCount = 1, AutoSize = false, Height = 40, BackColor = Color.Transparent, Margin = new Padding(0, 4, 0, 6) }, true);
         qrow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -1077,6 +1081,13 @@ class AskForm : NovaForm
         if (q == box.Text && !fromTalk) { Speller.FixBeforeSearch(box, () => Run(box.Text, followUp)); q = box.Text; }
         q = (q ?? "").Trim();
         if (q.Length == 0) return;
+        // “WIR log Tower 4, 1 Oct – 19 Nov, open ones” → the 📋 Submittal log with those choices.
+        if (!followUp && SubmittalLog.Wanted(q))
+        {
+            Screens.Submittal(SubmittalLog.FromWords(q, Project));
+            info.Text = "📋 Opened the Submittal log for: " + q;
+            return;
+        }
         if (Store.EmailSource == "m365")
         {
             ShowMessage("Microsoft 365 connection comes in build 2 (your IT admin approves it once). Choose \"Outlook on this PC\" or \"Both\" in Settings → Email & AI to search now.");
@@ -1096,6 +1107,8 @@ class AskForm : NovaForm
         // A new search: the previous results leave at once (they could belong to another project).
         if (!followUp) { hits = new(); rawHits = new(); list.Nova = null; filterVal = ""; ShowList(); }
         info.Text = Ai.Active() != null ? "Understanding your question…" : "Searching (no AI key — simple word search)…";
+        // The old results are gone: draw the window now, before the search keeps it busy (it was left half-painted).
+        try { Refresh(); } catch { }
         // ✦ Prompts: the question goes to the search; "exclude … / only … / group … / export …" become your instructions.
         var (mainQ, extraQ) = SearchSyntax.Parse(q).Any ? (q, "") : Prompts.Split(q);
         var instructions = ((followUp ? lastInstr : instr.Text) + "\n" + extraQ).Trim();

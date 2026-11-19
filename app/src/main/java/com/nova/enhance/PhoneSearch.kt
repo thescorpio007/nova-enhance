@@ -164,7 +164,7 @@ object PhoneSearch {
                     "\"filetype\":\"${EXT.keys.joinToString("|")}|\",\"waiting\":true|false,\"words\":[\"up to 6 search words that must appear: names, subjects, numbers, things — never the filter words above, never filler\"]," +
                     "\"also\":[\"up to 6 other spellings or synonyms of those words, same language as the files (English)\"]}\n" +
                     "Empty string when not asked. Do not guess a filter that was not asked. \"waiting\" = the user asks for emails they have not answered yet."
-                val raw = Providers.chat(p, store.key(p), store.model(p), sys, listOf(Msg("user", question)), true)
+                val raw = Providers.chat(p, store.key(p), store.model(p), sys + PcLink.guide(c, "search"), listOf(Msg("user", question)), true)
                 val a = raw.indexOf('{'); val b = raw.lastIndexOf('}')
                 if (a >= 0 && b > a) done.set(JSONObject(raw.substring(a, b + 1)))
             } catch (_: Exception) { }

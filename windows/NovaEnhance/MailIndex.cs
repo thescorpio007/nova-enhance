@@ -1249,7 +1249,8 @@ static class MailIndex
                 : $"(m.id IN (SELECT id FROM mproj WHERE proj={P(q.Project)}) OR m.id NOT IN (SELECT id FROM mproj WHERE proj<>''))");   // + unsorted ones (checked by Fits)
         }
 
-        var words = q.Words.Select(Fold).Where(w => w.Length > 0).ToList();
+        // Symbols alone (“#”, “//”, “-”) are not words: in the full-text index they match nothing and emptied every search.
+        var words = q.Words.Select(Fold).Where(w => w.Length > 0 && System.Text.RegularExpressions.Regex.IsMatch(w, @"[\p{L}\p{N}]")).ToList();
         var phrase = Fold(q.Phrase ?? "");
         if (words.Count > 0 || phrase.Length > 0)
         {
@@ -1312,6 +1313,35 @@ static class MailIndex
         cmd.CommandText = "SELECT COUNT(*) FROM (SELECT 1 FROM mail m" + (where.Count > 0 ? " WHERE " + string.Join(" AND ", where) : "") + $" LIMIT {cap})";
         foreach (var (n, v) in ps) cmd.Parameters.AddWithValue(n, v ?? DBNull.Value);
         return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
+    /// <summary>📋 Submittal log: every email whose subject holds one of these document types (e.g. “-WIR-”), between two dates, with the start of the body.</summary>
+    public static List<MailHit> Submittals(IEnumerable<string> types, DateTime after, DateTime before, int max = 60000, int bodyChars = 6000)
+    {
+        var list = new List<MailHit>();
+        var ts = types.Select(t => System.Text.RegularExpressions.Regex.Replace(t ?? "", @"[^A-Za-z]", "").ToUpperInvariant()).Where(t => t.Length is >= 2 and <= 6).Distinct().ToList();
+        if (ts.Count == 0) return list;
+        using var c = Open();
+        using var cmd = c.CreateCommand();
+        var ors = new List<string>();
+        for (int i = 0; i < ts.Count; i++) { ors.Add($"m.subject LIKE $t{i}"); cmd.Parameters.AddWithValue("$t" + i, "%-" + ts[i] + "-%"); }
+        cmd.CommandText = $"SELECT m.id,m.entry,m.store,m.conv,m.folder,m.sent,m.date,m.from_name,m.from_addr,m.to_list,m.cc_list,m.to_addr,m.cc_addr,m.subject,substr(m.body,1,{Math.Clamp(bodyChars, 200, 20000)}),m.att_names,m.unread,m.importance FROM mail m " +
+                          $"WHERE ({string.Join(" OR ", ors)}) AND m.date >= $a AND m.date <= $b ORDER BY m.date LIMIT {Math.Clamp(max, 1, 200000)}";
+        cmd.Parameters.AddWithValue("$a", new DateTimeOffset(after).ToUnixTimeMilliseconds());
+        cmd.Parameters.AddWithValue("$b", new DateTimeOffset(before).ToUnixTimeMilliseconds());
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+        {
+            string Str(int i) => r.IsDBNull(i) ? "" : r.GetString(i);
+            list.Add(new MailHit
+            {
+                Id = r.GetInt64(0), Entry = Str(1), StoreId = Str(2), Conv = Str(3), Folder = Str(4), Sent = r.GetInt64(5) == 1,
+                Date = DateTimeOffset.FromUnixTimeMilliseconds(r.GetInt64(6)).LocalDateTime,
+                FromName = Str(7), FromAddr = Str(8), To = Str(9), Cc = Str(10), ToAddr = Str(11), CcAddr = Str(12),
+                Subject = Str(13), Body = Str(14), AttNames = Str(15), Unread = r.GetInt64(16) == 1, Importance = (int)r.GetInt64(17)
+            });
+        }
+        return list.GroupBy(h => (h.Subject, h.Date, h.FromAddr)).Select(g => g.First()).ToList();
     }
 
     public static List<MailHit> Search(MailQuery q)

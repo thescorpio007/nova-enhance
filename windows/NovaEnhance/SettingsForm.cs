@@ -3,7 +3,7 @@ namespace NovaEnhance;
 /// <summary>Settings, split into sections like the phone app.</summary>
 class SettingsForm : NovaForm
 {
-    static readonly string[] AllSections = { "AI & API keys", "About me", "Enhancement", "Email & AI", "📥 Email index", "🗂 Mailboxes & archives", "📂 Folders in the index", "📁 Email projects", "Folder search", "📁 Projects", "✦ Prompts", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "🧪 Activity history", "🔌 Test connector", "📱 Phone link", "About" };
+    static readonly string[] AllSections = { "🧠 Nova Brain", "AI & API keys", "About me", "Enhancement", "Email & AI", "📥 Email index", "🗂 Mailboxes & archives", "📂 Folders in the index", "📁 Email projects", "Folder search", "📁 Projects", "✦ Prompts", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "🧪 Activity history", "🔌 Test connector", "📱 Phone link", "About" };
     /// <summary>🧪 Activity history and 🔌 Test connector are advanced tools: shown only when switched on (About → Advanced tools).</summary>
     static readonly string[] AdvancedSections = { "🧪 Activity history", "🔌 Test connector" };
     static string[] Sections = Visible();
@@ -91,6 +91,7 @@ class SettingsForm : NovaForm
                 case "Browser add-on": BrowserPage(); break;
                 case "AI window": AiWindowPage(); break;
                 case "🧠 What Nova knows": KnowsPage(); break;
+                case "🧠 Nova Brain": BrainPage(); break;
                 case "✦ Prompts": PromptsPage(); break;
                 case "Spelling & grammar": SpellPage(); break;
                 case "Backup & restore": BackupPage(); break;
@@ -1379,6 +1380,17 @@ class SettingsForm : NovaForm
     }
 
     // ------------------------------------------------------------------ 🧠 What Nova knows
+    void BrainPage()
+    {
+        Note("🧠 Nova Brain: your own rule book that guides every task — how Nova talks to the AI, how it searches and what comes first, your work knowledge (document numbers, Thinkproject, codes, towers…), privacy and lessons learned. One encrypted file (AES-256) in the Nova folder with ITS OWN password.");
+        Note(Brain.Unlocked ? $"✓ Open · version {Brain.Version} · {Brain.RuleCount} rules · last backup {(Brain.LastBackupText.Length > 0 ? Brain.LastBackupText : "none yet")}"
+            : Brain.Exists ? "🔒 Locked — Nova uses its built-in rules until you open it." : "Not made yet — Nova uses its built-in rules. Make yours to change them and keep them backed up.", Th.AccentText);
+        var row = page.Add(Th.Row(false));
+        row.Controls.Add(Th.B("🧠 Open Nova Brain", Screens.Brain, true));
+        row.Controls.Add(Th.B("📋 Submittal log", () => Screens.Submittal()));
+        Note("💬 Talk to the brain in your own words: it proposes the exact change, tests it on your real emails, and nothing changes without ✓ Apply. A version is saved before every change (↩ undo). Daily backup at 03:00 (checked right after writing), a 💾 Back up now button, a copy inside the full Nova backup, and a safe restore that keeps your current brain first.", Th.Muted);
+    }
+
     void KnowsPage()
     {
         var m = Memory.Data;

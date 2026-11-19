@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Submittal log</title>
+<link rel="stylesheet" href="chat.css">
+<style>
+body{overflow:hidden}
+#wrap{height:100%;display:flex;flex-direction:column;padding:12px 18px;gap:8px}
+.hd{display:flex;align-items:center;gap:10px}.hd b{font-size:18px}
+.f{display:grid;grid-template-columns:120px 1fr;gap:6px 10px;align-items:center}
+.lab{color:#9AA3B5;font-size:12px;font-weight:600}
+.chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+input.d{width:140px;padding:4px 8px}input.n{width:60px;padding:4px 8px}
+.kpi{display:flex;gap:10px;flex-wrap:wrap}.k{background:#1B2030;border:1px solid #2A3040;border-radius:9px;padding:5px 14px;min-width:96px;cursor:pointer}.k b{font-size:18px;display:block}.k span{font-size:11.5px;color:#9AA3B5}
+#tbl{flex:1;overflow:auto;border:1px solid #232836;border-radius:10px}
+table{width:100%;border-collapse:collapse;font-size:12.3px}
+th{background:#232A3A;color:#C9CED8;text-align:left;padding:6px 7px;font-weight:600;position:sticky;top:0;cursor:pointer;white-space:nowrap}
+td{padding:5px 7px;border-bottom:1px solid #232836;white-space:nowrap}
+tr.r:hover td{background:#1A1F2A;cursor:pointer}
+td.tt{max-width:430px;overflow:hidden;text-overflow:ellipsis}.mono{font-family:Consolas,monospace;font-size:11.5px}
+.st{border-radius:9px;padding:1px 8px;font-weight:700;font-size:11px}
+.Closed{background:#16382A;color:#3DDC97}.Open{background:#3A3016;color:#FFB547}.Overdue{background:#3D1C1E;color:#FF6B6B}.Superseded,.st\3F{background:#2A2E38;color:#9AA3B5}.Reviewing{background:#2E2A55;color:#CFC8FF}
+.chk{color:#FFB547;font-size:11px}
+#busy{color:#B9B0FF;font-size:12.5px}
+.foot{display:flex;gap:8px;align-items:center}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div class="hd"><b>📋 Submittal log</b><span class="muted small">every submission found in Outlook · Thinkproject or direct email · checks if MZA replied on the same thread</span><span class="grow"></span><span id="brain" class="chip"></span></div>
+  <div class="f">
+    <span class="lab">Project</span><span class="chips" id="cProj"></span>
+    <span class="lab">Type</span><span class="chips" id="cType"></span>
+    <span class="lab">Period (submitted)</span><span class="chips" id="cPer"><input type="date" class="d" id="from"> → <input type="date" class="d" id="to"></span>
+    <span class="lab">Where</span><span class="chips" id="cWhere"></span>
+    <span class="lab">Discipline · status</span><span class="chips" id="cDisc"></span>
+  </div>
+  <div class="kpi" id="kpi"></div>
+  <div id="busy"></div>
+  <div id="tbl"></div>
+  <div class="foot">
+    <button class="primary" id="xl">⬇ Excel log</button><button id="fold">📂 Open the folder</button><button id="upd">↻ Update</button>
+    <span class="muted small">click a row to open its email in Outlook · sheets: Log · Open &amp; overdue · Summary · Check · About</span><span class="grow"></span><span class="sign" id="sign"></span>
+  </div>
+</div>
+<script src="submittal.js"></script>
+</body>
+</html>

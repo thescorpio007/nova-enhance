@@ -52,7 +52,7 @@ object Modes {
         "In later messages of the conversation the user may ask for changes; then reply with the full revised text only."
 
     /** Instructions with the user's "About me" profile added. */
-    fun system(s: Store, text: String = ""): String = SYSTEM + Profile.note(s) + PcLink.brainNote(s.ctx, text) +
+    fun system(s: Store, text: String = ""): String = SYSTEM + Profile.note(s) + PcLink.brainNote(s.ctx, text) + PcLink.guide(s.ctx, "writing") +
         (if (s.ctx.getSharedPreferences("nova_enhance", android.content.Context.MODE_PRIVATE).getBoolean("keep_codes", true))
             "\nKeep codes, references, document numbers and numbers exactly as written." else "")
 

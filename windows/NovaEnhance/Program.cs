@@ -169,6 +169,8 @@ class NovaContext : ApplicationContext
         m.Items.Add("☀  Morning brief", null, (_, _) => Screens.Brief());
         m.Items.Add("🕘  Chat history", null, (_, _) => Screens.ChatHistory());
         m.Items.Add("🔎  Search history (every search, 60 days)", null, (_, _) => Screens.SearchHistory());
+        m.Items.Add("📋  Submittal log (WIR · MIR · MAR · PQS · RFI · SDS)", null, (_, _) => Screens.Submittal());
+        m.Items.Add("🧠  Nova Brain", null, (_, _) => Screens.Brain());
         m.Items.Add(new ToolStripSeparator());
         m.Items.Add("⚙  Settings", null, (_, _) => Screens.Settings());
         m.Items.Add("📁  Open the Nova Enhance folder", null, (_, _) => Shell.Open(Paths.Root));
@@ -293,6 +295,7 @@ class NovaContext : ApplicationContext
         Guard.Stage("archive reader"); Pst.Start();
         Guard.Stage("activity auto-save"); Activity.StartAuto();
         Guard.Stage("test connector"); TestConnector.Start();
+        Guard.Stage("brain"); Brain.Start();
         // (2.0) The night check of moved emails was removed: it crashed Nova (build 75–76). Moved emails are found when you open them.
         Guard.Stage("phone link"); PhoneLink.Start(); MailFull.Start();
         Guard.Stage("started");
@@ -370,6 +373,23 @@ static class Screens
     }
 
     static HistoryForm hist;
+    static BrainForm brainForm;
+
+    /// <summary>🧠 Nova Brain window.</summary>
+    public static void Brain()
+    {
+        if (Program.OffUi(Brain)) return;
+        try { if (brainForm == null || brainForm.IsDisposed) brainForm = new BrainForm(); Show(brainForm); }
+        catch (Exception e) { Log.Error("Nova Brain", e); }
+    }
+
+    /// <summary>📋 Submittal log window (a new one each time, with its own choices).</summary>
+    public static void Submittal(SubmittalLog.Options o = null)
+    {
+        if (Program.OffUi(() => Submittal(o))) return;
+        try { Show(new SubmittalForm(o)); }
+        catch (Exception e) { Log.Error("Submittal log", e); }
+    }
 
     public static void SearchHistory()
     {

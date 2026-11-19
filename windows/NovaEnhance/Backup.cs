@@ -22,7 +22,7 @@ static class Backup
         var winSecrets = new JsonObject();
         foreach (var (k, v) in Store.Snapshot())
         {
-            if (k == "win_backup_pw") continue;
+            if (k is "win_backup_pw" or "win_brain_pw") continue;   // the brain keeps its own password: never inside the full backup
             if (k.StartsWith("key_")) { var s = Store.Secret(k); if (s.Length > 0) keys[k] = s; continue; }
             if (k.StartsWith("win_") && v is JsonValue sv && sv.TryGetValue<string>(out var str) && str.StartsWith("dpapi:"))
             {
@@ -61,6 +61,7 @@ static class Backup
         }
         catch { }
         var extra = new JsonObject { ["rules"] = rules, ["mfix"] = MailProjects.ExportFixes(), ["secrets"] = winSecrets, ["originals"] = OriginalsText(), ["work"] = work, ["memory"] = Memory.Export(), ["conversations"] = convs };
+        try { if (Brain.ForFullBackup() is { } brain) extra["brain"] = brain; } catch (Exception e) { Log.Warn("backup", "brain: " + e.Message); }
         root["windows_extra"] = Encrypt(extra.ToJsonString(), password);
         return root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
     }
@@ -200,7 +201,9 @@ static class Backup
                         catch { }
                 int nf = MailProjects.ImportFixes(x["mfix"] as JsonArray);
                 int nfAll = (x["mfix"] as JsonArray)?.Count ?? 0;
-                extraNote = $" · {nr} rule file(s) restored · {nfAll} email-project correction(s) restored ({nf} matched now, the rest when their emails are indexed)" + $" · {ns} sign-in(s) restored (Google Drive) · {no} original(s) restored · {nw} task(s) restored (My Work) · {nm} item(s) restored (🧠 Nova Memory) · {nc} conversation(s) restored";
+                var brainNote = "";
+                try { brainNote = Brain.FromFullBackup(x["brain"] as JsonObject); } catch (Exception e) { brainNote = " · 🧠 Brain NOT restored (" + e.Message + ") — your current brain is unchanged"; }
+                extraNote = brainNote + $" · {nr} rule file(s) restored · {nfAll} email-project correction(s) restored ({nf} matched now, the rest when their emails are indexed)" + $" · {ns} sign-in(s) restored (Google Drive) · {no} original(s) restored · {nw} task(s) restored (My Work) · {nm} item(s) restored (🧠 Nova Memory) · {nc} conversation(s) restored";
             }
             catch { extraNote = " · Google Drive sign-in and originals NOT restored (wrong password)"; }
         }

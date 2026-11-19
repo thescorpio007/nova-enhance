@@ -507,6 +507,26 @@ object PcLink {
             ".\nNever change document numbers, revisions (Rev01, R00), approval codes (Code 1, Code 2), dates, numbers, e-mail addresses or project codes."
     }
 
+    /** 🧠 Nova Brain: the user's own rules (same as the PC) for the sections that apply to this task. */
+    fun guide(c: Context, vararg tags: String): String {
+        val g = brain(c)?.optJSONObject("guide") ?: return ""
+        val want = tags.toSet() + "all"
+        val writing = "writing" in tags
+        val sb = StringBuilder()
+        for (name in g.keys()) {
+            val sec = g.optJSONObject(name) ?: continue
+            val st = sec.optJSONArray("tags")?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: listOf("all")
+            if (st.none { it in want } || (writing && "writing" !in st)) continue
+            val rules = sec.optJSONArray("rules") ?: continue
+            if (rules.length() == 0) continue
+            sb.append('[').append(name).append("]\n")
+            for (i in 0 until rules.length()) sb.append("• ").append(rules.optString(i)).append('\n')
+        }
+        if (sb.isEmpty()) return ""
+        val t = if (sb.length > 5000) sb.substring(0, 5000) + "…" else sb.toString()
+        return "\n\n— Nova Brain: the user's own rules. Follow them whenever they apply to this task; they win over general habits, never over the facts in front of you. —\n$t"
+    }
+
     fun myWords(c: Context): Set<String> {
         val b = brain(c) ?: return emptySet()
         val s = HashSet<String>()

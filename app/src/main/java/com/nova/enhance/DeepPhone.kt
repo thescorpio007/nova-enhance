@@ -35,7 +35,7 @@ object DeepPhone {
         val p = ai(c) ?: return null
         val store = Store(c)
         var out: String? = null
-        val t = Thread { try { out = Providers.chat(p, store.key(p), store.model(p), sys, listOf(Msg("user", user)), fast) } catch (_: Exception) { } }
+        val t = Thread { try { out = Providers.chat(p, store.key(p), store.model(p), sys + PcLink.guide(c, "search", "deep", "submittal", "answer"), listOf(Msg("user", user)), fast) } catch (_: Exception) { } }
         t.start(); t.join(waitMs)
         return out
     }

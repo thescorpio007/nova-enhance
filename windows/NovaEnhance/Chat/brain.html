@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Nova Brain</title>
+<link rel="stylesheet" href="chat.css">
+<style>
+body{overflow:hidden}
+#top{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid #232836}#top b.t{font-size:19px}
+.pill{border-radius:10px;padding:2px 9px;font-size:11.5px;font-weight:700}.pg{background:#16382A;color:#3DDC97}.pw{background:#3A3016;color:#FFB547}
+#cols{display:grid;grid-template-columns:260px 1fr 440px;height:calc(100% - 56px)}
+#secs{border-right:1px solid #232836;padding:10px;overflow:auto}
+.sec{padding:7px 10px;border-radius:8px;margin-bottom:2px;display:flex;justify-content:space-between;color:#C9CED8;cursor:pointer}.sec:hover{background:#1A1F2A}.sec.on{background:#232A3A;color:#fff;font-weight:600}
+#mid{padding:14px 18px;overflow:auto}
+#chat{border-left:1px solid #232836;display:flex;flex-direction:column;padding:12px;min-height:0}
+#msgs2{flex:1;overflow:auto;display:flex;flex-direction:column;gap:6px;padding-right:4px}
+.card2{background:#181C24;border:1px solid #2A3040;border-radius:10px;padding:8px 13px;margin-bottom:8px}
+.rule{display:grid;grid-template-columns:62px 1fr auto;gap:3px 10px;padding:7px 0;border-bottom:1px solid #232836;align-items:start}.rule:last-child{border:0}
+.rule.off{opacity:.45}
+.id{font-family:Consolas,monospace;color:#9AA3B5;font-size:11.5px}
+.by{font-size:11px;color:#8B84D8}
+.msg{border-radius:12px;padding:8px 12px;max-width:96%;line-height:1.45;white-space:pre-wrap}.me{background:#2E2A55;align-self:flex-end}.ai{background:#181C24;border:1px solid #2A3040}
+.diff{font-family:Consolas,monospace;font-size:11.8px;line-height:1.5;background:#0F1218;border-radius:8px;padding:8px 10px;margin-top:6px;white-space:pre-wrap}
+.add{color:#3DDC97}.del{color:#FF8A8A;text-decoration:line-through}.chg{color:#FFD27A}
+.edit textarea{background:#0F1218;border:1px solid #2E3546;border-radius:6px;padding:6px;color:#ECEEF3;font-size:12.5px;min-height:46px}
+#lock{position:fixed;inset:0;background:#12151C;display:flex;align-items:center;justify-content:center}
+.box{width:520px;background:#161A22;border:1px solid #3A4256;border-radius:14px;padding:22px;display:flex;flex-direction:column;gap:10px}
+table{width:100%;border-collapse:collapse;font-size:12.3px}th{background:#232A3A;color:#C9CED8;text-align:left;padding:6px 8px}td{padding:6px 8px;border-bottom:1px solid #232836}
+.ok{color:#3DDC97}.bad{color:#FF6B6B}
+#toast{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);background:#232A3A;border:1px solid #3A4256;border-radius:10px;padding:8px 16px;display:none}
+#busy2{color:#B9B0FF;font-size:12px;min-height:16px}
+select{background:#232A3A;color:#ECEEF3;border:0;border-radius:6px;padding:4px 8px}
+</style>
+</head>
+<body>
+<div id="top"><b class="t">🧠 Nova Brain</b><span id="pill"></span><span class="muted small" id="meta"></span><span class="grow"></span>
+  <button id="bBackup">💾 Back up now</button><button id="bVers">🕘 Versions &amp; backups</button><button id="bLock">🔒 Lock</button></div>
+<div id="cols">
+  <div id="secs"></div>
+  <div id="mid"></div>
+  <div id="chat">
+    <b>💬 Talk to the brain</b>
+    <div class="muted small" style="margin:2px 0 8px">tell it in your own words · it proposes the exact change · nothing changes without ✓ Apply</div>
+    <div id="msgs2"></div>
+    <div id="busy2"></div>
+    <div style="background:#181C24;border:1px solid #2E3546;border-radius:10px;padding:6px 8px;margin-top:6px">
+      <textarea id="ask" rows="3" placeholder="Write an instruction or a question… (Enter = send · Shift+Enter = new line)"></textarea>
+      <div class="row"><span class="grow"></span><button class="primary" id="send">Send</button></div>
+    </div>
+  </div>
+</div>
+<div id="lock" class="hide"><div class="box" id="lockBox"></div></div>
+<div id="toast"></div>
+<script src="brain.js"></script>
+</body>
+</html>

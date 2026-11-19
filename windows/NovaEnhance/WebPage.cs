@@ -1,0 +1,69 @@
+using System.Text.Json.Nodes;
+using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.WinForms;
+
+namespace NovaEnhance;
+
+/// <summary>A Nova window drawn by one of the built-in pages (Chat folder: brain.html, submittal.html…), talking to C# with messages. Designed by A.HAMROUNI</summary>
+abstract class WebPage : NovaForm
+{
+    protected readonly WebView2 View = new() { Dock = DockStyle.Fill, DefaultBackgroundColor = Th.Bg };
+    protected bool Ready;
+    readonly string name;
+
+    protected WebPage(string title, string page, int w, int h)
+    {
+        Text = "Nova Enhance · " + title;
+        name = title;
+        Width = w; Height = h; MinimumSize = new Size(760, 520);
+        Controls.Add(View);
+        Load += async (_, _) =>
+        {
+            try { await View.EnsureCoreWebView2Async(await HubForm.Env()); }
+            catch (Exception e) { Log.Error(title + " · WebView2", e); Close(); return; }
+            var core = View.CoreWebView2;
+            var env = HubForm.Current;
+            core.Settings.IsStatusBarEnabled = false;
+            core.Settings.IsWebMessageEnabled = true;
+            core.Settings.AreDefaultContextMenusEnabled = true;
+            core.AddWebResourceRequestedFilter("https://nova.chat/*", CoreWebView2WebResourceContext.All);
+            core.WebResourceRequested += (_, e) =>
+            {
+                var name = new Uri(e.Request.Uri).AbsolutePath.TrimStart('/');
+                var bytes = NovaChat.Resource(name);
+                var type = name.EndsWith(".js") ? "application/javascript" : name.EndsWith(".css") ? "text/css" : "text/html";
+                e.Response = bytes == null ? env.CreateWebResourceResponse(null, 404, "Not found", "")
+                    : env.CreateWebResourceResponse(new MemoryStream(bytes), 200, "OK", $"Content-Type: {type}; charset=utf-8");
+            };
+            core.WebMessageReceived += (_, e) =>
+            {
+                JsonObject m;
+                try { m = JsonNode.Parse(e.WebMessageAsJson)?.AsObject(); } catch { return; }
+                if (m == null) return;
+                if (m["t"]?.ToString() == "init") Ready = true;
+                try { OnMessage(m); } catch (Exception ex) { Log.Error(title, ex); Post(new JsonObject { ["t"] = "error", ["text"] = ex.Message }); }
+            };
+            core.Navigate("https://nova.chat/" + page);
+        };
+    }
+
+    protected abstract void OnMessage(JsonObject m);
+
+    public void Post(JsonObject o)
+    {
+        if (IsDisposed) return;
+        if (InvokeRequired) { try { BeginInvoke(new Action(() => Post(o))); } catch { } return; }
+        try { if (Ready) View.CoreWebView2?.PostWebMessageAsJson(o.ToJsonString()); } catch { }
+    }
+
+    /// <summary>Runs slow work off the window, then posts what it returns (or the error).</summary>
+    protected void Work(string doing, Func<JsonObject> f)
+    {
+        Post(new JsonObject { ["t"] = "busy", ["text"] = doing });
+        _ = Task.Run(() =>
+        {
+            try { var r = f(); if (r != null) Post(r); }
+            catch (Exception e) { Log.Error(name, e); Post(new JsonObject { ["t"] = "error", ["text"] = e.Message }); }
+        });
+    }
+}

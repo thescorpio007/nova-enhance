@@ -139,6 +139,9 @@ static class TestConnector
             "errors" => "read the error log",
             "selfcheck" => "run the self-checks",
             "status" => "read Nova's status",
+            "submittal" => $"run the 📋 Submittal log ({S(req, "types", "all types")} · {S(req, "project", "all projects")} · last {S(req, "days", "30")} days)",
+            "brain_read" => "read the 🧠 Nova Brain rules" + (S(req, "section").Length > 0 ? $" (section {S(req, "section")})" : ""),
+            "brain_update" => "PROPOSE changes to the 🧠 Nova Brain (you will see each change and approve it separately)",
             _ => tool
         };
         try
@@ -172,6 +175,35 @@ static class TestConnector
             });
         }
         catch { return Task.FromResult(false); }
+        return tcs.Task;
+    }
+
+    static Task<bool> ApproveBrain(string summary, string text)
+    {
+        var m = Program.Marshal;
+        if (m == null || !m.IsHandleCreated) return Task.FromResult(false);
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        m.BeginInvoke(() =>
+        {
+            bool ok = false;
+            try
+            {
+                using var f = new Form
+                {
+                    Text = "🧠 Claude proposes a change to your Nova Brain", TopMost = true, StartPosition = FormStartPosition.CenterScreen, FormBorderStyle = FormBorderStyle.Sizable,
+                    ClientSize = new Size(900, 520), BackColor = Th.Bg, ForeColor = Th.Text, Font = Th.F(10.5f), ShowInTaskbar = true
+                };
+                var box = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = true, Dock = DockStyle.Fill, BackColor = Th.Bg, ForeColor = Th.Text, Font = new Font("Consolas", 10f),
+                    Text = (summary.Length > 0 ? summary + "\r\n\r\n" : "") + text.Replace("\n", "\r\n") + "\r\n\r\nA version is saved first — ↩ undo anytime in 🧠 Nova Brain → Versions." };
+                var row = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 52, BackColor = Th.Bg, Padding = new Padding(10, 8, 10, 8) };
+                row.Controls.Add(Th.B("✓ Apply", () => { f.DialogResult = DialogResult.Yes; }, true));
+                row.Controls.Add(Th.B("✗ Decline", () => { f.DialogResult = DialogResult.No; }));
+                f.Controls.Add(box); f.Controls.Add(row);
+                ok = f.ShowDialog() == DialogResult.Yes;
+            }
+            catch { }
+            tcs.TrySetResult(ok);
+        });
         return tcs.Task;
     }
 
@@ -287,6 +319,60 @@ static class TestConnector
                 R("Guardian", () => Guard.JobsLine());
                 break;
             }
+            case "submittal":
+            {
+                // 📋 The real log on the real emails — names hidden.
+                var o = new SubmittalLog.Options { From = DateTime.Today.AddDays(-Math.Clamp(I(a, "days", 30), 1, 800)) };
+                foreach (var t in S(a, "types").Split(new[] { ',', ' ', ';' }, StringSplitOptions.RemoveEmptyEntries)) o.Types.Add(t.ToUpperInvariant());
+                foreach (var t in S(a, "project").Split(new[] { ',', ' ', ';' }, StringSplitOptions.RemoveEmptyEntries)) o.Projects.Add(t.ToUpperInvariant());
+                o.Tower = S(a, "tower"); o.Status = S(a, "status");
+                var r = await Task.Run(() => SubmittalLog.Run(o));
+                var hide = new Activity.Hider();
+                sb.AppendLine($"Submittal log · {(o.Types.Count > 0 ? string.Join(",", o.Types) : "all types")} · {(o.Projects.Count > 0 ? string.Join(",", o.Projects) : "all projects")} · since {o.From:dd MMM yyyy}");
+                sb.AppendLine(SubmittalLog.Kpis(r).ToJsonString());
+                foreach (var g in r.Items.GroupBy(i => $"{i.Project} {i.Type} {i.Status}").OrderBy(g => g.Key)) sb.AppendLine($"  {g.Key}: {g.Count()}");
+                foreach (var i in r.Items.Take(Math.Clamp(I(a, "limit", 60), 1, 400)))
+                    sb.AppendLine($"- {i.No} {i.Rev} · {i.Type} · {i.Status}{(i.Code.Length > 0 ? " · " + i.Code : "")} · {i.Via} · T:{i.Tower} Z:{i.Zone} L:{i.Level} A:{i.Apt} · sub {i.Submitted:dd MMM HH:mm} · due {i.Deadline:dd MMM} · reply {i.Reply:dd MMM HH:mm}
+  title: {hide.Hide(i.Title)}
+  why: {hide.Hide(i.Why)}{(i.Check.Length > 0 ? "\n  check: " + i.Check : "")}");
+                break;
+            }
+            case "brain_read":
+            {
+                var b = Brain.Snapshot();
+                sb.AppendLine(Brain.Unlocked ? $"🧠 Nova Brain · version {Brain.Version} · {Brain.RuleCount} rules" : "🧠 Nova Brain is locked or not made yet — these are the built-in rules");
+                var only = S(a, "section");
+                foreach (var sec in (b["sections"] as JsonArray ?? new JsonArray()).OfType<JsonObject>())
+                {
+                    if (only.Length > 0 && sec["id"]?.ToString() != only && !(sec["name"]?.ToString() ?? "").Contains(only, StringComparison.OrdinalIgnoreCase)) continue;
+                    sb.AppendLine($"\n## {sec["icon"]} {sec["name"]} (id {sec["id"]}, tags {string.Join(",", (sec["tags"] as JsonArray)?.Select(t => t?.ToString()) ?? Array.Empty<string>())})");
+                    foreach (var r in (sec["rules"] as JsonArray ?? new JsonArray()).OfType<JsonObject>())
+                        sb.AppendLine($"- {r["id"]}{(r["off"]?.GetValue<bool>() == true ? " (off)" : "")} · {r["title"]}: {r["text"]}  [{r["by"]}]");
+                }
+                break;
+            }
+            case "brain_update":
+            {
+                // Each change is shown on the PC and applied only after your ✓ — whatever the “Allow for 1 hour” choice.
+                if (!Brain.Unlocked) throw new Exception("the 🧠 Nova Brain is locked on the PC — open it first");
+                var changes = a["changes"] as JsonArray ?? throw new Exception("changes is missing");
+                var summary = S(a, "summary");
+                var before = Brain.Snapshot();
+                var (after, said) = Brain.Apply(before, changes, "Claude · connector");
+                var diff = Brain.Diff(before, after);
+                if (diff.Count == 0) { sb.AppendLine("No rule would change."); break; }
+                var text = string.Join("\n", diff.OfType<JsonObject>().Select(d => d["op"]?.ToString() switch
+                {
+                    "remove" => $"− {d["id"]}  {d["old"]}",
+                    "change" => $"✎ {d["id"]}  {d["text"]}\n      (was: {d["old"]})",
+                    _ => $"+ {d["id"]}  {d["text"]}   ({d["section"]})"
+                }));
+                var ok = await ApproveBrain(summary, text);
+                if (!ok) { sb.AppendLine("✗ Declined on the PC — nothing changed."); break; }
+                var v = Brain.Commit(after, "Claude · connector ✓ you", (summary.Length > 0 ? summary + " · " : "") + said);
+                sb.AppendLine($"✓ Applied on the PC · version {v} · {said}");
+                break;
+            }
             default: throw new Exception("unknown tool " + tool);
         }
         return sb.ToString();
@@ -304,6 +390,11 @@ static class TestConnector
         ("activity", "Nova's Activity history: summary plus the last tasks with their steps, timings and decisions (names hidden; AI texts left out).",
             "{\"type\":\"object\",\"properties\":{\"days\":{\"type\":\"integer\",\"description\":\"1 to 30, default 1\"},\"feature\":{\"type\":\"string\",\"description\":\"e.g. email search, conversation, ai call\"},\"limit\":{\"type\":\"integer\"}}}"),
         ("errors", "Nova's error log for the last hours, plus the last crash and freeze notes (names hidden).", "{\"type\":\"object\",\"properties\":{\"hours\":{\"type\":\"integer\",\"description\":\"default 24\"}}}"),
+        ("submittal", "Runs the 📋 Submittal log on the real emails (WIR, MIR, MAR, PQS, RFI, SDS · Thinkproject or plain Outlook · MZA reply on the same thread): numbers per status and the items with tower/zone/level, dates, code and why — names hidden.",
+            "{\"type\":\"object\",\"properties\":{\"types\":{\"type\":\"string\",\"description\":\"e.g. WIR,MIR (empty = all)\"},\"project\":{\"type\":\"string\",\"description\":\"e.g. SLV or RS5\"},\"days\":{\"type\":\"integer\",\"description\":\"submitted in the last N days, default 30\"},\"tower\":{\"type\":\"string\"},\"status\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"}}}"),
+        ("brain_read", "Reads the 🧠 Nova Brain rules (all sections, or one).", "{\"type\":\"object\",\"properties\":{\"section\":{\"type\":\"string\"}}}"),
+        ("brain_update", "Proposes changes to the 🧠 Nova Brain; the user sees each change on the PC and applies it with ✓ (a version is saved first).",
+            "{\"type\":\"object\",\"properties\":{\"summary\":{\"type\":\"string\"},\"changes\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"op\":{\"type\":\"string\"},\"section\":{\"type\":\"string\"},\"id\":{\"type\":\"string\"},\"title\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"}}}}},\"required\":[\"changes\"]}"),
         ("selfcheck", "Runs Nova's self-checks: index, full-text and phrase search, Outlook, archive files, renamed archives, Gemini key, local AI, activity history, background jobs.", "{\"type\":\"object\",\"properties\":{}}")
     };
 
