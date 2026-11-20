@@ -15,10 +15,11 @@
     "#agMsgs::-webkit-scrollbar{width:12px}#agMsgs::-webkit-scrollbar-track{background:#151925}#agMsgs::-webkit-scrollbar-thumb{background:#4A4480;border-radius:6px;border:2px solid #151925}#agMsgs::-webkit-scrollbar-thumb:hover{background:#6A60C0}" +
     "#agMsgs .you{margin:10px 0 4px auto;max-width:78%;width:fit-content;background:#3B3570;color:#fff;border-radius:12px 12px 3px 12px;padding:8px 13px;white-space:pre-wrap}" +
     "#agMsgs .nova{margin:4px 0 10px;max-width:100%}" +
-    "#agMsgs .ex{display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:start;padding:7px 0;border-bottom:1px solid #232836}" +
-    "#agMsgs .ex .s{font-weight:600;color:#fff;cursor:pointer}#agMsgs .ex .m{color:#9AA3B5;font-size:12px}" +
+    "#agMsgs .agEx{display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:start;padding:7px 0;border-bottom:1px solid #232836}" +
+    "#agMsgs .agEx .s{font-weight:600;color:#fff;cursor:pointer}#agMsgs .agEx .m{color:#9AA3B5;font-size:12px}" +
     "#agMsgs .yn button{padding:3px 10px;margin-right:4px}#agMsgs .yn button.on{background:#7C6CFF;color:#fff}" +
-    "#agMsgs .card{background:#1A1E2B;border:1px solid #2E3448;border-radius:11px;padding:10px 13px;margin:6px 0}#agMsgs .card .q{font-weight:600;color:#fff;margin-bottom:4px}" +
+    "#agMsgs .agCard{background:#1A1E2B;border:1px solid #2E3448;border-radius:11px;padding:10px 13px;margin:6px 0;max-width:100%}#agMsgs .agCard .q{font-weight:600;color:#fff;margin-bottom:4px}" +
+    "#agMsgs .agCard.shut .agEx,#agMsgs .agCard.shut input,#agMsgs .agCard.shut .acts{display:none}#agMsgs .agCard.shut{cursor:pointer;padding:6px 13px}#agMsgs .agCard .sum{color:#9AA3B5;font-size:12.5px;margin-left:8px;font-weight:400}" +
     "#agMsgs .tw{max-height:55vh;overflow:auto;border:1px solid #232836;border-radius:9px;margin-top:8px}" +
     "#agMsgs table{border-collapse:collapse;width:100%;font-size:12.5px}#agMsgs th{text-align:left;color:#C9CED8;padding:6px 8px;border-bottom:1px solid #2A3040;position:sticky;top:0;background:#232A3A;z-index:2}" +
     "#agMsgs td{padding:5px 8px;border-bottom:1px solid #1F2433;vertical-align:top;white-space:normal}#agMsgs tr.r{cursor:pointer}#agMsgs tr.r:hover td{background:#1E2230}" +
@@ -100,11 +101,11 @@
       else if (m.t === "ag.detail") { if (think) think.detail(m.text); }
       else if (m.t === "ag.confirm") {
         if (think) think.pause("waiting for your ✓ / ✗ below");
-        var card = el("div", "card");
-        card.appendChild(el("div", "q", "✓ / ✗ " + m.question));
+        var card = el("div", "agCard");
+        var qh = el("div", "q", "✓ / ✗ " + m.question); card.appendChild(qh);
         var verdict = {};
         (m.items || []).forEach(function (h) {
-          var r = el("div", "ex"), yn = el("div", "yn");
+          var r = el("div", "agEx"), yn = el("div", "yn");
           var y = el("button", null, "✓"), no = el("button", null, "✗");
           y.onclick = function () { verdict[h.id] = true; y.className = "on"; no.className = ""; };
           no.onclick = function () { verdict[h.id] = false; no.className = "on"; y.className = ""; };
@@ -121,6 +122,10 @@
         go.onclick = function () {
           var yes = [], no2 = []; Object.keys(verdict).forEach(function (k) { (verdict[k] ? yes : no2).push(+k); });
           card.querySelectorAll("button").forEach(function (b) { b.disabled = true; }); note.disabled = true;
+          // folded to one line, so the answer has room — click to see the examples again
+          var sum = el("span", "sum", "✓ " + yes.length + " confirmed · ✗ " + no2.length + (note.value ? " · “" + note.value + "”" : "") + " · click to see them");
+          qh.appendChild(sum); card.classList.add("shut");
+          card.onclick = function (e) { if (e.target.closest("button,input")) return; card.classList.toggle("shut"); sum.textContent = card.classList.contains("shut") ? "✓ " + yes.length + " confirmed · ✗ " + no2.length + " · click to see them" : "click to fold"; };
           if (think) { think.resume(); think.detail("continuing with your ✓ / ✗…"); }
           post({ t: "ag.confirmed", yes: yes, no: no2, note: note.value });
         };

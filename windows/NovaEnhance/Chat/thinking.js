@@ -17,7 +17,7 @@
     ".thk .wt{color:#FBBF24;font-size:12.5px;margin:6px 0 0 32px}.thk .bar{height:3px;background:#2C2C36;border-radius:3px;margin-top:9px;overflow:hidden;position:relative}" +
     ".thk .bar b{position:absolute;top:0;bottom:0;width:30%;background:linear-gradient(90deg,transparent,#8B7DFF,transparent);animation:thkm 1.6s infinite linear}" +
     "@keyframes thkm{0%{left:-30%}100%{left:100%}}.thk button{padding:3px 11px;font-size:12px}" +
-    ".thk.done{background:transparent;border-color:#2A3040}.thk.done .dts,.thk.done .bar,.thk.done button,.thk.done .wt{display:none}.thk.err{border-color:#7A2E33}";
+    ".thk.done{background:transparent;border-color:#2A3040}.thk.done .dts,.thk.done .tm,.thk.done .bar,.thk.done button,.thk.done .wt{display:none}.thk.err{border-color:#7A2E33}";
   document.head.appendChild(st);
 
   var live = [];
