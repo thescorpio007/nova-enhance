@@ -1809,7 +1809,7 @@ class BriefForm : NovaForm
         {
             if (settingSplit || split.Panel2Collapsed || split.Width < 600) return;
             Store.SetInt("win_brief_pane_pct", Math.Clamp((int)Math.Round(100.0 * split.Panel2.Width / split.Width), 22, 60));
-            BeginInvoke(() => Relayout(false));   // dragging the divider may change the layout (columns ↔ one list)
+            if (IsHandleCreated) BeginInvoke(() => Relayout(false));   // dragging the divider may change the layout (columns ↔ one list) — not while the window is being built
         };
         split.Panel1.BackColor = split.Panel2.BackColor = Th.Bg;
         one = new Stack { Padding = new Padding(16, 4, 8, 8) };

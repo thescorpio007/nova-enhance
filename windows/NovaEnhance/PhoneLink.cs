@@ -712,6 +712,13 @@ static class PhoneLink
                 finally { try { Directory.Delete(dir, true); } catch { } }
                 break;
             }
+            case "admincode":
+            {
+                // 🔐 Forgot the Nova PIN: the one-time code, only to the paired phone (sealed with its key).
+                var c = AdminLock.PhoneCode();
+                res = new JsonObject { ["code"] = c, ["until"] = c.Length > 0 ? AdminLock.CodeUntil.ToString("HH:mm") : "", ["locked"] = AdminLock.Locked, ["on"] = AdminLock.Enabled };
+                break;
+            }
             case "projfound":
             {
                 // ＋ Projects found in your emails — the same list, ✚ add · ⇢ merge · ✗ ignore from the phone.

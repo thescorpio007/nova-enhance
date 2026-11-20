@@ -175,7 +175,7 @@ static class Ai
     static async Task<string> ChatOneCore(string system, string user, bool fast, bool json, Provider p, CancellationToken ct)
     {
         // 🧠 Every AI task asks the brain: the rules that apply are added to its instructions.
-        system = (system ?? "") + Brain.Guide(system, user);
+        if (!AdminLock.InSandbox) system = (system ?? "") + Brain.Guide(system, user);   // 🔐 locked Enhance / PDF: never your Brain
         p ??= Active() ?? throw new AiException("No AI key yet — add one in Settings → AI & API keys");
         var key = Store.Key(p.Id);
         if (p.Id is "local" or "server") { if (key.Length == 0) key = "nova"; }   // local servers need no key

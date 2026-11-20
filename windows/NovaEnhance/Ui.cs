@@ -181,6 +181,26 @@ class NovaForm : Form
 
     protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); Th.DarkTitle(this); Th.SetIcons(this); }
 
+    // 🔐 Admin lock: a Nova window opens only after your PIN (Enhance and the PDF panel are allowed; small dialogs follow their window).
+    public virtual bool AllowedWhileLocked => false;
+    bool asking;
+
+    protected override void OnVisibleChanged(EventArgs e)
+    {
+        if (Visible && !asking && GetType() != typeof(NovaForm) && !AllowedWhileLocked && AdminLock.Locked)
+        {
+            asking = true;
+            try
+            {
+                Hide();
+                if (AdminLock.Pass(Text)) Show();
+            }
+            finally { asking = false; }
+            return;
+        }
+        base.OnVisibleChanged(e);
+    }
+
     // ⤢ Size and place remembered per window (only for windows you can resize; not while it is a side panel).
     string BoundsKey => GetType() == typeof(NovaForm) ? "" : "win_bounds_" + GetType().Name;
 

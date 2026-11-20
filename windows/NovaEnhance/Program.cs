@@ -90,6 +90,7 @@ static class Program
 
     public static void Balloon(string title, string text)
     {
+        if (AdminLock.Locked) return;   // 🔐 nothing of yours pops up while Nova is locked
         try { UiContext?.Post(_ => Tray?.ShowBalloonTip(8000, title, text, ToolTipIcon.Info), null); } catch { }
     }
 }
@@ -161,7 +162,6 @@ class NovaContext : ApplicationContext
         m.Items.Add("📌  My Work", null, (_, _) => Screens.Work(null));
         m.Items.Add("📂  Find a project file…", null, (_, _) => Screens.FindFile(null));
         m.Items.Add("📄  Nova for this PDF                Ctrl+Shift+D", null, (_, _) => PdfCompanion.Open());
-        m.Items.Add("📂  Archive reader (.pst)…", null, (_, _) => Screens.PstReader(null));
         m.Items.Add(new ToolStripSeparator());
         m.Items.Add("📁  Search inside a folder…", null, (_, _) => Screens.FolderSearch(null));
         m.Items.Add("🔍  Search for email                Ctrl+Shift+F", null, (_, _) => Screens.Ask());
@@ -171,16 +171,20 @@ class NovaContext : ApplicationContext
         m.Items.Add("🕘  Chat history", null, (_, _) => Screens.ChatHistory());
         m.Items.Add("🔎  Search history (every search, 60 days)", null, (_, _) => Screens.SearchHistory());
         m.Items.Add("📋  Submittal log (WIR · MIR · MAR · PQS · RFI · SDS)", null, (_, _) => Screens.Submittal());
-        m.Items.Add("🧠  Nova Brain", null, (_, _) => Screens.Brain());
         m.Items.Add(new ToolStripSeparator());
         m.Items.Add("⚙  Settings", null, (_, _) => Screens.Settings());
         m.Items.Add("📁  Open the Nova Enhance folder", null, (_, _) => Shell.Open(Paths.Root));
         m.Items.Add("⬆  Check for updates", null, (_, _) => Screens.Settings("Updates"));
         m.Items.Add(new ToolStripSeparator());
-        m.Items.Add("Exit Nova Enhance", null, (_, _) => Quit());
+        var lockItem = new ToolStripMenuItem("🔐  Lock Nova now", null, (_, _) => AdminLock.Lock("🔐 Lock now"));
+        m.Items.Add(lockItem);
+        m.Opening += (_, _) => { lockItem.Visible = AdminLock.Enabled; lockItem.Text = AdminLock.Locked ? "🔓  Unlock Nova…" : "🔐  Lock Nova now"; };
+        lockItem.Click += (_, _) => { if (AdminLock.Locked && lockItem.Text.StartsWith("🔓")) AdminLock.Pass("Unlock"); };
+        m.Items.Add("Exit Nova Enhance", null, (_, _) => { if (AdminLock.Pass("Exit Nova Enhance")) Quit(); });
         tray.ContextMenuStrip = m;
         tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) Screens.Ask(); };
 
+        AdminLock.Start();   // 🔐 locked at start (when a PIN is set), then on idle, Windows lock and sleep
         hot = new HotkeyWindow();
         hot.Register(1, Keys.E, Screens.Enhance, "Ctrl+Shift+E");
         hot.Register(2, Keys.F, Screens.Ask, "Ctrl+Shift+F");

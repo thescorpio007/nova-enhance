@@ -573,6 +573,10 @@ static class Server
 
     static async Task<JsonObject> Api(string p, JsonObject r)
     {
+        // 🔐 Nova locked: Word / Excel / browser can only enhance the text sent (no drafts, versions, originals, summaries).
+        if (AdminLock.Locked && p is not ("/api/ping" or "/api/langs" or "/api/enhance" or "/api/cells"))
+            return new JsonObject { ["error"] = "🔐 Nova Enhance is locked — only text enhancement works. Unlock it from the tray." };
+        AdminLock.Sandbox();
         switch (p)
         {
             case "/api/ping":
@@ -592,8 +596,7 @@ static class Server
                 var prov = Ai.Current() ?? throw new AiException("Add an AI key in Nova Enhance → Settings → AI & API keys");
                 using var _ = Log.Doing($"Office panel · {Modes.Label(mode)} ({S(r, "host")})");
                 var outText = await Ai.Enhance(prov, mode, text, CancellationToken.None);
-                History.SaveOriginal(mode, text, outText);
-                History.Add("enhance", prov.Id, Store.Model(prov.Id), mode, text, outText);
+                if (!AdminLock.InSandbox) { History.SaveOriginal(mode, text, outText); History.Add("enhance", prov.Id, Store.Model(prov.Id), mode, text, outText); }
                 return new JsonObject { ["result"] = outText, ["label"] = Modes.Label(mode), ["ai"] = prov.Label };
             }
             case "/api/cells":
@@ -611,7 +614,7 @@ static class Server
                 var outArr = new JsonArray();
                 foreach (var (id, text) in list)
                     outArr.Add(new JsonObject { ["id"] = id, ["result"] = got.TryGetValue(id, out var t) ? t : null });
-                History.Add("enhance", prov.Id, Store.Model(prov.Id), mode, $"Excel · {list.Count} cells", $"{got.Count} answered");
+                if (!AdminLock.InSandbox) History.Add("enhance", prov.Id, Store.Model(prov.Id), mode, $"Excel · {list.Count} cells", $"{got.Count} answered");
                 return new JsonObject { ["items"] = outArr, ["label"] = Modes.Label(mode), ["ai"] = prov.Label };
             }
             case "/api/cellsoriginal":
@@ -622,7 +625,7 @@ static class Server
                 var after = new StringBuilder();
                 foreach (var it in r["items"] as JsonArray ?? new JsonArray())
                     if (it is JsonObject jo) { sb.Append(S(jo, "addr")).Append(": ").AppendLine(S(jo, "before")); after.Append(S(jo, "addr")).Append(": ").AppendLine(S(jo, "after")); }
-                if (sb.Length > 0) History.SaveOriginal(mode, sb.ToString().TrimEnd(), after.ToString().TrimEnd());
+                if (sb.Length > 0 && !AdminLock.InSandbox) History.SaveOriginal(mode, sb.ToString().TrimEnd(), after.ToString().TrimEnd());
                 return new JsonObject { ["ok"] = true };
             }
             case "/api/page":

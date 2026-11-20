@@ -476,7 +476,7 @@ static class BriefLogic
     /// <summary>Once a day, from the chosen hour, when there is something in the index.</summary>
     public static void MaybeShow()
     {
-        if (!Store.BriefOn) return;
+        if (!Store.BriefOn || AdminLock.Locked) return;   // 🔐 locked: the brief waits until you unlock
         var today = DateTime.Now.ToString("yyyy-MM-dd");
         if (Store.Str("win_last_brief") == today || DateTime.Now.Hour < Store.BriefHour) return;
         if (MailIndex.Count() == 0) return;

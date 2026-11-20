@@ -179,6 +179,12 @@ static class PdfCompanion
 /// <summary>The ✦ Nova panel for one PDF.</summary>
 class PdfPanel : NovaForm
 {
+    public override bool AllowedWhileLocked => true;   // 🔐 works while locked, on this PDF only
+
+    // 🔐 Buttons that lead to other features (Nova Chat, folders, tasks, memory) are hidden while Nova is locked.
+    readonly List<Control> linked = new();
+    Control Lk(Control c) { linked.Add(c); return c; }
+    protected override void OnActivated(EventArgs e) { base.OnActivated(e); foreach (var c in linked) c.Visible = !AdminLock.Locked; }
     readonly Stack s;
     readonly Label title, where, status;
     readonly TextBox ask, find;
@@ -226,8 +232,8 @@ class PdfPanel : NovaForm
 
         var r1 = s.Add(Th.Row());
         r1.Controls.Add(Th.B("🔤 OCR this PDF", Ocr));
-        r1.Controls.Add(Th.B("💬 Send to Nova Chat", () => { if (File.Exists(path)) Screens.HubAttach(path); }));
-        r1.Controls.Add(Th.B("📁 Search the project folder", () => Screens.FolderSearch(Path.GetDirectoryName(path))));
+        r1.Controls.Add(Lk(Th.B("💬 Send to Nova Chat", () => { if (File.Exists(path)) Screens.HubAttach(path); })));
+        r1.Controls.Add(Lk(Th.B("📁 Search the project folder", () => Screens.FolderSearch(Path.GetDirectoryName(path)))));
 
         var r2 = s.Add(Th.Row(false));
         r2.Controls.Add(Th.B("🌐 Translate page", TranslatePage));
@@ -249,24 +255,24 @@ class PdfPanel : NovaForm
             catch (Exception ex) { status.Text = "⚠ " + ex.Message; }
         }));
         r3.Controls.Add(Th.B("More detail", () => { if (lastQuestion.Length > 0) Ask(lastQuestion, true); else Summary(); }));
-        r3.Controls.Add(Th.B("👍", () =>
+        r3.Controls.Add(Lk(Th.B("👍", () =>
         {
             if (lastAnswer.Length == 0 || lastQuestion.Length == 0) { status.Text = "Ask a question first"; return; }
             Memory.Good(lastQuestion, lastAnswer, path, new[] { path }, new[] { lastAnswer }, "pdf");
             status.Text = "👍 🧠 Nova remembers this answer for similar questions on this PDF";
-        }));
-        r3.Controls.Add(Th.B("👎", () =>
+        })));
+        r3.Controls.Add(Lk(Th.B("👎", () =>
         {
             if (lastQuestion.Length == 0) return;
             Memory.Bad(lastQuestion, path, null, "pdf");
             status.Text = "👎 Noted — Nova forgets that answer. Try More detail, or 📁 Search the project folder for the right file.";
-        }));
-        r3.Controls.Add(Th.B("📌 Save as task", () =>
+        })));
+        r3.Controls.Add(Lk(Th.B("📌 Save as task", () =>
         {
             if (lastAnswer.Length == 0) { status.Text = "Ask or summarise first, then save it as a task."; return; }
             var link = new WorkItem { Kind = "file", Path = path, Subject = Path.GetFileName(path) };
             Screens.Saved(Work.FromText((lastQuestion.Length > 0 ? lastQuestion : "Check") + " · " + Path.GetFileNameWithoutExtension(path), lastQuestion, lastAnswer, "pdf", new[] { link }));
-        }));
+        })));
 
         s.Add(Th.Section("Search in this PDF"));
         find = s.Add(Th.Box(false), true);
@@ -351,6 +357,7 @@ class PdfPanel : NovaForm
 
     async void Ask(string q, bool detailed)
     {
+        AdminLock.Sandbox();   // 🔐 locked: this PDF only — no Brain
         using var privateWork = Ai.Private();   // your emails / documents: the routing rule may keep them on the local AI
         if (q == ask.Text) { Speller.FixBeforeSearch(ask, () => Ask(ask.Text, detailed)); q = ask.Text; }
         q = (q ?? "").Trim();
@@ -359,7 +366,7 @@ class PdfPanel : NovaForm
         if (q.Length == 0) { ask.Focus(); return; }
         if (files.Count > 0) detailed = true;
         cts?.Cancel(); var my = cts = new CancellationTokenSource();
-        var (card, changed) = detailed ? ((KnowCard)null, (List<string>)null) : Memory.Find(q, path, "pdf");
+        var (card, changed) = detailed || AdminLock.InSandbox ? ((KnowCard)null, (List<string>)null) : Memory.Find(q, path, "pdf");
         if (card != null) ShowAnswer($"🧠 Nova remembers (you liked this on {card.Saved:dd MMM yyyy}):\n{card.A}" + (changed.Count > 0 ? "\n⚠ Changed since: " + string.Join(", ", changed) : "") + "\n↻ Checking again…");
         try
         {
@@ -385,9 +392,12 @@ class PdfPanel : NovaForm
             if (files.Count > 0) sys += " The main document's pages are cited [p.N]; the user also attached other files, cited [F1], [F2]… (the main document is the first column when comparing)." + FileTalk.Rules;
             var a = await Ai.Chat(sys, $"Document: {Path.GetFileName(path)}\n\n{Extracts(pick, 60000)}\n" + (attached.Length > 0 ? "ATTACHED FILES:\n" + attached + "\n" : "") + $"Question: {q}" + (pInstr.Text.Trim().Length > 0 ? "\nInstructions from the user (follow them for content, format, length and language): " + pInstr.Text.Trim() : ""), !detailed, false, prov, my.Token);
             if (my.IsCancellationRequested) return;
-            History.Add("ask", prov.Id, Store.Model(prov.Id), "pdf", Path.GetFileName(path) + " · " + q, a);
-            if (pdfConv?.Ref != path) pdfConv = null;
-            Conversations.Add(ref pdfConv, "pdf", Path.GetFileName(path), path, q, a);
+            if (!AdminLock.InSandbox)   // 🔐 locked: nothing goes to your history or chats
+            {
+                History.Add("ask", prov.Id, Store.Model(prov.Id), "pdf", Path.GetFileName(path) + " · " + q, a);
+                if (pdfConv?.Ref != path) pdfConv = null;
+                Conversations.Add(ref pdfConv, "pdf", Path.GetFileName(path), path, q, a);
+            }
             ShowAnswer(a);
             status.Text = $"✓ Answer from this PDF · {prov.Label} — click a [p.N] to open that page" + Newer();
         }
@@ -408,6 +418,7 @@ class PdfPanel : NovaForm
 
     async void Summary()
     {
+        AdminLock.Sandbox();   // 🔐 locked: this PDF only — no Brain
         using var privateWork = Ai.Private();   // your emails / documents: the routing rule may keep them on the local AI
         cts?.Cancel(); var my = cts = new CancellationTokenSource();
         try
@@ -425,7 +436,7 @@ class PdfPanel : NovaForm
                       "Keep it compact. Use the language of the document (English unless it is in Arabic or French)." + Modes.ProfileNote();
             var a = await Ai.Chat(sys, $"Document: {Path.GetFileName(path)}\n\n{Extracts(all, 60000)}", false, false, prov, my.Token);
             if (my.IsCancellationRequested) return;
-            History.Add("ask", prov.Id, Store.Model(prov.Id), "pdf-check", Path.GetFileName(path), a);
+            if (!AdminLock.InSandbox) History.Add("ask", prov.Id, Store.Model(prov.Id), "pdf-check", Path.GetFileName(path), a);
             ShowAnswer(a);
             status.Text = $"✓ Summary and check · {prov.Label}" + Newer();
         }
@@ -434,6 +445,7 @@ class PdfPanel : NovaForm
 
     async void TranslatePage()
     {
+        AdminLock.Sandbox();   // 🔐 locked: this PDF only — no Brain
         try
         {
             var all = await Text_();
@@ -453,6 +465,7 @@ class PdfPanel : NovaForm
 
     async void Ocr()
     {
+        AdminLock.Sandbox();   // 🔐 locked: this PDF only — no Brain
         try
         {
             status.Text = "🔤 OCR on this PC — big drawings take a moment per page…";
@@ -489,6 +502,7 @@ class PdfPanel : NovaForm
 
     async void Find(string q)
     {
+        AdminLock.Sandbox();   // 🔐 locked: this PDF only — no Brain
         q = (q ?? "").Trim();
         hits.Controls.Clear();
         if (q.Length == 0) return;

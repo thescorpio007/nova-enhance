@@ -3,7 +3,7 @@ namespace NovaEnhance;
 /// <summary>Settings, split into sections like the phone app.</summary>
 class SettingsForm : NovaForm
 {
-    static readonly string[] AllSections = { "🧠 Nova Brain", "AI & API keys", "About me", "Enhancement", "Email & AI", "📥 Email index", "🗂 Mailboxes & archives", "📂 Folders in the index", "📁 Email projects", "Folder search", "📁 Projects", "✦ Prompts", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "🧪 Activity history", "🔌 Test connector", "📱 Phone link", "About" };
+    static readonly string[] AllSections = { "🧠 Nova Brain", "🔐 Admin", "AI & API keys", "About me", "Enhancement", "Email & AI", "📥 Email index", "🗂 Mailboxes & archives", "📂 Folders in the index", "📁 Email projects", "Folder search", "📁 Projects", "✦ Prompts", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "🧪 Activity history", "🔌 Test connector", "📱 Phone link", "About" };
     /// <summary>🧪 Activity history and 🔌 Test connector are advanced tools: shown only when switched on (About → Advanced tools).</summary>
     static readonly string[] AdvancedSections = { "🧪 Activity history", "🔌 Test connector" };
     static string[] Sections = Visible();
@@ -92,6 +92,7 @@ class SettingsForm : NovaForm
                 case "📁 Projects": ProjectsPage(); break;
                 case "Google Drive": GoogleDrive(); break;
                 case "Shortcuts": Shortcuts(); break;
+                case "🔐 Admin": AdminPage(); break;
                 case "Browser add-on": BrowserPage(); break;
                 case "AI window": AiWindowPage(); break;
                 case "🧠 What Nova knows": KnowsPage(); break;
@@ -1255,6 +1256,45 @@ class SettingsForm : NovaForm
     }
 
     // ------------------------------------------------------------------ Shortcuts
+    // ------------------------------------------------------------------ 🔐 Admin lock
+    void AdminPage()
+    {
+        Note("A PIN only you know. When Nova is locked nothing opens without it — only ✦ Enhance selected text and 📄 Nova for this PDF work, on their own text / PDF (your tone and language; no Brain, emails, files, history or private words). Every wrong PIN is recorded in 🧪 Activity history.", Th.Text);
+        var st = Th.L(AdminLock.Enabled ? "🔐 On — Nova locks after " + AdminLock.IdleMinutes + " min idle, when Windows locks or sleeps, and when it starts" : "🔓 Off — set a PIN to switch it on", 10, AdminLock.Enabled ? Th.Good : Th.Muted);
+        page.Add(st);
+        page.Add(Th.Section(AdminLock.Enabled ? "Change the PIN" : "Set a PIN (6 to 12 digits)"));
+        var r = page.Add(Th.Row(false));
+        var p1 = Th.Box(false); p1.UseSystemPasswordChar = true; p1.MaxLength = 12; p1.Width = 160; p1.PlaceholderText = "new PIN";
+        var p2 = Th.Box(false); p2.UseSystemPasswordChar = true; p2.MaxLength = 12; p2.Width = 160; p2.PlaceholderText = "again";
+        r.Controls.Add(p1); r.Controls.Add(p2);
+        r.Controls.Add(Th.B("🔐 Save the PIN", () =>
+        {
+            if (p1.Text != p2.Text) { st.Text = "⚠ The two PINs are different"; st.ForeColor = Th.Warn; return; }
+            if (AdminLock.Email.Length < 4) { st.Text = "⚠ Add your personal recovery email first (below)"; st.ForeColor = Th.Warn; return; }
+            st.Text = AdminLock.SetPin(p1.Text); st.ForeColor = st.Text.StartsWith("⚠") ? Th.Warn : Th.Good; p1.Text = p2.Text = "";
+        }, true));
+        if (AdminLock.Enabled)
+            r.Controls.Add(Th.B("Switch the lock off", () => { if (MessageBox.Show(this, "Switch the admin lock off? Nova will open for anyone using this laptop.", "🔐 Admin", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes) { st.Text = AdminLock.SetPin(""); Draw("🔐 Admin"); } }));
+        page.Add(Th.Section("Lock after this idle time"));
+        var ir = page.Add(Th.Row(false));
+        var mins = Th.Box(false); mins.Width = 70; mins.Text = AdminLock.IdleMinutes.ToString();
+        void SetIdle(int v) { AdminLock.IdleMinutes = v; mins.Text = AdminLock.IdleMinutes.ToString(); st.Text = $"✓ Nova locks after {AdminLock.IdleMinutes} min without use"; st.ForeColor = Th.Good; }
+        foreach (var v in new[] { 5, 15, 30 }) { var vv = v; ir.Controls.Add(Th.B(vv + " min", () => SetIdle(vv))); }
+        ir.Controls.Add(Th.L("or", 10, Th.Muted));
+        ir.Controls.Add(mins);
+        ir.Controls.Add(Th.L("minutes (1–480)", 10, Th.Muted));
+        ir.Controls.Add(Th.B("✓ Set", () => { if (int.TryParse(mins.Text.Trim(), out var v) && v >= 1 && v <= 480) SetIdle(v); else { st.Text = "⚠ Type a number of minutes from 1 to 480"; st.ForeColor = Th.Warn; } }));
+        Note("It also locks at once when Windows locks (⊞+L), when the laptop sleeps, when Nova starts, and with tray ✦ → 🔐 Lock Nova now.", Th.Muted);
+        page.Add(Th.Section("Forgot the PIN · your personal recovery email"));
+        var er = page.Add(Th.Row(false));
+        var mail = Th.Box(false); mail.Width = 320; mail.Text = AdminLock.Email; mail.PlaceholderText = "e.g. your personal Gmail (not the Outlook on this laptop)";
+        er.Controls.Add(mail);
+        er.Controls.Add(Th.B("✓ Save", () => { AdminLock.Email = mail.Text; st.Text = "✓ Recovery email saved"; st.ForeColor = Th.Good; }));
+        Note("Forgot PIN? on the lock window sends a one-time 6-digit code to this email (no copy kept in Sent Items) and shows it in the Nova app on your paired phone → My PC → 🔐. It works once, expires in 10 minutes; 3 wrong codes block recovery for an hour.", Th.Muted);
+        page.Add(Th.Section("Lock now"));
+        page.Add(Th.B("🔐 Lock Nova now", () => AdminLock.Lock("🔐 Lock now (Settings)")));
+    }
+
     void Shortcuts()
     {
         page.Add(Th.Section("Everywhere in Windows"));

@@ -5,6 +5,7 @@ namespace NovaEnhance;
 /// <summary>Ctrl+Shift+E: the selected text, enhanced, and put back into the same program.</summary>
 class EnhanceForm : NovaForm
 {
+    public override bool AllowedWhileLocked => true;   // 🔐 works while locked, on its own text only
     TextBox eInstr;
     IntPtr target;
     string targetName = "";
@@ -156,6 +157,7 @@ class EnhanceForm : NovaForm
 
     async void Run(string mode)
     {
+        AdminLock.Sandbox();   // 🔐 locked: no Brain, history or saved originals
         var text = orig.Text;
         if (text.Trim().Length == 0) { Status("Type or paste text first", Th.Warn); orig.Focus(); return; }
         var p = (aiBox.SelectedItem as AiItem)?.P ?? Ai.Active();
@@ -172,8 +174,11 @@ class EnhanceForm : NovaForm
             var outText = await Ai.Enhance(p, mode, text, my.Token, eInstr.Visible ? eInstr.Text.Trim() : "");
             if (my.IsCancellationRequested) return;
             result.Text = Crlf(outText);
-            History.SaveOriginal(mode, text, outText);
-            History.Add("enhance", p.Id, Store.Model(p.Id), mode, text, outText);
+            if (!AdminLock.InSandbox)
+            {
+                History.SaveOriginal(mode, text, outText);
+                History.Add("enhance", p.Id, Store.Model(p.Id), mode, text, outText);
+            }
             Status($"✓ {Modes.Label(mode)} · {sw.Elapsed.TotalSeconds:0.0} s · original saved", Th.Good);
             result.Focus();
             result.SelectionStart = 0;
@@ -228,6 +233,7 @@ class EnhanceForm : NovaForm
     {
         var m = new ContextMenuStrip { Font = Th.F(10) };
         var list = History.LastOriginals(20);
+        if (AdminLock.Locked) list.Clear();   // 🔐 your earlier texts stay hidden while locked
         if (list.Count == 0) m.Items.Add(new ToolStripMenuItem("No original saved yet") { Enabled = false });
         foreach (var o in list)
         {

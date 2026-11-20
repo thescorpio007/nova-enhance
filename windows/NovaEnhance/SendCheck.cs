@@ -76,6 +76,7 @@ static class SendCheck
         {
             if (passNext) { passNext = false; Log.Write("🛡 Send: your choice in the check window — sent"); return; }
             if (!On) { Log.Write("🛡 Send: check is off — sent"); return; }
+            if (AdminLock.Locked) { Log.Write("🛡 Send: Nova is locked — sent without the check"); return; }
             dynamic m = item;
             int cls = 0; try { cls = (int)m.Class; } catch { }
             string subj = ""; try { subj = (string)m.Subject ?? ""; } catch { }

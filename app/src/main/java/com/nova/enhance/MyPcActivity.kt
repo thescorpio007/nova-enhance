@@ -291,7 +291,25 @@ class MyPcActivity : BaseActivity() {
                 card("📂 Project files", "%,d files · names and text inside".format(f)) { runFind("", "files") }
                 card("⭐ Starred", "$stars file(s) on the phone · open offline") { show("starred") }
                 card("🧠 Same brain as your PC", if (PcLink.brainNote(c).isBlank()) "not received yet" else "your words, project vocabulary and names are used by every correction") { }
+                card("🔐 Nova PIN code", "forgot the PIN on your laptop? the one-time recovery code shows here") { adminCode() }
                 card("⚙ Phone link", "update every ${getSharedPreferences("nova_pc", MODE_PRIVATE).getInt("every_min", 60)} min · unpair") { show("settings") }
+            }
+        }.start()
+    }
+
+    /** 🔐 Asks the PC for the live one-time code (only after “Forgot PIN?” on the laptop; sealed for this phone). */
+    private fun adminCode() {
+        val c = applicationContext
+        status.text = "⏳ Asking your PC…"
+        Thread {
+            val r = runCatching { PcLink.ask(c, "admincode", JSONObject()) { s -> main.post { status.text = s } } }
+            main.post {
+                r.onSuccess { o ->
+                    val code = o.optString("code")
+                    val msg = if (code.isNotBlank()) "🔑 $code\n\nvalid until ${o.optString("until")} · works once" else if (!o.optBoolean("on")) "The admin lock is off on your PC." else "No code right now — tap “Forgot PIN?” on the laptop first, then open this again."
+                    android.app.AlertDialog.Builder(this).setTitle("🔐 Nova PIN recovery").setMessage(msg).setPositiveButton("OK", null).show()
+                    status.text = ""
+                }.onFailure { status.text = "⚠ " + (it.message ?: "your PC did not answer") }
             }
         }.start()
     }
