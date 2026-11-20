@@ -209,8 +209,36 @@
       if (m.error) { var x2 = el("div", "thinking err", "⚠ " + m.error); $("msgs").appendChild(x2); }
     } else if (m.t === "insert") { $("input").value = ($("input").value ? $("input").value + "\n" : "") + m.text; $("input").focus(); }
     else if (m.t === "askNow") send(m.text);
+    else if (m.t === "ag.confirm") agConfirm(m);
     else if (m.t === "continueDeep") { if (busy) return; newChat(); send(m.text, false, true, m.resume); }
     else if (m.t === "new") newChat();
+  }
+  // 🧭 Nova agent: “are these the kind of emails you mean?” ✓ / ✗, then it continues.
+  function agConfirm(m) {
+    var card = el("div", "msg nova"); card.style.cssText = "border:1px solid #3A3F55;border-radius:12px;padding:10px 12px;margin:6px 0";
+    card.appendChild(el("div", null, "✓ / ✗ " + m.question)).style.fontWeight = "600";
+    var verdict = {};
+    (m.items || []).forEach(function (h) {
+      var r = el("div"); r.style.cssText = "display:flex;gap:8px;padding:6px 0;border-bottom:1px solid #232836";
+      var y = el("button", null, "✓"), n = el("button", null, "✗");
+      y.onclick = function () { verdict[h.id] = true; y.style.background = "#7C6CFF"; n.style.background = ""; };
+      n.onclick = function () { verdict[h.id] = false; n.style.background = "#7C6CFF"; y.style.background = ""; };
+      var c = el("div"); var s = el("div", null, h.subject || "(no subject)"); s.style.cssText = "font-weight:600;cursor:pointer"; s.onclick = function () { post({ t: "openSource", src: { kind: "email", entry: h.entry, store: h.store } }); };
+      c.appendChild(s); c.appendChild(el("div", "muted small", h.date + " · from " + h.from + " · to " + h.to + (h.cc ? " · cc " + h.cc : "")));
+      if (h.lines) c.appendChild(el("div", "muted small", h.lines));
+      r.appendChild(y); r.appendChild(n); r.appendChild(c); card.appendChild(r);
+    });
+    var note = el("input"); note.placeholder = "anything to add? e.g. “only formal approval requests”"; note.style.cssText = "width:100%;margin-top:6px";
+    card.appendChild(note);
+    var go = el("button", null, "Continue →"); go.style.marginTop = "6px";
+    go.onclick = function () {
+      var yes = [], no = []; Object.keys(verdict).forEach(function (k) { (verdict[k] ? yes : no).push(+k); });
+      card.querySelectorAll("button,input").forEach(function (b) { b.disabled = true; });
+      post({ t: "ag.confirmed", yes: yes, no: no, note: note.value });
+    };
+    card.appendChild(go);
+    var th = $("thinking"); $("msgs").insertBefore(card, th || null);
+    card.scrollIntoView({ block: "nearest" });
   }
   function newChat() { cur = null; ctx = newCtx(); drawList(); drawChips(); drawChat(); $("input").focus(); }
 

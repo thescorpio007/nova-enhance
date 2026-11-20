@@ -588,6 +588,10 @@ class AskForm : NovaForm
     readonly Label understood, info, message, idx;
     readonly LinkLabel wordsLink;
     bool skipIntent;
+    // 🧭 Nova agent in Search for email
+    Agent.Session agSess;
+    string agQ = "";
+    LinkLabel agLinks;
     SubmittalLog.Options lastLog;
     SubmittalForm logForm;
     readonly FlowLayoutPanel examples, chips, bottom;
@@ -856,7 +860,21 @@ class AskForm : NovaForm
         understood = stack.Add(Th.Wrap("", 9.5f, Th.Text));
         // 🧭 Nova understood your words as a feature: one click searches the words instead.
         wordsLink = stack.Add(new LinkLabel { Text = "↩ search the words instead", AutoSize = true, LinkColor = Th.AccentText, ActiveLinkColor = Th.Accent, Font = Th.F(9), Margin = new Padding(0, 0, 0, 2), Visible = false });
-        wordsLink.LinkClicked += (_, _) => { skipIntent = true; Run(question.Text, false); };
+        wordsLink.LinkClicked += (_, _) => { skipIntent = true; agSess = null; Run(question.Text, false); };
+        // 🧭 Nova agent: ⬇ CSV · 💬 continue in Nova Chat · ⭐ save as prompt (shown after an agent answer).
+        agLinks = stack.Add(new LinkLabel { Text = "⬇ Excel (CSV)   ·   💬 Continue in Nova Chat   ·   ⭐ Save as prompt", AutoSize = true, LinkColor = Th.AccentText, ActiveLinkColor = Th.Accent, Font = Th.F(9), Margin = new Padding(0, 0, 0, 2), Visible = false });
+        agLinks.Links.Clear();
+        foreach (var (part, key) in new[] { ("⬇ Excel (CSV)", "csv"), ("💬 Continue in Nova Chat", "chat"), ("⭐ Save as prompt", "prompt") })
+            agLinks.Links.Add(agLinks.Text.IndexOf(part, StringComparison.Ordinal), part.Length, key);
+        agLinks.LinkClicked += (_, e) =>
+        {
+            switch (e.Link.LinkData as string)
+            {
+                case "csv": if (agSess?.Last != null) { var p = Agent.Csv(agSess.Last, agQ); try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(p) { UseShellExecute = true }); } catch { } } break;
+                case "chat": Screens.Hub(agQ); break;
+                case "prompt": Prompts.AskSave(this, new SavedPrompt { Name = agQ.Length > 50 ? agQ[..50] : agQ, Question = agQ, Where = "ask" }); break;
+            }
+        };
         planBox = stack.Add(new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, BackColor = Color.Transparent, Margin = new Padding(0, 2, 0, 2), Visible = false });
         info = stack.Add(Th.Wrap("", 9, Th.AccentText));
         resultRow = stack.Add(Th.Row());
@@ -1084,6 +1102,45 @@ class AskForm : NovaForm
         info.Text = "■ Stopped" + (hits.Count > 0 ? $" — showing the {hits.Count} email(s) found so far" : "");
     }
 
+    async Task AgentRun(string q, bool followUp)
+    {
+        if (!followUp || agSess == null) { agSess = new Agent.Session(); agQ = q; }
+        cts?.Cancel();
+        var my = cts = new CancellationTokenSource();
+        Searching(true);
+        understood.Text = "🧭 Nova agent · " + q;
+        wordsLink.Visible = true; examples.Visible = false; message.Visible = false; agLinks.Visible = false;
+        if (!followUp) { hits = new(); rawHits = new(); list.Nova = null; filterVal = ""; ShowList(); }
+        info.Text = "🧭 Reading your request and your Nova Brain…";
+        var host = new Agent.Host
+        {
+            Progress = s => { try { BeginInvoke(() => info.Text = s); } catch { } },
+            Confirm = (question, ex) =>
+            {
+                var tcs = new TaskCompletionSource<(List<long>, List<long>, string)?>();
+                BeginInvoke(() => tcs.TrySetResult(AgentConfirmForm.Ask(this, question, ex)));
+                return tcs.Task;
+            }
+        };
+        try
+        {
+            var r = await Agent.Run(q, agSess, host, "email", my.Token);
+            var list2 = new List<MailHit>();
+            foreach (var row in r.Rows.Where(x => x.Mail != null))
+            {
+                row.Mail.Why = string.Join(" · ", row.Cells);
+                if (!list2.Contains(row.Mail)) list2.Add(row.Mail);
+            }
+            hits = rawHits = list2; list.Nova = null; filterVal = ""; ShowList();
+            info.Text = (r.Note.Length > 0 ? r.Note + " · " : "") + (r.Text.Length > 400 ? r.Text[..400] + "…" : r.Text) + $"  ({r.Rows.Count} row(s) · by {r.By})";
+            agLinks.Visible = r.Rows.Count > 0;
+            try { SearchHistory.Add("email", q, Agent.Markdown(r, new()), new System.Text.Json.Nodes.JsonArray(), "🧭 agent"); } catch { }
+        }
+        catch (OperationCanceledException) { info.Text = "Stopped."; }
+        catch (Exception e) { info.Text = "⚠ " + e.Message; Log.Warn("agent", e.Message); }
+        finally { Searching(false); }
+    }
+
     void Searching(bool on)
     {
         if (!on) SearchGate.Resume();
@@ -1136,6 +1193,14 @@ class AskForm : NovaForm
                 }
             }
         }
+        // 🧭 Free requests (who sent what to whom, who answered…) → the Nova agent; its follow-ups too.
+        if (!skipIntent && ((followUp && agSess?.Last != null) || (!followUp && Agent.Wanted(q))))
+        {
+            await AgentRun(q, followUp);
+            return;
+        }
+        if (!followUp) agSess = null;
+        if (agLinks != null) agLinks.Visible = false;
         skipIntent = false;
         if (Store.EmailSource == "m365")
         {

@@ -44,7 +44,7 @@ td.tt{max-width:430px;overflow:hidden;text-overflow:ellipsis}.mono{font-family:C
     <span class="lab">Discipline</span><span class="chips" id="cDisc"></span>
     <span class="lab">Status</span><span class="chips" id="cStat"></span>
   </div>
-  <div class="row"><input id="ask" placeholder="🧭 Ask: “only the overdue ones” · “now tower 2” · “level 5 to 8” · “EI this month” · “minutes of the progress meetings” · “export it”"><button class="primary" id="askBtn">Ask</button></div>
+  <div class="row"><textarea id="ask" rows="2" style="flex:1;resize:vertical;min-height:38px;padding:8px 10px;background:#1A1E28;color:#E6E8EE;border:1px solid #2A3040;border-radius:8px;font:inherit" placeholder="🧭 Ask Nova anything — “only the overdue ones” · “EI this month” · or freely: “all C7 submittals my colleagues sent Charbel for formal approval that he hasn't answered” (Enter = ask · Shift+Enter = new line)"></textarea><button class="primary" id="askBtn">Ask</button></div>
   <div class="kpi" id="kpi"></div>
   <div id="gaps" class="small" style="color:#FFB547"></div>
   <div id="busy"></div>
@@ -56,6 +56,7 @@ td.tt{max-width:430px;overflow:hidden;text-overflow:ellipsis}.mono{font-family:C
 </div>
 <script src="colresize.js"></script>
 <script src="projfound.js"></script>
+<script src="agent.js"></script>
 <script src="submittal.js"></script>
 </body>
 </html>

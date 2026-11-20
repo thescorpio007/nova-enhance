@@ -279,12 +279,18 @@
   $("fold").onclick = function () { post({ t: "folder" }); };
   $("upd").onclick = run;
   $("brain").onclick = function () { post({ t: "brain" }); };
-  function ask() { var t = $("ask").value.trim(); if (!t) return; post({ t: "ask", text: t }); $("ask").value = ""; }
+  function ask() {
+    var t = $("ask").value.trim(); if (!t) return; $("ask").value = "";
+    if (AgentUi.active()) AgentUi.follow(t);   // 🧭 a follow-up of the agent's conversation
+    else post({ t: "ask", text: t });
+  }
   $("askBtn").onclick = ask;
-  $("ask").onkeydown = function (e) { if (e.key === "Enter") ask(); };
+  $("ask").onkeydown = function (e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(); } };
 
   if (W) W.addEventListener("message", function (ev) {
     var m = ev.data;
+    if (AgentUi.handle(m)) return;
+    if (m.t === "ag.start") { AgentUi.start(m.text); return; }
     if (ProjFound.handle(m)) {
       fresh = ProjFound.items().filter(function (s) { return s.kind === "prefix"; }).slice(0, 3);
       if (m.said && !/^⚠/.test(m.said)) { post({ t: "setup" }); run(); } else drawFilters();

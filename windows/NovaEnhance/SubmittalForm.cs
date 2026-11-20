@@ -9,6 +9,12 @@ class SubmittalForm : WebPage
     SubmittalLog.Options start, cur;
     bool exportNext;
     CancellationTokenSource cts;
+    // 🧭 Nova agent in this window
+    Agent.Session agSess = new();
+    Agent.Result agLast;
+    string agQ = "";
+    CancellationTokenSource agCts;
+    TaskCompletionSource<(List<long>, List<long>, string)?> agWait;
 
     public SubmittalForm(SubmittalLog.Options o = null, bool export = false) : base("📋 " + Tracker.LogName, "submittal.html", 1500, 900) { start = o; exportNext = export; }
 
@@ -74,13 +80,28 @@ class SubmittalForm : WebPage
             {
                 // 🧭 A follow-up typed in the log window.
                 var it = Intent.Read(m["text"]?.ToString() ?? "", cur?.Projects.FirstOrDefault() ?? "", cur ?? new SubmittalLog.Options());
-                if (it.Log == null) { Post(new JsonObject { ["t"] = "error", ["text"] = "Not a log request — try “only the overdue ones”, “now tower 2”, “EI this month”, “export it”" }); return; }
+                // 🧭 Anything that is not a quick log choice goes to the Nova agent (AI + your Brain + the log + emails + threads).
+                if (it.Log == null || Agent.Wanted(m["text"]?.ToString() ?? "")) { Post(new JsonObject { ["t"] = "ag.start", ["text"] = m["text"]?.ToString() ?? "" }); return; }
                 exportNext = it.Export;
                 Post(new JsonObject { ["t"] = "opt", ["opt"] = OptJson(it.Log), ["said"] = it.Said });
                 Run(it.Log);
                 break;
             }
             case "stop": cts?.Cancel(); break;
+            case "ag.ask": AgentAsk(m["text"]?.ToString() ?? ""); break;
+            case "ag.confirmed":
+            {
+                List<long> Ids(string k) => (m[k] as JsonArray)?.Select(x => long.TryParse(x?.ToString(), out var v) ? v : 0).Where(v => v > 0).ToList() ?? new();
+                agWait?.TrySetResult((Ids("yes"), Ids("no"), m["note"]?.ToString() ?? ""));
+                break;
+            }
+            case "ag.stop": agWait?.TrySetResult(null); agCts?.Cancel(); break;
+            case "ag.reset": agSess = new(); agLast = null; break;
+            case "ag.csv":
+                if (agLast != null) { var path = Agent.Csv(agLast, agQ); try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true }); } catch { } Post(new JsonObject { ["t"] = "saved", ["path"] = path }); }
+                break;
+            case "ag.chat": Screens.Hub(agQ); break;
+            case "ag.prompt": Prompts.AskSave(this, new SavedPrompt { Name = agQ.Length > 50 ? agQ[..50] : agQ, Question = agQ, Where = "ask" }); break;
             case "open":
                 NovaChat.OpenSource(new JsonObject { ["kind"] = "email", ["entry"] = m["entry"]?.ToString(), ["store"] = m["store"]?.ToString() });
                 break;
@@ -94,6 +115,32 @@ class SubmittalForm : WebPage
                 break;
             case "brain": Screens.Brain(); break;
         }
+    }
+
+    async void AgentAsk(string text)
+    {
+        if (text.Trim().Length == 0) return;
+        agQ = agQ.Length == 0 ? text : agQ;
+        agCts?.Cancel(); agCts = new CancellationTokenSource();
+        var ct = agCts.Token;
+        var host = new Agent.Host
+        {
+            Progress = s => Post(new JsonObject { ["t"] = "ag.step", ["text"] = s }),
+            Confirm = async (q, ex) =>
+            {
+                agWait = new TaskCompletionSource<(List<long>, List<long>, string)?>();
+                Post(new JsonObject { ["t"] = "ag.confirm", ["question"] = q, ["items"] = Agent.Examples(ex) });
+                return await agWait.Task;
+            }
+        };
+        try
+        {
+            var r = await Agent.Run(text, agSess, host, "log", ct);
+            agLast = r;
+            Post(new JsonObject { ["t"] = "ag.result", ["result"] = Agent.Json(r) });
+        }
+        catch (OperationCanceledException) { Post(new JsonObject { ["t"] = "ag.error", ["text"] = "Stopped." }); }
+        catch (Exception e) { Log.Warn("agent", e.Message); Post(new JsonObject { ["t"] = "ag.error", ["text"] = e.Message }); }
     }
 
     static JsonObject OptJson(SubmittalLog.Options o) => new()

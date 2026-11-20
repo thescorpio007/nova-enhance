@@ -311,6 +311,10 @@ class MailHit
 class MailQuery
 {
     public List<string> From = new(), To = new(), Cc = new(), Words = new();
+    /// <summary>🧭 Agent: in To OR Cc (a name, an address or a domain such as gefinorproperties.com).</summary>
+    public List<string> ToOrCc = new();
+    /// <summary>🧭 Agent: any of these words (in addition to <see cref="Words"/>, which must all be there).</summary>
+    public List<string> AnyWords = new();
     public string Phrase = "";
     public string MeIn;            // to · cc · any · null
     public DateTime? After, Before;
@@ -1225,6 +1229,12 @@ static class MailIndex
         if (NameClause(q.From, "m.from_name", "m.from_addr") is { } f) where.Add(f);
         if (NameClause(q.To, "m.to_list", "m.to_addr") is { } t) where.Add(t);
         if (NameClause(q.Cc, "m.cc_list", "m.cc_addr") is { } cc) where.Add(cc);
+        if (q.ToOrCc.Count > 0 && NameClause(q.ToOrCc, "m.to_list", "m.to_addr") is { } toa && NameClause(q.ToOrCc, "m.cc_list", "m.cc_addr") is { } cca) where.Add($"({toa} OR {cca})");
+        if (q.AnyWords.Count > 0)
+        {
+            var ors = q.AnyWords.Where(w => w.Trim().Length > 1).Select(w => { var l = "%" + w.Trim() + "%"; return $"(m.subject LIKE {P(l)} OR m.body LIKE {P(l)} OR m.att_names LIKE {P(l)})"; }).ToList();
+            if (ors.Count > 0) where.Add("(" + string.Join(" OR ", ors) + ")");
+        }
         switch (q.MeIn)
         {
             case "to": if (MeClause("m.to_list", "m.to_addr") is { } a) where.Add(a); break;

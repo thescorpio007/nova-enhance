@@ -36,15 +36,17 @@ td input{width:100%;padding:3px 6px}
   ProjFound.full();
   function draw(list) {
     var t = document.getElementById("tbl"); t.innerHTML = "";
-    var h = el("tr"); ["Code", "Full name", "Also written as (old codes, numbers, names)", "Emails", ""].forEach(function (x) { h.appendChild(el("th", null, x)); }); t.appendChild(h);
+    var h = el("tr"); ["Code", "Full name", "Client (name · email domain)", "Also written as (old codes, numbers, names)", "Emails", ""].forEach(function (x) { h.appendChild(el("th", null, x)); }); t.appendChild(h);
     list.forEach(function (p) {
       var r = el("tr");
       var c = el("input"); c.value = p.code; var n = el("input"); n.value = p.name;
       var td1 = el("td"); td1.style.width = "130px"; td1.appendChild(c); r.appendChild(td1);
       var td2 = el("td"); td2.appendChild(n); r.appendChild(td2);
+      var cl = el("input"); cl.value = p.client || ""; cl.placeholder = "e.g. Charbel · gefinorproperties.com";
+      var tdc = el("td"); tdc.appendChild(cl); r.appendChild(tdc);
       r.appendChild(el("td", "al", (p.aliases || []).join(" · ")));
       r.appendChild(el("td", null, p.emails ? p.emails.toLocaleString() : "–"));
-      var b = el("button", null, "✓ Save"); b.onclick = function () { document.getElementById("msg").textContent = "⏳ …"; post({ t: "pr.rename", old: p.code, code: c.value.trim(), name: n.value.trim() }); };
+      var b = el("button", null, "✓ Save"); b.onclick = function () { document.getElementById("msg").textContent = "⏳ …"; post({ t: "pr.rename", old: p.code, code: c.value.trim(), name: n.value.trim(), client: cl.value.trim() }); };
       var td5 = el("td"); td5.appendChild(b); r.appendChild(td5);
       t.appendChild(r);
     });

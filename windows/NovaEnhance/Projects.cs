@@ -13,6 +13,8 @@ class Project
     public List<string> Codes = new();      // in email subjects and file names: SLV, SLV-EUW, MZA-OMN-22-1497 …
     public List<string> Folders = new();
     public int Order;
+    /// <summary>🧭 The client on this project: a name and the client's email domain (e.g. “Charbel · gefinorproperties.com”).</summary>
+    public string Client = "";
 }
 
 /// <summary>A line of the scan summary (a folder of your work folder).</summary>
@@ -198,6 +200,20 @@ static class Projects
         }
         catch (Exception e) { Log.Warn("projects", "names: " + e.Message); }
         Store.SetInt("win_proj_names_ver", 37);
+    }
+
+    /// <summary>Build 48: the client you named for RS5-C7 (Charbel, gefinorproperties.com) — once, only where the project exists and has no client yet.</summary>
+    public static void MigrateClients()
+    {
+        if (Store.Int("win_proj_client_ver", 0) >= 48) return;
+        try
+        {
+            var all = All();
+            var p = all.FirstOrDefault(x => x.Code.Equals("RS5-C7", StringComparison.OrdinalIgnoreCase));
+            if (p != null && string.IsNullOrWhiteSpace(p.Client)) { p.Client = "Charbel · gefinorproperties.com"; SaveAll(all); }
+        }
+        catch (Exception e) { Log.Warn("projects", "client: " + e.Message); }
+        Store.SetInt("win_proj_client_ver", 48);
     }
 
     /// <summary>All folders to read for a project: its own and the general reference folders.</summary>

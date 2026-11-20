@@ -120,7 +120,7 @@ class NovaContext : ApplicationContext
         Paths.Ensure();
         Store.Load();
         try { Persona.Migrate(); } catch { }   // 🌐 universal Nova: an old install keeps its field (construction for an architecture profile)
-        Task.Run(() => { try { Projects.MigrateNames(); } catch { } });   // 🏷 build 37: your project codes and names
+        Task.Run(() => { try { Projects.MigrateNames(); Projects.MigrateClients(); } catch { } });   // 🏷 build 37: your project codes and names
         // 🛡 Two starts that never finished → safe mode (background jobs off, you switch them on one by one).
         Guard.BeginStart();
         Startup.Apply();
