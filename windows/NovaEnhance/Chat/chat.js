@@ -98,7 +98,11 @@
     if (cur.ctxUsed && cur.ctxUsed.emails && cur.ctxUsed.emails.length) btn("✉ Draft reply to " + cur.ctxUsed.emails[0].from.split(" ")[0], function () { post({ t: "draftReply", id: cur.id, idx: idx }); });
     btn("⇩ Save as Word", function () { post({ t: "saveWord", id: cur.id, idx: idx }); });
     btn("📌 Save as task", function () { post({ t: "saveTask", id: cur.id, idx: idx }); });
-    if (!m.detailed) btn("More detail", function () { send(m.question || "", true); });
+    if (m.agResult) {
+      // 🧭 the agent's answer: CSV, the same conversation in the 📋 log
+      if ((m.agResult.rows || []).length) btn("⬇ Excel (CSV)", function () { post({ t: "agCsv", id: cur.id, idx: idx }); });
+      btn("📋 Show in the log", function () { post({ t: "ag.toLog", id: cur.id }); });
+    } else if (!m.detailed) btn("More detail", function () { send(m.question || "", true); });
     d.appendChild(acts);
     function btn(t, f) { var b = el("button", null, t); b.onclick = f; acts.appendChild(b); }
     return d;
@@ -165,15 +169,23 @@
     var d = moreDetail ? true : detail;
     if (!moreDetail) cur.messages.push({ role: "user", text: text, ctxLabel: ctxLabel(ctx) });
     drawChat();
-    var th = el("div", "thinking", "✦ " + (deep ? "Deep search — this takes a few minutes…" : ctx.folder ? "Reading the folder and thinking…" : "Thinking…"));
-    th.id = "thinking";
-    $("msgs").appendChild(th); $("msgs").scrollTop = 1e9;
+    var th = el("div"); th.id = "thinking";
+    $("msgs").appendChild(th);
+    var title = deep ? "Deep search — this takes a few minutes…" : ctx.folder ? "Reading the folder and thinking…" : "Thinking…";
+    thk = window.Thinking ? Thinking.start(th, title, { onStop: function () { post({ t: "stop" }); } }) : null;
+    if (!thk) th.textContent = "✦ " + title, th.className = "thinking";
+    $("msgs").scrollTop = 1e9;
     setBusy(true);
     post({ t: "send", id: cur.id, text: text, ctx: ctx, detailed: d, again: !!moreDetail, deep: !!deep, resume: resume || "" });
     $("input").value = "";
   }
 
-  function thinking(t) { var e = $("thinking"); if (e) e.textContent = "✦ " + t; }
+  // ● ● ● the thinking card: a step (✓ when the next one starts) or a line inside the step
+  var thk = null;
+  function thinking(t, isStep) {
+    if (thk && thk.active()) { if (isStep) thk.step(t); else thk.detail(t); $("msgs").scrollTop = 1e9; return; }
+    var e = $("thinking"); if (e) e.textContent = "✦ " + t;
+  }
 
   // ---------------------------------------------------------------- from Nova
   function onMsg(m) {
@@ -183,12 +195,12 @@
       if (m.text) { $("input").value = m.text; $("input").focus(); }
     } else if (m.t === "chats") { chats = m.chats || []; drawList(); }
     else if (m.t === "chat") { cur = m.chat; ctx = m.chat.ctx || newCtx(); drawList(); drawChips(); drawChat(); }
-    else if (m.t === "progress") thinking(m.text);
+    else if (m.t === "progress") thinking(m.text, !!m.step);
     else if (m.t === "answer") {
-      setBusy(false);
+      setBusy(false); if (thk) thk.done(); thk = null;
       cur = m.chat; drawList(); drawChat();
     } else if (m.t === "error") {
-      setBusy(false);
+      setBusy(false); if (thk) { thk.fail(m.text); thk = null; return; }
       var e = $("thinking"); if (e) { e.className = "thinking err"; e.textContent = "⚠ " + m.text; }
       else { var x = el("div", "thinking err", "⚠ " + m.text); $("msgs").appendChild(x); }
     } else if (m.t === "folder") { ctx.folder = m.path; drawChips(); }
@@ -237,6 +249,8 @@
       post({ t: "ag.confirmed", yes: yes, no: no, note: note.value });
     };
     card.appendChild(go);
+    if (thk) thk.pause("waiting for your ✓ / ✗ above");
+    go.addEventListener("click", function () { if (thk) { thk.resume(); thk.detail("continuing with your ✓ / ✗…"); } });
     var th = $("thinking"); $("msgs").insertBefore(card, th || null);
     card.scrollIntoView({ block: "nearest" });
   }
@@ -249,6 +263,7 @@
   $("input").onkeydown = function (e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send($("input").value); } };
   $("deep").onclick = function () { send($("input").value || "Check in my records whether this system, or parts of it, was submitted or approved earlier.", false, true); };
   $("stop").onclick = function () { post({ t: "stop" }); thinking("Stopping…"); };
+  // ✓ / ✗ examples: the thinking card waits for you meanwhile
   $("short").onclick = function () { detail = false; $("short").className = "on"; $("detail").className = ""; };
   $("detail").onclick = function () { detail = true; $("detail").className = "on"; $("short").className = ""; };
   $("mic").onclick = function () { post({ t: "mic", on: !recording }); };

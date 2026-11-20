@@ -49,6 +49,45 @@ object Ui {
         gravity = Gravity.CENTER_VERTICAL
     }
 
+    /**
+     * ● ● ● A status line that shows Nova is working: while its text ends with “…” (“⏳ Asking your PC…”), moving dots and a timer
+     * are added, and after 20 quiet seconds “still working, not stuck”. Designed by A.HAMROUNI
+     */
+    fun thinking(tv: TextView): TextView {
+        val h = android.os.Handler(android.os.Looper.getMainLooper())
+        val frames = arrayOf("●∙∙", "∙●∙", "∙∙●")
+        val rx = Regex("^[●∙]{3}  (.*?)   \\d+:\\d\\d(?: · .*?(?:not stuck|still working))?(.*)$", RegexOption.DOT_MATCHES_ALL)
+        var base = ""; var self = false; var frame = 0; var start = 0L; var changed = 0L; var on = false
+        fun draw() {
+            val now = System.currentTimeMillis()
+            val el = (now - start) / 1000; val quiet = (now - changed) / 1000
+            val w = if (quiet > 60) " · ⚠ taking longer than usual — still working" else if (quiet > 20) " · ⏳ still working, not stuck" else ""
+            self = true
+            try { tv.text = "${frames[frame]}  $base   ${el / 60}:${"%02d".format(el % 60)}$w" } finally { self = false }
+        }
+        lateinit var tick: Runnable
+        tick = Runnable { if (!on || (!tv.isAttachedToWindow && System.currentTimeMillis() - start > 3000)) { on = false; return@Runnable }; frame = (frame + 1) % 3; draw(); h.postDelayed(tick, 400) }
+        fun update(text: String) {
+            var t = text
+            rx.matchEntire(t)?.let { t = it.groupValues[1] + it.groupValues[2] }
+            base = t; changed = System.currentTimeMillis()
+            if (t.trimEnd().endsWith("…") || t.trimEnd().endsWith("...")) {
+                if (!on) { on = true; start = changed; frame = 0; h.postDelayed(tick, 400) }
+                h.post { if (on) draw() }
+            } else if (on) {
+                on = false; h.removeCallbacks(tick)
+                if (t != text) { self = true; try { tv.text = t } finally { self = false } }
+            }
+        }
+        tv.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) { if (!self) update(s?.toString() ?: "") }
+        })
+        update(tv.text?.toString() ?: "")
+        return tv
+    }
+
     fun text(c: Context, s: String, size: Float = 15f, color: Int = TEXT, bold: Boolean = false): TextView =
         TextView(c).apply {
             text = s; textSize = size; setTextColor(color)

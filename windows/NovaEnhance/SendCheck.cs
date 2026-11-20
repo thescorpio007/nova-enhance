@@ -267,6 +267,7 @@ class SendCheckForm : NovaForm
         top.Add(Th.Wrap("Nova read your text (your closing, signature and earlier emails are left untouched). Nothing has been sent yet.", 9.5f, Th.Muted), true);
         top.Add(Th.Wrap($"To: {s.To}" + (s.Cc.Length > 0 ? $"\nCc: {s.Cc}" : "") + $"\nSubject: {s.Subject}", 10, Th.Text), true);
         status = top.Add(Th.Wrap("", 9.5f, Th.AccentText), true);
+        Thinking.Watch(status);   // ● ● ● dots + timer while it works
 
         var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 2, BackColor = Th.Bg, Padding = new Padding(20, 4, 20, 4) };
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));

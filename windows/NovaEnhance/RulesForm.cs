@@ -181,6 +181,7 @@ class RulesForm : NovaForm
         er.Controls.Add(Th.B("✎ What the AI judges…", () => { var v = Prompt.Ask(this, "What the AI judges", "For the emails no rule decides, the AI checks (empty = no AI):", book.AiCheck); if (v == null) return; book.AiCheck = v.Trim(); Changed(); Fill(Sel()); }));
         var sr = st.Add(new FlowLayoutPanel { AutoSize = true, WrapContents = false, BackColor = Color.Transparent });
         dots = new WorkDots(); status = Th.L("", 10, Th.AccentText);
+        Thinking.Watch(status);   // ● ● ● dots + timer while it works
         sr.Controls.Add(dots); sr.Controls.Add(status);
         output = st.Add(new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Height = 230, BackColor = Th.Card, ForeColor = Th.Text, Font = Th.F(10), BorderStyle = BorderStyle.None }, true);
         st.Add(Th.Signature());

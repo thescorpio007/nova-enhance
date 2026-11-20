@@ -59,6 +59,7 @@ class PstReaderForm : NovaForm
         var bottom = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 30, BackColor = Th.Bg, Padding = new Padding(10, 4, 10, 0), WrapContents = false };
         dots = new WorkDots();
         status = Th.L("", 9.5f, Th.AccentText);
+        Thinking.Watch(status);   // ● ● ● dots + timer while it works
         bottom.Controls.Add(dots); bottom.Controls.Add(status);
         bottom.Controls.Add(Th.L("   " + Program.Sign + " · " + Program.Shown + " · reader: XstReader (Ms-PL)", 9, Th.Muted));
 

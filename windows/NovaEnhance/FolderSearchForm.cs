@@ -228,6 +228,7 @@ class FolderSearchForm : NovaForm
         stats.BackColor = Color.FromArgb(0x15, 0x19, 0x22); stats.Padding = new Padding(10, 6, 10, 6);
         bar = top.Add(new ProgressBar { Height = 5, Style = ProgressBarStyle.Continuous, Visible = false, Margin = new Padding(0, 2, 0, 2) }, true);
         status = top.Add(Th.Wrap("", 9.5f, Th.AccentText));
+        Thinking.Watch(status);   // ● ● ● dots + timer while it works
 
         // ============================================================ results (left) · preview (right)
         split = new SplitContainer { Dock = DockStyle.Fill, BackColor = Th.Line, SplitterWidth = 6, Orientation = Orientation.Vertical };
@@ -1008,6 +1009,7 @@ class FolderSearchForm : NovaForm
         try
         {
             using var doing = Log.Doing($"Ask AI “{q}” in {GDrive.Display(root)}");
+            using var busyJob = Busy.Begin("📁 Asking about a folder");
 
             // 🧠 Asked before? Show the remembered answer at once, then check the folder again.
             var (card, changed) = Memory.Find(q, root);

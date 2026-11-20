@@ -140,6 +140,18 @@ class NovaChat
                     break;
                 }
                 case "ag.stop": agWait?.TrySetResult(null); break;
+                case "agCsv":
+                {
+                    var (_, a, q) = Pick(m["id"]?.ToString(), m["idx"]?.GetValue<int>() ?? -1);
+                    if (a?["agResult"] is JsonObject ar)
+                    {
+                        var path = Agent.Csv(Agent.FromJson(ar), q ?? "Nova agent");
+                        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true }); } catch { }
+                    }
+                    break;
+                }
+                case "ag.toLog": Screens.SubmittalChat(m["id"]?.ToString() ?? ""); break;
+                case "think.ask": Post(new JsonObject { ["t"] = "think.wait", ["text"] = Busy.Line() }); break;
                 case "openSource": OpenSource(m["src"] as JsonObject); break;
                 case "copy": Clipboard.SetText(m["text"]?.ToString() ?? " "); break;
                 case "saveWord": SaveWord(m["id"]?.ToString(), m["idx"]?.GetValue<int>() ?? -1); break;
@@ -254,10 +266,11 @@ class NovaChat
         if (!again) msgs.Add(new JsonObject { ["role"] = "user", ["text"] = text, ["ctxLabel"] = CtxLabel(ctx) });
 
         using var doing = Log.Doing("Nova Chat · " + (text.Length > 60 ? text[..60] : text));
+        using var busyJob = Busy.Begin("💬 Nova Chat · " + (text.Length > 50 ? text[..50] + "…" : text));
         // 🧭 Who sent what to whom, who answered, submittals… → the Nova agent (log + emails + threads), in this chat.
         var chatId = chat["id"]?.ToString() ?? "";
         bool noFiles = (ctx["files"] as JsonArray ?? new JsonArray()).Count == 0 && (ctx["emails"] as JsonArray ?? new JsonArray()).Count == 0 && string.IsNullOrEmpty(ctx["folder"]?.ToString());
-        if (noFiles && !detailed && (agSessions.ContainsKey(chatId) || Agent.Wanted(text))) { await AgentSend(chat, msgs, text, stop); return; }
+        if (noFiles && !detailed && (chat["agent"]?.GetValue<bool>() == true || Agent.HasSession(chatId) || Agent.Wanted(text))) { await AgentSend(chat, msgs, text, stop); return; }
         var sources = new List<Src>();
         var notes = new List<string>();
         // Smart search: the search words are taken from the corrected text (the AI still sees what you typed).
@@ -268,7 +281,7 @@ class NovaChat
         foreach (var f in (ctx["files"] as JsonArray ?? new JsonArray()).Select(x => x?.ToString()).Where(x => !string.IsNullOrEmpty(x)))
         {
             if (!File.Exists(f)) { notes.Add("missing file " + Path.GetFileName(f)); continue; }
-            Post(new JsonObject { ["t"] = "progress", ["text"] = "Reading " + Path.GetFileName(f) + "…" });
+            Post(new JsonObject { ["t"] = "progress", ["text"] = "Reading " + Path.GetFileName(f) + "…", ["step"] = true });
             // 👁 Pictures, drawings, CAD, voice notes and videos: Nova looks / listens with your question in mind.
             var fx = Path.GetExtension(f).ToLowerInvariant();
             if (FileTalk.IsPicture(f) || Media.Is(f) || fx is ".dwg" or ".dxf" || (fx == ".pdf" && System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(f), @"(DRW|DWG|DET|PLN|ELE|SEC|SK)", System.Text.RegularExpressions.RegexOptions.IgnoreCase)))
@@ -314,12 +327,12 @@ class NovaChat
                 }
                 else
                 {
-                    Post(new JsonObject { ["t"] = "progress", ["text"] = "Reading the folder (new or changed files only)…" });
+                    Post(new JsonObject { ["t"] = "progress", ["text"] = "Reading the folder (new or changed files only)…", ["step"] = true });
                     var pg = new FolderIndex.Progress();
                     using var tick = new System.Threading.Timer(_ => Post(new JsonObject { ["t"] = "progress", ["text"] = $"Reading the folder… {pg.Files:N0} files" }), null, 1500, 1500);
                     await RunSta(() => FolderIndex.Search(folder, null, null, _ => { }, null, pg, CancellationToken.None, null));
                     tick.Change(Timeout.Infinite, Timeout.Infinite);
-                    Post(new JsonObject { ["t"] = "progress", ["text"] = "Finding the right passages…" });
+                    Post(new JsonObject { ["t"] = "progress", ["text"] = "Finding the right passages…", ["step"] = true });
                     ps = await Task.Run(() => FolderIndex.Retrieve(folder, expanded, 14, 4, Memory.Boosts(expanded)));
                 }
                 bool send = true;
@@ -459,7 +472,7 @@ class NovaChat
         }
         user.Append("Question: ").Append(text);
 
-        Post(new JsonObject { ["t"] = "progress", ["text"] = $"Asking {prov.Label}…" });
+        Post(new JsonObject { ["t"] = "progress", ["text"] = $"Asking {prov.Label}…", ["step"] = true });
         using var _aiFor13 = Ai.For("chat", Ai.Picked(prov, "chat"));   // ⚙ AI for each feature
         var answer = await Ai.Chat(sys.ToString(), user.ToString(), !detailed, false, prov, stop);
         if (deep != null) answer += "\n\n" + deep.Searched;
@@ -485,16 +498,17 @@ class NovaChat
 
     // ================================================================ 🧭 Nova agent in the chat
 
-    readonly Dictionary<string, Agent.Session> agSessions = new();
     TaskCompletionSource<(List<long>, List<long>, string)?> agWait;
 
     async Task AgentSend(JsonObject chat, JsonArray msgs, string text, CancellationToken stop)
     {
         var id = chat["id"]?.ToString() ?? "";
-        if (!agSessions.TryGetValue(id, out var sess)) agSessions[id] = sess = new Agent.Session();
+        // The user's question is already in msgs (added above): the session is rebuilt from the earlier turns only.
+        var sess = Agent.SessionFor(id, new JsonArray(msgs.Take(Math.Max(0, msgs.Count - 1)).Select(x => x?.DeepClone()).ToArray()));
         var host = new Agent.Host
         {
-            Progress = s => Post(new JsonObject { ["t"] = "progress", ["text"] = s }),
+            Progress = s => Post(new JsonObject { ["t"] = "progress", ["text"] = s, ["step"] = true }),
+            Detail = s => Post(new JsonObject { ["t"] = "progress", ["text"] = s }),
             Confirm = async (q, ex) =>
             {
                 agWait = new TaskCompletionSource<(List<long>, List<long>, string)?>();
@@ -504,18 +518,61 @@ class NovaChat
             }
         };
         var r = await Agent.Run(text, sess, host, "chat", stop);
-        var cite = new List<MailHit>();
-        var answer = Agent.Markdown(r, cite);
-        var sources = cite.Select(h => new Src { Kind = "email", Entry = h.Entry, Store = h.StoreId, Label = $"{h.Date:dd MMM yyyy} · {h.Subject}" }).ToList();
-        SearchHistory.Add("chat", text, answer, new JsonArray(sources.Select(s => (JsonNode)s.Json()).ToArray()), $"🧭 agent · {r.Rows.Count} row(s)", new JsonObject { ["chatId"] = id });
-        msgs.Add(new JsonObject
-        {
-            ["role"] = "assistant", ["text"] = answer, ["label"] = "🧭 Nova agent · " + r.By + (r.Rows.Count > 0 ? $" · {r.Rows.Count} rows" : ""), ["question"] = text,
-            ["sources"] = new JsonArray(sources.Select(s => (JsonNode)s.Json()).ToArray())
-        });
+        msgs.Add(AgentMessage(text, r, id));
+        chat["agent"] = true;
         Save(chat);
         Post(new JsonObject { ["t"] = "answer", ["chat"] = chat.DeepClone() });
         Post(new JsonObject { ["t"] = "chats", ["chats"] = List() });
+    }
+
+    /// <summary>The agent's answer as a chat message (Markdown table + the emails to open + the result kept for follow-ups and the log).</summary>
+    static JsonObject AgentMessage(string question, Agent.Result r, string chatId)
+    {
+        var cite = new List<MailHit>();
+        var answer = Agent.Markdown(r, cite);
+        var sources = cite.Select(h => new Src { Kind = "email", Entry = h.Entry, Store = h.StoreId, Label = $"{h.Date:dd MMM yyyy} · {h.Subject}" }).ToList();
+        SearchHistory.Add("chat", question, answer, new JsonArray(sources.Select(x => (JsonNode)x.Json()).ToArray()), $"🧭 agent · {r.Rows.Count} row(s)", new JsonObject { ["chatId"] = chatId });
+        return new JsonObject
+        {
+            ["role"] = "assistant", ["text"] = answer, ["label"] = "🧭 Nova agent · " + r.By + (r.Rows.Count > 0 ? $" · {r.Rows.Count} rows" : ""), ["question"] = question,
+            ["sources"] = new JsonArray(sources.Select(x => (JsonNode)x.Json()).ToArray()), ["agResult"] = Agent.Json(r)
+        };
+    }
+
+    /// <summary>🧭 A turn of the agent in the 📋 log, saved as a Nova Chat conversation (💬 Continue in Nova Chat opens it, with everything).</summary>
+    public static string SaveAgentTurn(string chatId, string question, Agent.Result r)
+    {
+        try
+        {
+            var chat = string.IsNullOrEmpty(chatId) ? null : Load(chatId);
+            if (chat == null)
+            {
+                chatId = string.IsNullOrEmpty(chatId) ? DateTime.Now.ToString("yyyyMMdd-HHmmss") + "-" + Random.Shared.Next(100, 999) : chatId;
+                chat = new JsonObject { ["id"] = chatId, ["title"] = "📋 " + (question.Length > 58 ? question[..58] + "…" : question), ["created"] = DateTimeOffset.Now.ToUnixTimeMilliseconds(), ["messages"] = new JsonArray(), ["ctx"] = new JsonObject { ["about"] = true, ["files"] = new JsonArray(), ["emails"] = new JsonArray(), ["folder"] = "" } };
+            }
+            var msgs = chat["messages"] as JsonArray ?? new JsonArray();
+            chat["messages"] = msgs;
+            msgs.Add(new JsonObject { ["role"] = "user", ["text"] = question, ["ctxLabel"] = "📋 Submittal log" });
+            msgs.Add(AgentMessage(question, r, chatId));
+            chat["agent"] = true;
+            Save(chat);
+        }
+        catch (Exception e) { Log.Warn("agent · save chat", e.Message); }
+        return chatId;
+    }
+
+    /// <summary>The agent turns of a saved chat (for the 📋 log): question + result.</summary>
+    public static JsonArray AgentTurns(string chatId)
+    {
+        var a = new JsonArray();
+        var msgs = Load(chatId)?["messages"] as JsonArray ?? new JsonArray();
+        string q = "";
+        foreach (var m in msgs.OfType<JsonObject>())
+        {
+            if (m["role"]?.ToString() == "user") { q = m["text"]?.ToString() ?? ""; continue; }
+            a.Add(new JsonObject { ["q"] = q, ["result"] = m["agResult"]?.DeepClone() ?? new JsonObject { ["text"] = m["text"]?.ToString() ?? "" } });
+        }
+        return a;
     }
 
     static string CtxLabel(JsonObject c)

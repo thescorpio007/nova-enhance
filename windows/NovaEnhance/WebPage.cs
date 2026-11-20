@@ -41,6 +41,8 @@ abstract class WebPage : NovaForm
                 try { m = JsonNode.Parse(e.WebMessageAsJson)?.AsObject(); } catch { return; }
                 if (m == null) return;
                 if (m["t"]?.ToString() == "init") Ready = true;
+                // ● ● ● a “thinking” card asks what Nova is waiting for (after 12 quiet seconds)
+                if (m["t"]?.ToString() == "think.ask") { Post(new JsonObject { ["t"] = "think.wait", ["text"] = Busy.Line() }); return; }
                 try { OnMessage(m); } catch (Exception ex) { Log.Error(title, ex); Post(new JsonObject { ["t"] = "error", ["text"] = ex.Message }); }
             };
             core.Navigate("https://nova.chat/" + page);
@@ -62,6 +64,7 @@ abstract class WebPage : NovaForm
         Post(new JsonObject { ["t"] = "busy", ["text"] = doing });
         _ = Task.Run(() =>
         {
+            using var busy = Busy.Begin(doing.TrimEnd('…', '.'));
             try { var r = f(); if (r != null) Post(r); }
             catch (Exception e) { Log.Error(name, e); Post(new JsonObject { ["t"] = "error", ["text"] = e.Message }); }
         });

@@ -64,8 +64,8 @@ class ChatActivity : BaseActivity() {
             box.setText("")
             db.addMsg(conv.id, "user", q)
             bubble(Msg("user", q))
-            val spin = ProgressBar(c)
-            list.addView(spin, LinearLayout.LayoutParams(Ui.dp(c, 28), Ui.dp(c, 28)).apply { topMargin = Ui.dp(c, 8) })
+            val spin = Ui.thinking(Ui.text(c, "⏳ Thinking with ${p.label}…", 13f, Ui.ACCENT))   // ● ● ● dots + timer
+            list.addView(spin, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = Ui.dp(c, 8) })
             send.isEnabled = false
             val history = db.messages(conv.id)
             Thread {

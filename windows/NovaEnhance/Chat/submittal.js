@@ -287,6 +287,19 @@
   $("askBtn").onclick = ask;
   $("ask").onkeydown = function (e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(); } };
 
+  // ● ● ● “Nova is thinking” while the log is read (dots, timer, ■ Stop, what Nova waits for)
+  var bth = null;
+  function busy(t, working) {
+    var b = $("busy");
+    if (working && window.Thinking) {
+      if (!bth || !bth.active()) { b.innerHTML = ""; bth = Thinking.start(b, t, { onStop: function () { post({ t: "stop" }); } }); }
+      else bth.title(t);
+      return;
+    }
+    if (bth && bth.active()) bth.done(); bth = null;
+    b.innerHTML = ""; b.textContent = t || "";
+  }
+
   if (W) W.addEventListener("message", function (ev) {
     var m = ev.data;
     if (AgentUi.handle(m)) return;
@@ -305,16 +318,16 @@
       else if (us !== "MZA") $("sub").textContent = "every submission found in Outlook · Thinkproject or direct email · checks if " + us + " replied on the same thread";
       setCols(); drawFilters();
     }
-    else if (m.t === "busy") { $("busy").textContent = /^[✓⚠]/.test(m.text) ? m.text : "⏳ " + m.text; }
-    else if (m.t === "opt") { opt = m.opt; drawFilters(); if (m.said) $("busy").textContent = "🧭 " + m.said; }
+    else if (m.t === "busy") { if (/^[✓⚠]/.test(m.text)) busy(m.text); else busy(m.text, true); }
+    else if (m.t === "opt") { opt = m.opt; drawFilters(); if (m.said) busy("🧭 " + m.said + " …", true); }
     else if (m.t === "result") {
-      $("busy").textContent = ""; items = m.items || [];
+      busy(""); items = m.items || [];
       (m.towers || []).forEach(function (x) { towers[x] = 1; }); discs = m.discCounts || {}; stats = m.statCounts || {}; (m.projects || []).forEach(function (x) { if (!allProjects.some(function (p) { return p.code === x; }) && !fresh.some(function (s) { return s.value === x; })) allProjects.push({ code: x, name: "" }); });
       show = ""; drawFilters(); drawKpi(m.kpi); drawTable();
       $("gaps").textContent = (m.kpi.gaps || []).length ? "⚠ Missing in the register: " + m.kpi.gaps.join(" · ") : "";
     }
-    else if (m.t === "saved") $("busy").textContent = "✓ Saved and opened: " + m.path;
-    else if (m.t === "error") $("busy").textContent = "⚠ " + m.text;
+    else if (m.t === "saved") busy("✓ Saved and opened: " + m.path);
+    else if (m.t === "error") busy("⚠ " + m.text);
   });
   post({ t: "init" });
 })();

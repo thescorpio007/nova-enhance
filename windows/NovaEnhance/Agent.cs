@@ -32,6 +32,8 @@ static class Agent
     public class Host
     {
         public Action<string> Progress = _ => { };
+        /// <summary>What is happening inside the step (“312 emails checked”, “thread 4 of 12”).</summary>
+        public Action<string> Detail = _ => { };
         /// <summary>(question, examples) → (ids you ticked ✓, ids you marked ✗, your note); null = you stopped.</summary>
         public Func<string, List<MailHit>, Task<(List<long> Yes, List<long> No, string Note)?>> Confirm;
     }
@@ -43,6 +45,47 @@ static class Agent
         public readonly Dictionary<long, MailHit> Seen = new();
         public Result Last;
         public bool Confirmed;
+        public string ChatId = "";
+    }
+
+    // ------------------------------------------------------------------ one conversation everywhere (the log ⇄ Nova Chat)
+
+    static readonly Dictionary<string, Session> sessions = new();
+
+    /// <summary>The conversation of this chat (the log and Nova Chat share it). After a restart it is rebuilt from the saved chat.</summary>
+    public static Session SessionFor(string chatId, JsonArray saved = null)
+    {
+        lock (sessions)
+        {
+            if (sessions.TryGetValue(chatId, out var s)) return s;
+            s = new Session { ChatId = chatId };
+            foreach (var m in (saved ?? new JsonArray()).OfType<JsonObject>())
+            {
+                var role = m["role"]?.ToString() == "user" ? "user" : "nova";
+                s.Said.Add((role, m["text"]?.ToString() ?? ""));
+                if (m["agResult"] is JsonObject r)
+                {
+                    var res = FromJson(r);
+                    var ids = res.Rows.Where(x => x.Id > 0).Select(x => x.Id).ToList();
+                    if (ids.Count > 0) foreach (var h in MailIndex.ByIds(ids, 200, 1200)) s.Seen[h.Id] = h;
+                    foreach (var row in res.Rows) if (row.Id > 0 && s.Seen.TryGetValue(row.Id, out var mh)) row.Mail = mh;
+                    s.Last = res; s.Confirmed = true;
+                }
+            }
+            sessions[chatId] = s;
+            return s;
+        }
+    }
+
+    public static bool HasSession(string chatId) { lock (sessions) return sessions.ContainsKey(chatId); }
+
+    public static Result FromJson(JsonObject j)
+    {
+        var r = new Result { Text = j["text"]?.ToString() ?? "", Note = j["note"]?.ToString() ?? "", By = j["by"]?.ToString() ?? "" };
+        r.Steps = L(j["steps"]); r.Columns = L(j["columns"]);
+        foreach (var x in (j["rows"] as JsonArray ?? new()).OfType<JsonObject>())
+            r.Rows.Add(new Row { Id = long.TryParse(x["id"]?.ToString(), out var v) ? v : 0, Cells = (x["cells"] as JsonArray)?.Select(c => c?.ToString() ?? "").ToList() ?? new() });
+        return r;
     }
 
     static readonly Regex Wants = new(
@@ -96,14 +139,18 @@ TOOLS
 - emails: search the email index. args: words (all must appear), any_words (at least one), from (names / addresses / domains, any), to_or_cc (any of them in To or Cc), to, cc, project (code), after, before (yyyy-mm-dd), folder (any|sent|received), limit (≤150). Use domains for people's companies (e.g. the client's domain), words for document codes and topics. The user is in copy of colleagues' emails: use folder ""any"".
 - thread: every email of a conversation, oldest first, with From / To / Cc domains. args: id (an email #id) or doc (a document number such as RS5-C7-ACC-AR-SSM-00038). Use it to see who sent what to whom and whether someone replied after.
 - log: the 📋 Submittal log (submissions, their {Tracker.UsShort} code / reply, status). args: types (WIR, MAR, SDS, SSM, PQS, RFI, MIR, MSS, TSR, LTR, EI, MOM…), projects (codes), from, to (yyyy-mm-dd), status (Open|Overdue|Closed|Code3/4).
+- followup: THE tool for “what did we send to X, and did X reply?” (a client, consultant, contractor). It finds every email sent by the user's colleagues (or args.from) with X in To or Cc, groups them per document number / thread, and checks each thread for a later email FROM X. args: to (X's names / addresses / company domain — use the CLIENT domain from the project list), from (optional; default = the user's colleagues), project (code), words / any_words (optional, e.g. submittal type codes), after, before (yyyy-mm-dd; default: the last 2 years). Returns one line per document: first sent (date, by whom, To or Cc), how many times, and X's reply (date, #id) or NO REPLY.
 - confirm: show the user 3 to 5 example emails (#ids) that you think match, with a question, and get ✓ / ✗ back. args: ids, question. You MUST call confirm once before the final answer, with the best examples you found.
 - draft: prepare an Outlook draft (never sent; the user checks and sends). args: to, cc, subject, body. Only when the user asked for a draft / reminder / email.
 - answer: the final result. args: text (short summary: what you searched and how you decided), columns (list of column names), rows (list of {{""id"": email #id or 0, ""cells"": [...]}}). Use a table whenever there is more than one item; one row per document / thread, newest first, with a status column such as ""✅ replied 18 Nov"" / ""⏳ no reply (3 days)"".
 RULES
 - Follow the user's rules in the Nova Brain (given below) — they say how this user works.
 - Plan: find candidates (emails / log) → check threads where it matters (sent to whom, replied by whom) → confirm examples → answer.
+- Anything “sent to <client / consultant / person> … replied / answered / approved or not” → use followup FIRST (to = that company's domain), then confirm, then answer with one row per document. The log tool only knows {Tracker.UsShort}'s own replies to the contractor — never use it to decide whether the client replied.
+- Ignore the filters shown in the window (period, status…): unless the user names a period, search the last 2 years.
+- When the user asks for a list / table / “show me all”, the answer MUST have rows (never write “below are…” without them). Keep requests for formal feedback / approval / review / comments; drop pure information forwards, MOMs and payment letters unless asked.
 - “Replied / formal response” = an email from that person or their company's domain on the same thread AFTER the request. A reply from the user's colleagues is not the client's reply.
-- At most 8 steps. Never invent emails, numbers or names: only what the tools returned. If nothing matches, say so and suggest how to widen the search.
+- At most 11 steps. Never invent emails, numbers or names: only what the tools returned. If nothing matches, say so and suggest how to widen the search.
 - The result is shown in: {where}.";
     }
 
@@ -151,12 +198,53 @@ RULES
         return $"Thread {(doc.Length > 0 ? doc : "#" + id)} · {list.Count} email(s), oldest first:\n" + string.Join("\n", list.Take(60).Select(Line));
     }
 
+    static readonly Regex DocRx = new(@"[A-Z0-9]{2,}(?:-[A-Z0-9]{1,8}){3,}", RegexOptions.IgnoreCase);
+    static string BaseNo(string doc) => Regex.Replace(doc, @"[-_ ]?R(ev)?\d{1,2}$", "", RegexOptions.IgnoreCase).ToUpperInvariant();
+    static bool Has(string a, string b) => !string.IsNullOrEmpty(a) && a.Contains(b, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>📨 What the colleagues (or args.from) sent to X, per document / thread, and whether X replied after.</summary>
+    static string ToolFollowup(JsonObject a, Session s, Action<string> detail, CancellationToken ct)
+    {
+        var to = L(a["to"]);
+        if (to.Count == 0) return "args.to is needed: the person's name, address or company domain.";
+        var q = new MailQuery { Limit = 500, Folder = "any", ToOrCc = to, Words = L(a["words"]), AnyWords = L(a["any_words"]), After = D(a["after"]) ?? DateTime.Today.AddYears(-2), Before = D(a["before"]) };
+        var pj = a["project"]?.ToString() ?? "";
+        if (pj.Length > 0) q.Project = Projects.Canon(pj) is { Length: > 0 } c ? c : pj;
+        var from = L(a["from"]);
+        detail($"searching emails to {string.Join(", ", to)}…");
+        var hits = MailIndex.Search(q).Where(h => from.Count == 0 ? IsUs(h) : from.Any(f => Has(h.FromName, f) || Has(h.FromAddr, f) || (h.Sent && f is "me" or "I"))).ToList();
+        if (hits.Count == 0) return $"0 emails from {(from.Count == 0 ? Tracker.UsShort : string.Join(", ", from))} with {string.Join(", ", to)} in To/Cc since {q.After:yyyy-MM-dd}.";
+        var groups = hits.GroupBy(h => DocRx.Match(h.Subject ?? "") is { Success: true } m ? BaseNo(m.Value) : "thread:" + h.Conv)
+            .OrderByDescending(g => g.Max(h => h.Date)).Take(70).ToList();
+        var sb = new StringBuilder($"{hits.Count} email(s) sent to {string.Join(", ", to)} · {groups.Count} document(s) / thread(s), newest first:\n");
+        int n = 0;
+        foreach (var g in groups)
+        {
+            ct.ThrowIfCancellationRequested();
+            detail($"thread {++n} of {groups.Count} · {(g.Key.StartsWith("thread:") ? Short(g.First().Subject, 50) : g.Key)}");
+            var sent = g.OrderBy(h => h.Date).ToList();
+            var first = sent[0];
+            var thread = new List<MailHit>(MailIndex.ByConv(first.Conv, 80));
+            if (!g.Key.StartsWith("thread:"))
+                thread.AddRange(MailIndex.SubmittalsLike(new[] { "%" + g.Key + "%" }, Array.Empty<string>(), first.Date.AddDays(-1), DateTime.Now.AddDays(1), 150, 600));
+            foreach (var h in sent.Concat(thread)) s.Seen[h.Id] = h;
+            var reply = thread.Where(h => h.Date > first.Date && !h.Sent && !IsUs(h) && to.Any(t => Has(h.FromAddr, t) || Has(h.FromName, t)))
+                .GroupBy(h => h.Id).Select(x => x.First()).OrderBy(h => h.Date).FirstOrDefault();
+            var line = to.Any(t => Has(first.ToAddr, t) || Has(first.To, t)) ? "To" : "Cc";
+            var by = first.Sent ? $"me ({Tracker.UsShort})" : first.FromName;
+            sb.Append($"#{first.Id} · {(g.Key.StartsWith("thread:") ? "(no doc no.)" : g.Key)} · {Short(first.Subject, 140)} · first sent {first.Date:yyyy-MM-dd HH:mm} by {by} ({line}) · sent {sent.Count}×" +
+                      (sent.Count > 1 ? $" (last {sent[^1].Date:yyyy-MM-dd})" : "") +
+                      (reply != null ? $" · REPLY from {reply.FromName} <{Dom(reply.FromAddr)}> {reply.Date:yyyy-MM-dd HH:mm} #{reply.Id}: {Short(reply.Subject, 80)}" : $" · NO REPLY ({(DateTime.Now - sent[^1].Date).Days} days since the last)") + "\n");
+        }
+        return sb.ToString();
+    }
+
     static string ToolLog(JsonObject a, Session s, CancellationToken ct)
     {
         var o = new SubmittalLog.Options();
         o.Types = L(a["types"]).Select(x => x.ToUpperInvariant()).ToList();
         o.Projects = L(a["projects"]).Select(x => Projects.Canon(x) is { Length: > 0 } c ? c : x).ToList();
-        if (D(a["from"]) is { } f) o.From = f; else o.From = DateTime.Today.AddDays(-180);
+        if (D(a["from"]) is { } f) o.From = f; else o.From = DateTime.Today.AddYears(-2);
         if (D(a["to"]) is { } t) o.To = t.Date.AddDays(1).AddSeconds(-1);
         o.Status = a["status"]?.ToString() ?? "";
         var r = SubmittalLog.Run(o, null, ct);
@@ -206,7 +294,8 @@ RULES
         s.Said.Add(("user", question));
         var res = new Result();
         bool confirmed = s.Confirmed;
-        for (int step = 1; step <= 9; step++)
+        bool pushed = false;
+        for (int step = 1; step <= 12; step++)
         {
             ct.ThrowIfCancellationRequested();
             var user = transcript.Length > 90_000 ? transcript.ToString()[^90_000..] : transcript.ToString();
@@ -217,7 +306,7 @@ RULES
             var tool = j["tool"]?.ToString() ?? "answer";
             var args = j["args"] as JsonObject ?? new JsonObject();
             var say = j["say"]?.ToString() ?? "";
-            if (say.Length > 0) { host.Progress($"🧭 {step} · {say}"); res.Steps.Add(say); }
+            if (say.Length > 0) { host.Progress(say); res.Steps.Add(say); }
             transcript.Append("NOVA STEP: ").Append(j.ToJsonString()).Append('\n');
             string got;
             try
@@ -227,6 +316,7 @@ RULES
                     case "emails": got = await Task.Run(() => ToolEmails(args, s), ct); break;
                     case "thread": got = await Task.Run(() => ToolThread(args, s), ct); break;
                     case "log": got = await Task.Run(() => ToolLog(args, s, ct), ct); break;
+                    case "followup": got = await Task.Run(() => ToolFollowup(args, s, host.Detail, ct), ct); break;
                     case "draft": got = ToolDraft(args); break;
                     case "confirm":
                     {
@@ -249,7 +339,17 @@ RULES
                             transcript.Append("TOOL RESULT: ").Append(got).Append("\nNow give the final answer with this feedback (drop what the user rejected, keep what fits the ✓ examples).\n");
                             continue;
                         }
-                        res.Text = args["text"]?.ToString() ?? j["say"]?.ToString() ?? raw;
+                        // A list was asked (or promised “below”) but no rows came: Nova sends the AI back once to finish the table.
+                        var ansText = args["text"]?.ToString() ?? j["say"]?.ToString() ?? raw;
+                        if (!pushed && rows.Count == 0 && s.Seen.Count > 0 &&
+                            (Regex.IsMatch(question, @"\b(all|list|table|show|which|every|csv|excel)\b", RegexOptions.IgnoreCase) || Regex.IsMatch(ansText, @"\b(below|following|table|listed)\b", RegexOptions.IgnoreCase)))
+                        {
+                            pushed = true;
+                            host.Detail("the answer had no table — asking the AI to finish it");
+                            transcript.Append("TOOL RESULT (answer): REJECTED — the user asked for a list and your answer has no rows. Give the full table now in args.rows (id + cells), from what the tools returned; if a tool is still needed (e.g. followup), call it first.\n");
+                            continue;
+                        }
+                        res.Text = ansText;
                         res.Columns = L(args["columns"]);
                         foreach (var r in rows)
                         {
@@ -266,9 +366,10 @@ RULES
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception e) { got = "Tool error: " + e.Message; }
+            host.Detail("↳ " + Short(got.Split('\n')[0], 120));
             transcript.Append("TOOL RESULT (").Append(tool).Append("): ").Append(got.Length > 40_000 ? got[..40_000] + "\n…(cut)" : got).Append('\n');
         }
-        res.Text = "I could not finish in 8 steps — try a narrower request (one project, one type, a period).";
+        res.Text = "I could not finish in 12 steps — try a narrower request (one project, one type, a period).";
         return res;
     }
 
@@ -276,7 +377,7 @@ RULES
     {
         var ex = ids.Select(i => s.Seen.TryGetValue(i, out var h) ? h : null).Where(h => h != null).ToList();
         if (ex.Count == 0 || host.Confirm == null) return "(no examples to confirm — continue)";
-        host.Progress("🧭 ✓ / ✗ — please check these examples");
+        host.Progress("✓ / ✗ — please check these examples");
         var r = await host.Confirm(question, ex);
         if (r == null) return null;
         var (yes, no, note) = r.Value;

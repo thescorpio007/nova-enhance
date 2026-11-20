@@ -877,6 +877,7 @@ class AskForm : NovaForm
         };
         planBox = stack.Add(new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, BackColor = Color.Transparent, Margin = new Padding(0, 2, 0, 2), Visible = false });
         info = stack.Add(Th.Wrap("", 9, Th.AccentText));
+        Thinking.Watch(info);   // ● ● ● dots + timer while it works
         resultRow = stack.Add(Th.Row());
         resultRow.Visible = false;
         resultLbl = Th.L("", 9.5f, Th.Text);
@@ -1905,6 +1906,7 @@ class BriefForm : NovaForm
 
         head = top.Add(Th.L("☀ Good morning", 15, Th.Text, true));
         info = top.Add(Th.Wrap("", 9.5f), true);
+        Thinking.Watch(info);   // ● ● ● dots + timer while it works
         var row = top.Add(Th.Row());
         row.Controls.Add(Th.B("↻ Refresh", Reload, true));
         row.Controls.Add(Th.B("📌 Save as task", () => { if (lastNeeds.Count > 0) Screens.Saved(NovaEnhance.Work.FromMail("What is waiting for my reply (morning brief)", null, "outstanding", lastNeeds, "brief")); }));

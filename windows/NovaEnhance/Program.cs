@@ -147,6 +147,7 @@ class NovaContext : ApplicationContext
             try
             {
                 // ⏳ Email index, then 📁 your project files (names, read inside, 📖 background reading).
+                if (Busy.Any) return;   // the ● working line is shown instead
                 var t = IndexProgress.Tray();
                 var o = Projects.Overall();
                 if (o.Names > 0)
@@ -156,6 +157,20 @@ class NovaContext : ApplicationContext
             catch { }
         };
         trayTip.Start();
+        // ● ● ● Something running (AI, the log, a search…): amber dot on the tray icon, and the hover text says what.
+        bool dotOn = false;
+        var busyTip = new System.Windows.Forms.Timer { Interval = 1000 };
+        busyTip.Tick += (_, _) =>
+        {
+            try
+            {
+                var any = Busy.Any;
+                if (any != dotOn) { dotOn = any; tray.Icon = any ? Busy.DotIcon(Th.AppIcon) : Th.AppIcon; }
+                if (any) { var t = Busy.Tray(); tray.Text = t.Length > 127 ? t[..127] : t; }
+            }
+            catch { }
+        };
+        busyTip.Start();
         var m = new ContextMenuStrip { Font = Th.F(10) };
         m.Items.Add("✦  Enhance selected text      Ctrl+Shift+E", null, (_, _) => Screens.Enhance());
         m.Items.Add("💬  Nova Chat & AI Hub        Ctrl+Shift+A", null, (_, _) => Screens.Hub(null));
@@ -391,6 +406,14 @@ static class Screens
     }
 
     /// <summary>📋 Submittal log window (a new one each time, with its own choices).</summary>
+    /// <summary>📋 The log with a Nova agent conversation from Nova Chat (its table, follow-ups here).</summary>
+    public static void SubmittalChat(string chatId)
+    {
+        if (Program.OffUi(() => SubmittalChat(chatId))) return;
+        try { Show(new SubmittalForm(null, false, chatId)); }
+        catch (Exception e) { Log.Error("Submittal log", e); }
+    }
+
     public static void Submittal(SubmittalLog.Options o = null)
     {
         if (Program.OffUi(() => Submittal(o))) return;

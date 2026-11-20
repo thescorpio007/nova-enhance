@@ -387,6 +387,7 @@ class MailAskForm : NovaForm
         try
         {
             using var doing = Log.Doing("Ask about email · " + anchor.Subject);
+            using var busyJob = Busy.Begin("✉ Ask about an email");
             await Gather(my.Token);
 
             status.Text = "✦ Understanding your prompt…";

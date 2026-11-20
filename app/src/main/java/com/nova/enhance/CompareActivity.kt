@@ -78,7 +78,7 @@ class CompareActivity : BaseActivity() {
 
         startBtn = Ui.button(c, "Start test", true) { start() }
         root.addView(startBtn, Ui.lp(top = Ui.dp(c, 14)))
-        status = Ui.text(c, "", 13f, Ui.MUTED)
+        status = Ui.thinking(Ui.text(c, "", 13f, Ui.MUTED))
         root.addView(status, Ui.lp(top = Ui.dp(c, 8)))
         list = Ui.col(c)
         root.addView(list, Ui.lp(top = Ui.dp(c, 4)))

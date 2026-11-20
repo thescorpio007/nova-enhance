@@ -213,6 +213,7 @@ class PdfPanel : NovaForm
         where.Cursor = Cursors.Hand;
         where.Click += (_, _) => { if (File.Exists(path)) Shell.Select(path); };
         status = s.Add(Th.Wrap("", 9, Th.AccentText));
+        Thinking.Watch(status);   // ● ● ● dots + timer while it works
 
         s.Add(Th.Section("Ask about this PDF"));
         ask = s.Add(Th.Prose(Th.Box(true, 3)), true);   // three lines · Enter = ask · Shift+Enter = new line

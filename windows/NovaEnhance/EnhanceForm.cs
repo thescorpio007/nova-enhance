@@ -70,6 +70,7 @@ class EnhanceForm : NovaForm
         go.Controls.Add(Th.B("✦ Enhance again", () => Run(Store.Mode), true));
         go.Controls.Add(Th.B("✎", () => { eInstr.Visible = !eInstr.Visible; if (eInstr.Visible) eInstr.Focus(); stack.FitAll(); }));
         status = Th.L("", 9.5f, Th.Muted);
+        Thinking.Watch(status);   // ● ● ● dots + timer while it works
         status.Margin = new Padding(4, 8, 0, 0);
         go.Controls.Add(status);
 

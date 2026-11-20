@@ -10,13 +10,13 @@ class SubmittalForm : WebPage
     bool exportNext;
     CancellationTokenSource cts;
     // 🧭 Nova agent in this window
-    Agent.Session agSess = new();
+    Agent.Session agSess;
     Agent.Result agLast;
-    string agQ = "";
+    string agQ = "", agChat = "", openChat = "";
     CancellationTokenSource agCts;
     TaskCompletionSource<(List<long>, List<long>, string)?> agWait;
 
-    public SubmittalForm(SubmittalLog.Options o = null, bool export = false) : base("📋 " + Tracker.LogName, "submittal.html", 1500, 900) { start = o; exportNext = export; }
+    public SubmittalForm(SubmittalLog.Options o = null, bool export = false, string chatId = "") : base("📋 " + Tracker.LogName, "submittal.html", 1500, 900) { start = o; exportNext = export; openChat = chatId ?? ""; }
 
     /// <summary>New choices from the search box (“only the overdue ones”, “now tower 2”, “export it”).</summary>
     public void Apply(SubmittalLog.Options o, bool export)
@@ -51,6 +51,12 @@ class SubmittalForm : WebPage
                 Post(Setup(o));
                 Run(o);
                 // ✚ New projects found in your emails (for the dashed chips and the ＋ panel) — after the log, quietly.
+                // 📋 Opened from Nova Chat (“Show in the log”): the same conversation, here.
+                if (openChat.Length > 0)
+                {
+                    agChat = openChat; agSess = Agent.SessionFor(agChat, null);
+                    Post(new JsonObject { ["t"] = "ag.load", ["turns"] = NovaChat.AgentTurns(agChat) });
+                }
                 _ = Task.Run(() => { try { Thread.Sleep(1500); Post(ProjectFinder.Handle(new JsonObject { ["t"] = "pf.load" })); } catch (Exception e) { Log.Warn("projects found", e.Message); } });
                 break;
             }
@@ -96,11 +102,11 @@ class SubmittalForm : WebPage
                 break;
             }
             case "ag.stop": agWait?.TrySetResult(null); agCts?.Cancel(); break;
-            case "ag.reset": agSess = new(); agLast = null; break;
+            case "ag.reset": agSess = null; agLast = null; agChat = ""; agQ = ""; break;
             case "ag.csv":
                 if (agLast != null) { var path = Agent.Csv(agLast, agQ); try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true }); } catch { } Post(new JsonObject { ["t"] = "saved", ["path"] = path }); }
                 break;
-            case "ag.chat": Screens.Hub(agQ); break;
+            case "ag.chat": if (agChat.Length > 0) Screens.HubOpenChat(agChat); else Screens.Hub(agQ); break;   // 💬 the same conversation, with everything
             case "ag.prompt": Prompts.AskSave(this, new SavedPrompt { Name = agQ.Length > 50 ? agQ[..50] : agQ, Question = agQ, Where = "ask" }); break;
             case "open":
                 NovaChat.OpenSource(new JsonObject { ["kind"] = "email", ["entry"] = m["entry"]?.ToString(), ["store"] = m["store"]?.ToString() });
@@ -123,9 +129,12 @@ class SubmittalForm : WebPage
         agQ = agQ.Length == 0 ? text : agQ;
         agCts?.Cancel(); agCts = new CancellationTokenSource();
         var ct = agCts.Token;
+        if (agChat.Length == 0) agChat = DateTime.Now.ToString("yyyyMMdd-HHmmss") + "-" + Random.Shared.Next(100, 999);
+        agSess ??= Agent.SessionFor(agChat, null);
         var host = new Agent.Host
         {
             Progress = s => Post(new JsonObject { ["t"] = "ag.step", ["text"] = s }),
+            Detail = s => Post(new JsonObject { ["t"] = "ag.detail", ["text"] = s }),
             Confirm = async (q, ex) =>
             {
                 agWait = new TaskCompletionSource<(List<long>, List<long>, string)?>();
@@ -133,10 +142,12 @@ class SubmittalForm : WebPage
                 return await agWait.Task;
             }
         };
+        using var busy = Busy.Begin("🧭 Nova agent · " + (text.Length > 50 ? text[..50] + "…" : text));
         try
         {
             var r = await Agent.Run(text, agSess, host, "log", ct);
             agLast = r;
+            agChat = NovaChat.SaveAgentTurn(agChat, text, r);   // kept as a Nova Chat conversation (💬 Continue opens it)
             Post(new JsonObject { ["t"] = "ag.result", ["result"] = Agent.Json(r) });
         }
         catch (OperationCanceledException) { Post(new JsonObject { ["t"] = "ag.error", ["text"] = "Stopped." }); }

@@ -59,6 +59,7 @@ class TalkPanel : Panel
         webHost = new Panel { Dock = DockStyle.Fill, BackColor = Th.Bg };
         bottom = new Panel { Dock = DockStyle.Bottom, Height = 150, BackColor = Color.FromArgb(0x0E, 0x11, 0x17), Padding = new Padding(10, 6, 10, 6) };
         status = new Label { Dock = DockStyle.Bottom, Height = 30, ForeColor = Th.AccentText, Font = Th.F(10), Padding = new Padding(10, 6, 10, 4), AutoEllipsis = true, BackColor = Color.FromArgb(0x0E, 0x11, 0x17) };
+        Thinking.Watch(status);   // ● ● ● dots + timer while it works
         row = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = Color.Transparent };
         row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));

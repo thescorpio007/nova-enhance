@@ -54,7 +54,7 @@ class MyPcActivity : BaseActivity() {
         head.addView(Ui.smallButton(c, "⌂") { show("home") }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, Ui.dp(c, 32), end = Ui.dp(c, 8)))
         head.addView(Ui.smallButton(c, "⟳") { syncNow() }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, Ui.dp(c, 32)))
         root.addView(head)
-        status = Ui.text(c, "", 12.5f, Ui.MUTED)
+        status = Ui.thinking(Ui.text(c, "", 12.5f, Ui.MUTED))
         root.addView(status)
         sourceBar = Ui.col(c)
         root.addView(sourceBar)
@@ -702,7 +702,7 @@ class MyPcActivity : BaseActivity() {
                 body.addView(wv, Ui.lp(top = Ui.dp(c, 6)))
             }
         }
-        if (logBusy) { body.addView(Ui.text(c, if (PhoneLog.builtin) "⏳ Reading every submission and its reply on this phone…" else "⏳ Reading every item of your field and its reply on this phone…", 13f, Ui.ACCENT), Ui.lp(top = Ui.dp(c, 10))); return }
+        if (logBusy) { body.addView(Ui.thinking(Ui.text(c, if (PhoneLog.builtin) "⏳ Reading every submission and its reply on this phone…" else "⏳ Reading every item of your field and its reply on this phone…", 13f, Ui.ACCENT)), Ui.lp(top = Ui.dp(c, 10))); return }
         if (r == null) return
         val open = r.items.count { it.status in setOf("Open", "Reviewing", "Replied", "Draft") }
         val (kv, kr) = Ui.chipRow(c)
@@ -759,7 +759,7 @@ class MyPcActivity : BaseActivity() {
         body.addView(Ui.text(c, "＋ Projects found in your emails", 17f, Ui.TEXT, true))
         body.addView(Ui.text(c, "document numbers, Outlook folders and subject tags that no project of yours claims yet · ✚ add · ⇢ merge · ✗ ignore — your PC and this phone use it at once (after the next update)", 12f, Ui.MUTED))
         body.addView(Ui.smallButton(c, "← Back to the log") { show("log") }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, top = Ui.dp(c, 6)))
-        if (foundBusy) { body.addView(Ui.text(c, "⏳ Asking your PC…", 13f, Ui.ACCENT), Ui.lp(top = Ui.dp(c, 10))); return }
+        if (foundBusy) { body.addView(Ui.thinking(Ui.text(c, "⏳ Asking your PC…", 13f, Ui.ACCENT)), Ui.lp(top = Ui.dp(c, 10))); return }
         val f = found ?: return
         f.optString("said").takeIf { it.isNotBlank() }?.let { body.addView(Ui.text(c, it, 13f, if (it.startsWith("⚠")) Ui.BAD else Ui.GOOD), Ui.lp(top = Ui.dp(c, 8))) }
         val items = f.optJSONArray("items") ?: JSONArray()
@@ -945,7 +945,7 @@ class MyPcActivity : BaseActivity() {
     private fun openMail(h0: PcLink.Hit) {
         page = "mail"; lastMail = h0
         body.removeAllViews()
-        body.addView(Ui.text(this, "⏳ Opening the email…", 13f, Ui.MUTED))
+        body.addView(Ui.thinking(Ui.text(this, "⏳ Opening the email…", 13f, Ui.MUTED)))
         // Read in the background: the screen (and the Nova keyboard, same app) never waits for the phone's database.
         work({ PcLink.mail(applicationContext, h0.id) ?: h0.also { it.body = it.first } }) { h -> if (page == "mail" && lastMail === h0) drawMail(h) }
     }
@@ -1395,7 +1395,7 @@ class MyPcActivity : BaseActivity() {
         body.addView(q)
         val box = Ui.col(c)
         body.addView(box)
-        box.addView(Ui.text(c, "⏳ Reading the history…", 13f, Ui.MUTED), Ui.lp(top = Ui.dp(c, 10)))
+        box.addView(Ui.thinking(Ui.text(c, "⏳ Reading the history…", 13f, Ui.MUTED)), Ui.lp(top = Ui.dp(c, 10)))
         work({ PhoneHistory.list(applicationContext) }) { all -> if (page == "history") drawHistory(box, all) }
     }
 
