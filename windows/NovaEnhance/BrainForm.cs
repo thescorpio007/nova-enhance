@@ -69,7 +69,7 @@ class BrainForm : WebPage
             case "outlookMail":
                 try
                 {
-                    var h = MailIndex.CurrentMail();
+                    var h = Outlook.CurrentMail();
                     if (h == null) { Post(new JsonObject { ["t"] = "toast", ["text"] = "Select an email in Outlook first" }); break; }
                     Post(Files(new[] { BrainTrainer.MailFile(h) }));
                 }
