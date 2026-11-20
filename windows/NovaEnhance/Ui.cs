@@ -185,20 +185,18 @@ class NovaForm : Form
     public virtual bool AllowedWhileLocked => false;
     bool asking;
 
-    protected override void OnVisibleChanged(EventArgs e)
+    /// <summary>True when the window was stopped by the lock (the caller's own visibility code must not run).</summary>
+    bool LockGate()
     {
-        if (Visible && !asking && GetType() != typeof(NovaForm) && !AllowedWhileLocked && AdminLock.Locked)
+        if (!(Visible && !asking && GetType() != typeof(NovaForm) && !AllowedWhileLocked && AdminLock.Locked)) return false;
+        asking = true;
+        try
         {
-            asking = true;
-            try
-            {
-                Hide();
-                if (AdminLock.Pass(Text)) Show();
-            }
-            finally { asking = false; }
-            return;
+            Hide();
+            if (AdminLock.Pass(Text)) Show();
         }
-        base.OnVisibleChanged(e);
+        finally { asking = false; }
+        return true;
     }
 
     // ⤢ Size and place remembered per window (only for windows you can resize; not while it is a side panel).
@@ -286,6 +284,7 @@ class NovaForm : Form
 
     protected override void OnVisibleChanged(EventArgs e)
     {
+        if (LockGate()) return;   // 🔐 admin lock
         base.OnVisibleChanged(e);
         if (!sideOn) return;
         if (Visible) { if (floatBounds.Width == 0) { floatBounds = Bounds; wasTopMost = TopMost; } BeginInvoke(() => AppBar.Dock(this, SideWidth, ref placing)); }
