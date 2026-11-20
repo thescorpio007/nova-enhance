@@ -256,7 +256,7 @@ static class Ai
         // ⚙ The feature's own AI (Settings → AI & API keys → AI for each feature), unless you picked one in the window.
         var first = Pick(p, out var note);
         bool callerFixed = p != null && first == p;
-        using var busy = Busy.Begin("Waiting for the AI (" + (LabelOf(first) ?? "AI") + ")", true);   // ● ● ● tray dot + “still working, not stuck”
+        using var busy = global::NovaEnhance.Busy.Begin("Waiting for the AI (" + (LabelOf(first) ?? "AI") + ")", true);   // ● ● ● tray dot + “still working, not stuck”
         try { var r0 = await ChatOne(system, user, fast, json, first, ct); LastBy = LabelOf(first); LastNote = note; return r0; }
         catch (AiException e) when (!ct.IsCancellationRequested)
         {
