@@ -164,7 +164,9 @@ static class MailFull
                 using var gz = new GZipStream(new MemoryStream(PhoneLink.Open(File.ReadAllBytes(file))), CompressionMode.Decompress);
                 using var sr = new StreamReader(gz, Encoding.UTF8);
                 var o = JsonNode.Parse(sr.ReadToEnd())!.AsObject();
+                // taken OUT of the file's object (else “The node already has a parent” when written back — the bucket was never saved)
                 mails = o["m"] as JsonObject ?? new(); imgs = o["img"] as JsonObject ?? new();
+                o.Remove("m"); o.Remove("img");
             }
             catch { mails = new(); imgs = new(); }
 

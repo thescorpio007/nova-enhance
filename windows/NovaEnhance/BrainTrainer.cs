@@ -90,10 +90,18 @@ THE BRAIN NOW:{BrainText(b)}";
         Brain.Quiet.Value = true;   // the trainer gets the whole brain itself
         try
         {
-            for (int i = 1; i <= 9; i++)
+            for (int i = 1; i <= 8; i++)
             {
                 ct.ThrowIfCancellationRequested();
-                var raw = await Ai.Chat(sys, t.Length > 80_000 ? t.ToString()[^80_000..] : t.ToString(), false, true, null, ct);
+                string raw = null;
+                for (int tryN = 0; tryN < 2 && raw == null; tryN++)
+                {
+                    // an AI answer that hangs (Gemini sometimes takes 2 min) is asked again once instead of waiting
+                    using var one = CancellationTokenSource.CreateLinkedTokenSource(ct); one.CancelAfter(TimeSpan.FromSeconds(75));
+                    try { raw = await Ai.Chat(sys, t.Length > 80_000 ? t.ToString()[^80_000..] : t.ToString(), false, true, null, one.Token); }
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested) { detail("the AI took more than 75 s — asking again"); }
+                }
+                if (raw == null) throw new AiException("the AI did not answer twice in a row — try again in a minute");
                 JsonObject j;
                 try { j = Ai.ParseJson(raw) ?? new JsonObject(); } catch { j = new JsonObject { ["tool"] = "answer", ["args"] = new JsonObject { ["reply"] = raw } }; }
                 var tool = j["tool"]?.ToString() ?? "answer";
@@ -228,6 +236,7 @@ THE BRAIN NOW:{BrainText(b)}";
     }
 
     static readonly Dictionary<string, TestRun> tests = new();
+    static readonly Dictionary<string, (string, Agent.Result)> beforeCache = new();
 
     static string Key(JsonArray changes) => Regex.Replace(changes?.ToJsonString() ?? "", @"\s+", "");
 
@@ -253,14 +262,33 @@ THE BRAIN NOW:{BrainText(b)}";
         var res = new JsonObject { ["t"] = "test2", ["id"] = run.Id, ["question"] = question, ["kind"] = kind };
         var examples = new JsonArray();
 
+        // ⚡ Everything at once (it used to run one after the other): the current brain, the new rule, the 📋 log, the AI check.
+        // The “current brain” answer is kept for “🧪 Test again” with the same question.
+        step("Running the test question twice at once (your brain now · with the new rule)");
+        var aiCheck = Task.Run(async () =>
+        {
+            try { return await AiChecks(now, diff, ct); }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception e) { return new JsonObject { ["contradictions"] = new JsonArray(), ["duplicates"] = new JsonArray(), ["weak"] = new JsonArray($"(the AI check did not answer: {e.Message})"), ["better"] = "" }; }
+        }, ct);
+        Task<JsonObject> logTask = kind == "log" ? Task.Run(() => LogDiff(now, after, 30), ct) : Task.FromResult<JsonObject>(null);
+
         if (kind == "writing")
         {
             const string sys = "You improve the text: fix grammar, spelling and wording, keep the meaning, the language and the format. Reply with the improved text only.";
-            step("Improving the sample text with your current brain");
-            string before, with;
-            using (Ai.For("brain")) { Brain.Override.Value = now; try { before = await Ai.Chat(sys, question, false, false, null, ct); } finally { Brain.Override.Value = null; } }
-            step("Improving it again with the new rule");
-            using (Ai.For("brain")) { Brain.Override.Value = after; try { with = await Ai.Chat(sys, question, false, false, null, ct); } finally { Brain.Override.Value = null; } }
+            async Task<string> Write(JsonObject brain)
+            {
+                using var f = Ai.For("brain");
+                Brain.Override.Value = brain;
+                using var one = CancellationTokenSource.CreateLinkedTokenSource(ct); one.CancelAfter(TimeSpan.FromSeconds(90));
+                return await Ai.Chat(sys, question, true, false, null, one.Token);
+            }
+            var bKey = "w|" + Brain.Version + "|" + question;
+            Task<string> tb;
+            lock (beforeCache) tb = beforeCache.TryGetValue(bKey, out var cached) && cached.Item1.Length > 0 ? Task.FromResult(cached.Item1) : Task.Run(() => Write(now), ct);
+            var ta = Task.Run(() => Write(after), ct);
+            var before = await tb; var with = await ta;
+            lock (beforeCache) beforeCache[bKey] = (before, null);
             res["before"] = new JsonObject { ["text"] = before.Trim(), ["rows"] = new JsonArray() };
             res["after"] = new JsonObject { ["text"] = with.Trim(), ["rows"] = new JsonArray() };
             run.Plus = before.Trim() == with.Trim() ? 0 : 1;
@@ -268,15 +296,22 @@ THE BRAIN NOW:{BrainText(b)}";
         }
         else
         {
-            var sB = new Agent.Session(); var sA = new Agent.Session();
-            var host = new Agent.Host { Progress = s => detail(s), Detail = detail, Confirm = null };
-            step("Running the test question with your current brain");
-            Agent.Result rB, rA;
-            Brain.Override.Value = now;
-            try { rB = await Agent.Run(question, sB, host, "brain", ct); } finally { Brain.Override.Value = null; }
-            step("Running it again with the new rule");
-            Brain.Override.Value = after;
-            try { rA = await Agent.Run(question, sA, host, "brain", ct); } finally { Brain.Override.Value = null; }
+            var hostB = new Agent.Host { Progress = x => detail("now · " + x), Detail = _ => { }, Confirm = null };
+            var hostA = new Agent.Host { Progress = x => detail("new rule · " + x), Detail = _ => { }, Confirm = null };
+            async Task<Agent.Result> Search(JsonObject brain, Agent.Host h)
+            {
+                Brain.Override.Value = brain;   // this task only (AsyncLocal)
+                return await Agent.Run(question, new Agent.Session(), h, "brain", ct, 7, 60);
+            }
+            var bKey = "s|" + Brain.Version + "|" + question;
+            Agent.Result cachedB = null;
+            lock (beforeCache) if (beforeCache.TryGetValue(bKey, out var cb)) cachedB = cb.Item2;
+            if (cachedB != null) detail("your brain now: the same question was run a moment ago — reused");
+            var tB = cachedB != null ? Task.FromResult(cachedB) : Task.Run(() => Search(now, hostB), ct);
+            var tA = Task.Run(() => Search(after, hostA), ct);
+            var rB = await tB; var rA = await tA;
+            lock (beforeCache) { if (beforeCache.Count > 20) beforeCache.Clear(); beforeCache[bKey] = ("", rB); }
+            step("Comparing the two results");
             string K(Agent.Row r) => (Regex.Match(string.Join(" ", r.Cells), @"[A-Z0-9]{2,}(?:-[A-Z0-9]{1,8}){3,}", RegexOptions.IgnoreCase) is { Success: true } m ? m.Value : r.Cells.FirstOrDefault() ?? "").ToUpperInvariant();
             var kb = rB.Rows.Select(K).Where(x => x.Length > 0).ToHashSet(); var ka = rA.Rows.Select(K).Where(x => x.Length > 0).ToHashSet();
             JsonObject Side(Agent.Result r, HashSet<string> other, string mark) => new()
@@ -290,22 +325,16 @@ THE BRAIN NOW:{BrainText(b)}";
             var ex = rA.Rows.Where(r => r.Mail != null).OrderBy(r => kb.Contains(K(r)) ? 1 : 0).Take(5).Select(r => r.Mail).ToList();
             foreach (var o in Agent.Examples(ex).OfType<JsonObject>()) examples.Add(o.DeepClone());
             if (examples.Count == 0) examples.Add(new JsonObject { ["id"] = 1, ["subject"] = "The results with the new rule (right column)", ["lines"] = Agent.Clip(rA.Text, 300), ["date"] = "", ["from"] = "", ["to"] = "" });
-            if (kind == "log")
-            {
-                step("Checking the 📋 log item by item (last 60 days)");
-                var lg = LogDiff(now, after, 60);
-                res["log"] = lg; run.LogChanged = lg["changed"]?.GetValue<int>() ?? 0;
-            }
         }
+        if (await logTask is JsonObject lg) { res["log"] = lg; run.LogChanged = lg["changed"]?.GetValue<int>() ?? 0; }
         run.Examples = examples.Count;
         res["examples"] = examples;
 
         // Checks: the quick ones + the AI reading the whole brain.
         step("Checking against your other rules (contradictions, duplicates, weak spots)");
         var quick = Checks(now, diff);
-        JsonObject ai;
-        try { ai = await AiChecks(now, diff, ct); } catch (OperationCanceledException) { throw; } catch (Exception e) { ai = new JsonObject { ["contradictions"] = new JsonArray(), ["duplicates"] = new JsonArray(), ["weak"] = new JsonArray($"(the AI check did not answer: {e.Message})"), ["better"] = "" }; }
-        var contra = ai["contradictions"] as JsonArray ?? new JsonArray();
+        var ai = await aiCheck;
+        var contra = (ai["contradictions"] as JsonArray)?.DeepClone().AsArray() ?? new JsonArray();
         var dups = new JsonArray((quick["duplicates"] as JsonArray ?? new()).Select(x => x?.DeepClone()).Concat((ai["duplicates"] as JsonArray ?? new()).Select(x => x?.DeepClone())).ToArray());
         var weak = new JsonArray((ai["weak"] as JsonArray ?? new()).Select(x => x?.DeepClone()).Concat((quick["vague"] as JsonArray ?? new()).Select(x => x?.DeepClone())).Concat((quick["syntax"] as JsonArray ?? new()).Select(x => x?.DeepClone())).ToArray());
         if (kind != "writing" && run.Plus == 0 && run.Minus == 0 && run.LogChanged == 0) weak.Add("The new rule changes nothing in this test — try another test question, or the rule is not needed.");

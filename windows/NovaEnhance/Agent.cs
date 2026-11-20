@@ -281,7 +281,7 @@ RULES
     // ------------------------------------------------------------------ the loop
 
     /// <summary>One request (or a follow-up) of the conversation. <paramref name="where"/>: chat · email · log (its ⚙ AI for each feature applies).</summary>
-    public static async Task<Result> Run(string question, Session s, Host host, string where, CancellationToken ct)
+    public static async Task<Result> Run(string question, Session s, Host host, string where, CancellationToken ct, int maxSteps = 12, int aiSeconds = 0)
     {
         using var aiFor = Ai.For(where == "log" ? "email" : where);
         var sys = System(where switch { "log" => "the Submittal log window (a table)", "email" => "the Search for email window (a list of emails)", _ => "Nova Chat (a table in the chat)" });
@@ -295,11 +295,25 @@ RULES
         var res = new Result();
         bool confirmed = s.Confirmed;
         bool pushed = false;
-        for (int step = 1; step <= 12; step++)
+        for (int step = 1; step <= maxSteps; step++)
         {
             ct.ThrowIfCancellationRequested();
             var user = transcript.Length > 90_000 ? transcript.ToString()[^90_000..] : transcript.ToString();
-            var raw = await Ai.Chat(sys, user, false, true, null, ct);
+            string raw;
+            if (aiSeconds > 0)
+            {
+                // 🧪 tests: an AI answer that hangs (Gemini sometimes takes 2 min) is asked again once instead of waiting.
+                raw = null;
+                for (int tryN = 0; tryN < 2 && raw == null; tryN++)
+                {
+                    using var one = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    one.CancelAfter(TimeSpan.FromSeconds(aiSeconds));
+                    try { raw = await Ai.Chat(sys, user, false, true, null, one.Token); }
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested) { host.Detail($"the AI took more than {aiSeconds} s — asking again"); }
+                }
+                raw ??= "{\"tool\":\"answer\",\"args\":{\"text\":\"The AI did not answer in time.\"}}";
+            }
+            else raw = await Ai.Chat(sys, user, false, true, null, ct);
             res.By = Ai.LastBy; if (Ai.LastNote.Length > 0) res.Note = Ai.LastNote;
             JsonObject j;
             try { j = Ai.ParseJson(raw) ?? new JsonObject(); } catch { j = new JsonObject { ["tool"] = "answer", ["args"] = new JsonObject { ["text"] = raw } }; }
