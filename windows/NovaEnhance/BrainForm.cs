@@ -153,6 +153,7 @@ class BrainForm : WebPage
         user.Append("user: ").Append(text);
         Brain.Quiet.Value = true;
         string raw;
+        using var _aiFor4 = Ai.For("brain");   // ⚙ AI for each feature
         try { raw = Ai.Chat(sys, user.ToString(), false, true).GetAwaiter().GetResult(); }
         finally { Brain.Quiet.Value = false; }
         var j = Ai.ParseJson(raw);

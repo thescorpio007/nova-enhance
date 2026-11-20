@@ -432,6 +432,7 @@ static class Memory
         var sys = "Describe this person's email writing style in at most 110 words, as instructions for writing new emails in their voice: usual greeting and sign-off, " +
                   "tone and formality, sentence length, how they ask for actions and set deadlines, typical phrases, language habits (British/US spelling), use of bullet points. " +
                   "Do not quote names, projects, numbers or any confidential detail. Plain text.";
+        using var _aiFor10 = Ai.For("chat");   // ⚙ AI for each feature
         var style = (await Ai.Chat(sys, sample, false)).Trim();
         lock (L) { Data.Style = style; Data.StyleAt = DateTime.Now; }
         StyleOn = true;

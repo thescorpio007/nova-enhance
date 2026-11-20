@@ -45,6 +45,7 @@ static class FolderAsk
         {
             var user = (string.IsNullOrWhiteSpace(previousQuestion) ? "" : "Previous question (context): " + previousQuestion + "\n") +
                        (vocab.Count > 0 ? "Project vocabulary: " + string.Join("; ", vocab.Select(v => v.Abbr + " = " + v.Full)) + "\n" : "") + "Question: " + question;
+            using var _aiFor9 = Ai.For("folder");   // ⚙ AI for each feature
             var j = Ai.ParseJson(await Ai.Chat(deep ? DeepSystem : ExpandSystem, user, true, true, null, ct));
             var terms = (j["terms"] as JsonArray)?.Select(x => x?.ToString()?.Trim()).Where(x => !string.IsNullOrEmpty(x)).ToList() ?? new();
             return terms.Concat(local).Distinct(StringComparer.OrdinalIgnoreCase).Take(deep ? 36 : 24).ToList();
@@ -102,6 +103,7 @@ static class FolderAsk
         var sys = (detailed ? DetailRules : ShortRules) + Checks + NovaSearch.SourceRule + AdviceRule + Modes.ProfileNote();
         var user = (string.IsNullOrWhiteSpace(history) ? "" : "Earlier in this conversation:\n" + history + "\n\n") +
                    "Extracts:\n" + Extracts(ps) + "Question: " + question;
+        using var _aiFor8 = Ai.For("folder");   // ⚙ AI for each feature
         var a = await Ai.Chat(sys, user, !detailed, false, null, ct);
         History.Add("ask", Ai.Active()?.Id ?? "", "", detailed ? "folder-detail" : "folder", question, a);
         return a;

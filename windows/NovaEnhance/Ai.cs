@@ -58,6 +58,133 @@ static class Ai
 
     public static bool CurrentIsLocal => Current()?.Id == "local";
 
+    // ---------------------------------------------------------------- ⚙ AI for each feature (Settings → AI & API keys)
+
+    /// <summary>The features with their own AI choice, and the recommended choice.</summary>
+    public static readonly (string Key, string Label, string Hint, string Rec)[] Features =
+    {
+        ("enhance", "✦ Text enhancement", "Ctrl+Shift+E · Word · Excel · Outlook · browser", "localfirst"),
+        ("sendcheck", "🛡 Check before sending", "grammar", "localfirst"),
+        ("spelling", "✍ Spelling & grammar", "", "localfirst"),
+        ("sorting", "📁 Email project sorting", "the unsure emails (60 s per batch)", "default"),
+        ("email", "💬 Talk about this email · 🔍 Search for email", "Outlook pane, Word / Excel email tools", "default"),
+        ("deep", "🔎 Deep search", "", "default"),
+        ("folder", "📂 Folder search · file questions", "", "default"),
+        ("pdf", "📄 Nova for this PDF", "", "default"),
+        ("vision", "🖼 Reading images & scans", "OCR, drawings", "default"),
+        ("brief", "☀ Morning brief", "", "default"),
+        ("chat", "✦ Nova Chat · ✦ Prompts", "", "default"),
+        ("brain", "🧠 Nova Brain chat · rules", "", "default")
+    };
+
+    /// <summary>default · local · localfirst · or an AI id (gemini, claude, chatgpt…).</summary>
+    public static string ChoiceOf(string key)
+    {
+        var v = Store.Str("win_aifor_" + key, "");
+        if (v.Length == 0 && key == "vision" && VisionBy == "local") return "local";
+        return v.Length == 0 ? "default" : v;
+    }
+
+    public static void SetChoice(string key, string v)
+    {
+        Store.Set("win_aifor_" + key, v);
+        if (key == "vision") VisionBy = v is "local" or "localfirst" ? "local" : "gemini";
+    }
+
+    static readonly AsyncLocal<string> feat = new();
+    static readonly AsyncLocal<bool> picked = new();
+
+    /// <summary>The work in this block belongs to a feature (its AI choice applies). The outer feature wins (a PDF translation stays “PDF”).
+    /// <paramref name="userPicked"/>: you chose another AI in that window's own list — your pick wins.</summary>
+    public static IDisposable For(string key, bool userPicked = false)
+    {
+        var (of, op) = (feat.Value, picked.Value);
+        if (!string.IsNullOrEmpty(of) && !userPicked) return new Undo(() => { });
+        feat.Value = key; picked.Value = userPicked;
+        return new Undo(() => { feat.Value = of; picked.Value = op; });
+    }
+
+    /// <summary>A window's own AI list: “picked” only when it shows neither your default AI nor the feature's AI.</summary>
+    public static bool Picked(Provider p, string key) => p != null && p.Id != Active()?.Id && p.Id != ForFeature(key)?.Id;
+
+    /// <summary>The AI a feature asks first (for the windows' own AI lists).</summary>
+    public static Provider ForFeature(string key)
+    {
+        var c = ChoiceOf(key);
+        if (c is "local" or "localfirst") return HasKey("local") ? ById("local") : Active();
+        if (c != "default" && HasKey(c)) return ById(c);
+        return Active();
+    }
+
+    /// <summary>What answered and why (e.g. “⚠ Local AI is not available — answered by your default AI · Gemini”).</summary>
+    public static string LastNote = "";
+
+    static Provider Pick(Provider p, out string note)
+    {
+        note = "";
+        var f = feat.Value;
+        if (string.IsNullOrEmpty(f) || picked.Value) return p ?? Current();
+        var c = ChoiceOf(f);
+        if (c == "default") return p ?? Current();
+        if (c is "local" or "localfirst")
+        {
+            if (HasKey("local")) return ById("local");
+            var d = Active();
+            note = $"⚠ Local AI is not set up (Settings → AI & API keys) — answered by your default AI · {LabelOf(d)}";
+            return d;
+        }
+        if (HasKey(c)) return ById(c);
+        var d2 = p ?? Active();
+        note = $"⚠ {ById(c).Label} has no key — answered by {LabelOf(d2)}";
+        return d2;
+    }
+
+    /// <summary>Try to start LM Studio / Ollama before using the default AI (off by default).</summary>
+    public static bool LocalAutoStart { get => Store.Bool("win_local_autostart", false); set => Store.SetBool("win_local_autostart", value); }
+
+    public static string LocalName => LocalUrl.Contains(":11434") ? "Ollama" : LocalUrl.Contains(":1337") ? "Jan" : "LM Studio";
+
+    static Task<bool> starting;
+
+    /// <summary>Starts the local AI server (LM Studio: lms server start, or the app; Ollama: ollama serve) and waits up to 60 s.</summary>
+    public static Task<bool> StartLocal(CancellationToken ct = default)
+    {
+        lock (Features) { if (starting == null || starting.IsCompleted) starting = StartLocalCore(ct); return starting; }
+    }
+
+    static async Task<bool> StartLocalCore(CancellationToken ct)
+    {
+        try
+        {
+            try { await Models(LocalUrl); return true; } catch { }
+            string Local(params string[] p) => Path.Combine(new[] { Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData) }.Concat(p).ToArray());
+            if (LocalName == "Ollama")
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ollama", "serve") { UseShellExecute = false, CreateNoWindow = true });
+            else
+            {
+                var lms = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".lmstudio", "bin", "lms.exe");
+                if (File.Exists(lms)) System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(lms, "server start") { UseShellExecute = false, CreateNoWindow = true });
+                else
+                {
+                    var app = new[] { Local("Programs", "LM Studio", "LM Studio.exe"), Local("Programs", "lm-studio", "LM Studio.exe"), Local("LM-Studio", "LM Studio.exe") }.FirstOrDefault(File.Exists);
+                    if (app == null) return false;
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(app) { UseShellExecute = true });
+                }
+            }
+            var until = DateTime.Now.AddSeconds(60);
+            while (DateTime.Now < until && !ct.IsCancellationRequested)
+            {
+                await Task.Delay(2000, ct);
+                try { await Models(LocalUrl); Log.Write($"🖥 {LocalName} started by Nova"); return true; } catch { }
+            }
+        }
+        catch (Exception e) { Log.Warn("local AI", "start: " + e.Message); }
+        return false;
+    }
+
+    /// <summary>Is the local AI answering right now (for Settings)?</summary>
+    public static async Task<bool> LocalUp() { if (!HasKey("local")) return false; try { await Models(LocalUrl); return true; } catch { return false; } }
+
     /// <summary>How many characters of sources fit (local models have a small memory).</summary>
     public static int MaxChars => CurrentIsLocal ? Math.Max(6000, LocalContext * 3 - 6000) : 400_000;
 
@@ -126,12 +253,17 @@ static class Ai
     /// <summary>One question, one answer. Retries busy/connection errors twice.</summary>
     public static async Task<string> Chat(string system, string user, bool fast = true, bool json = false, Provider p = null, CancellationToken ct = default)
     {
-        if (p != null) return await ChatOne(system, user, fast, json, p, ct);
-        var first = Current();
-        try { var r0 = await ChatOne(system, user, fast, json, first, ct); LastBy = LabelOf(first); return r0; }
+        // ⚙ The feature's own AI (Settings → AI & API keys → AI for each feature), unless you picked one in the window.
+        var first = Pick(p, out var note);
+        bool callerFixed = p != null && first == p;
+        try { var r0 = await ChatOne(system, user, fast, json, first, ct); LastBy = LabelOf(first); LastNote = note; return r0; }
         catch (AiException e) when (!ct.IsCancellationRequested)
         {
             var others = new List<Provider>();
+            bool down0 = e.Message.Contains("not running", StringComparison.OrdinalIgnoreCase);
+            // Optional: start LM Studio / Ollama first (Settings → AI for each feature), then ask it again.
+            if (first?.Id == "local" && down0 && LocalAutoStart && await StartLocal(ct))
+                try { var r1 = await ChatOne(system, user, fast, json, first, ct); LastBy = LabelOf(first); LastNote = $"🖥 Nova started {LocalName} for this"; return r1; } catch (AiException) { }
             // Local AI not running or too slow → your cloud AI (routing rule).
             // LM Studio closed (option A): the question goes to Gemini instead — unless it holds private words (those stay on this PC).
             bool down = e.Message.Contains("not running", StringComparison.OrdinalIgnoreCase);
@@ -142,11 +274,18 @@ static class Ai
                 else if (CloudBackup() is { } cloud) others.Add(cloud);
             }
             // Your AI is busy? Settings → ✦ Prompts: use my other AI key.
-            if (Store.Str("win_ai_busy", "other") == "other" && Regex.IsMatch(e.Message, "busy|too long|429|503|500|overloaded|quota|rate", RegexOptions.IgnoreCase))
+            if (!callerFixed && Store.Str("win_ai_busy", "other") == "other" && Regex.IsMatch(e.Message, "busy|too long|429|503|500|overloaded|quota|rate", RegexOptions.IgnoreCase))
                 others.AddRange(WithKeys.Where(x => x.Id != first?.Id && !others.Contains(x)));
             foreach (var other in others)
             {
-                try { var r = await ChatOne(system, user, fast, json, other, ct); Log.Warn("ai", $"{LabelOf(first)}: {e.Message} — answered by {LabelOf(other)}"); LastBy = LabelOf(other) + (down ? " (LM Studio is closed)" : ""); return r; }
+                try
+                {
+                    var r = await ChatOne(system, user, fast, json, other, ct);
+                    Log.Warn("ai", $"{LabelOf(first)}: {e.Message} — answered by {LabelOf(other)}");
+                    LastBy = LabelOf(other) + (down ? $" ({LocalName} is closed)" : "");
+                    LastNote = down ? $"⚠ Local AI is not available ({LocalName} is closed) — answered by your default AI · {LabelOf(other)}" : $"⚠ {LabelOf(first)} was busy — answered by {LabelOf(other)}";
+                    return r;
+                }
                 catch (AiException) { }
             }
             throw;

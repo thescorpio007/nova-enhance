@@ -104,7 +104,7 @@ class EnhanceForm : NovaForm
     {
         aiBox.Items.Clear();
         foreach (var p in Ai.WithKeys) aiBox.Items.Add(new AiItem { P = p });
-        var act = Ai.Active();
+        var act = Ai.ForFeature("enhance");   // ⚙ AI for each feature
         for (int i = 0; i < aiBox.Items.Count; i++) if (((AiItem)aiBox.Items[i]).P.Id == act?.Id) aiBox.SelectedIndex = i;
         aiBox.Visible = aiBox.Items.Count > 0;
     }
@@ -171,6 +171,7 @@ class EnhanceForm : NovaForm
         try
         {
             Store.Set("win_enh_instr", eInstr.Text);
+            using var aiFor = Ai.For("enhance", Ai.Picked(p, "enhance"));   // ⚙ AI for each feature (your pick in this window wins)
             var outText = await Ai.Enhance(p, mode, text, my.Token, eInstr.Visible ? eInstr.Text.Trim() : "");
             if (my.IsCancellationRequested) return;
             result.Text = Crlf(outText);
@@ -179,7 +180,9 @@ class EnhanceForm : NovaForm
                 History.SaveOriginal(mode, text, outText);
                 History.Add("enhance", p.Id, Store.Model(p.Id), mode, text, outText);
             }
-            Status($"✓ {Modes.Label(mode)} · {sw.Elapsed.TotalSeconds:0.0} s · original saved", Th.Good);
+            // ⚠ Local AI not available → the default AI answered: said here.
+            if (Ai.LastNote.Length > 0) Status($"{Ai.LastNote} · {sw.Elapsed.TotalSeconds:0.0} s", Th.Warn);
+            else Status($"✓ {Modes.Label(mode)} · by {Ai.LastBy} · {sw.Elapsed.TotalSeconds:0.0} s" + (AdminLock.InSandbox ? "" : " · original saved"), Th.Good);
             result.Focus();
             result.SelectionStart = 0;
         }

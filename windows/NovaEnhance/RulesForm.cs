@@ -66,6 +66,7 @@ static class RuleCheck
         var sys = "You check rules written by " + Persona.Who + " (or made from their words) for " + (feature == "brief" ? "their morning email brief" : "sorting their emails into projects") +
                   ". Rules: all conditions of a rule must be true; each list = any of its words; the first matching rule decides. " +
                   "Reply with JSON only: {\"ok\":true|false,\"notes\":[\"short note: what does not fit his words, and the fix\"]}. Max 5 notes. If everything fits, ok=true and notes=[].";
+        using var _aiFor19 = Ai.For("brain");   // ⚙ AI for each feature
         var j = Ai.ParseJson(await SearchGate.Limit(t => Ai.Chat(sys, $"His words:\n{b.Instructions}\n\nThe rules:\n{RuleBooks.Describe(feature, b)}", true, true, SmartSearch.Cloud(), t), 45, ct));
         var notes = (j["notes"]?.AsArray() ?? new JsonArray()).Select(x => "✦ " + x?.ToString()).Where(x => x.Length > 3).ToList();
         if (notes.Count == 0 && j["ok"]?.GetValue<bool>() == true) notes.Add("✦ Gemini: the rules match your words.");

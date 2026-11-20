@@ -68,6 +68,7 @@ static class BriefRules
                 for (int i = 0; i < send.Count; i++) sb.Append($"[{i + 1}] {send[i].Date:dd MMM} · {send[i].FromName} · {send[i].Subject} · “{send[i].FirstLines(240)}”\n");
                 var sys = "You sort emails for the morning brief of " + Persona.Who + ", following THEIR instructions. Reply with JSON only: {\"e\":[{\"i\":1,\"group\":\"urgent|waiting|fyi|hide\",\"why\":\"3-8 words\"}]}. " +
                           "Give a group only when the instructions say something about that email; otherwise leave it out.";
+                using var _aiFor6 = Ai.For("brief");   // ⚙ AI for each feature
                 var j = Ai.ParseJson(await SearchGate.Limit(t => Ai.Chat(sys, sb.ToString(), true, true, SmartSearch.Cloud(), t), 90, ct));
                 foreach (var x in j["e"]?.AsArray() ?? new JsonArray())
                 {
@@ -105,6 +106,7 @@ static class BriefRules
                   "subject also covers attachment names. in: to = I'm in To, cc = I'm only in Cc. except = words in the text that cancel the rule. " +
                   "The first rule that matches decides, so put the most specific rules first. first = project codes to show first (brief only). " +
                   "ai_check = anything that needs understanding rather than words (empty if nothing). Use these project codes:\n" + projects;
+        using var _aiFor5 = Ai.For("brief");   // ⚙ AI for each feature
         var j = Ai.ParseJson(await SearchGate.Limit(t => Ai.Chat(sys, "Instructions:\n" + words, true, true, SmartSearch.Cloud(), t), 60, ct));
         var b = new RuleBook { AiCheck = j["ai_check"]?.ToString() ?? "", Instructions = words };
         foreach (var x in j["first"]?.AsArray() ?? new JsonArray()) if (x?.ToString() is { Length: > 0 } f) b.First.Add(f.ToUpperInvariant());

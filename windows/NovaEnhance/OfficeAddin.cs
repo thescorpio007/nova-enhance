@@ -577,6 +577,7 @@ static class Server
         if (AdminLock.Locked && p is not ("/api/ping" or "/api/langs" or "/api/enhance" or "/api/cells"))
             return new JsonObject { ["error"] = "🔐 Nova Enhance is locked — only text enhancement works. Unlock it from the tray." };
         AdminLock.Sandbox();
+        using var aiFor = Ai.For(p is "/api/enhance" or "/api/cells" ? "enhance" : "email");   // ⚙ AI for each feature
         switch (p)
         {
             case "/api/ping":

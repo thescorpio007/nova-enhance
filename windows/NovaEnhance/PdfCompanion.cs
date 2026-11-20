@@ -390,6 +390,7 @@ class PdfPanel : NovaForm
                 attached.Append($"[F{fi++}] {Path.GetFileName(f)}\n{(txt.Length > 9000 ? txt[..9000] : txt)}\n\n");
             }
             if (files.Count > 0) sys += " The main document's pages are cited [p.N]; the user also attached other files, cited [F1], [F2]… (the main document is the first column when comparing)." + FileTalk.Rules;
+            using var _aiFor16 = Ai.For("pdf", Ai.Picked(prov, "pdf"));   // ⚙ AI for each feature
             var a = await Ai.Chat(sys, $"Document: {Path.GetFileName(path)}\n\n{Extracts(pick, 60000)}\n" + (attached.Length > 0 ? "ATTACHED FILES:\n" + attached + "\n" : "") + $"Question: {q}" + (pInstr.Text.Trim().Length > 0 ? "\nInstructions from the user (follow them for content, format, length and language): " + pInstr.Text.Trim() : ""), !detailed, false, prov, my.Token);
             if (my.IsCancellationRequested) return;
             if (!AdminLock.InSandbox)   // 🔐 locked: nothing goes to your history or chats
@@ -434,6 +435,7 @@ class PdfPanel : NovaForm
                       "3. NOTES & REFERENCES — referenced drawings, specs, RFIs, details.\n" +
                       "4. CHECK — possible issues for the user to verify: missing or unclear dimensions/notes, references to other revisions, contradictions, items marked TBC/hold, missing approvals or stamps. Advice only, never invent; say 'none found' if nothing.\n" +
                       "Keep it compact. Use the language of the document (English unless it is in Arabic or French)." + Modes.ProfileNote();
+            using var _aiFor15 = Ai.For("pdf", Ai.Picked(prov, "pdf"));   // ⚙ AI for each feature
             var a = await Ai.Chat(sys, $"Document: {Path.GetFileName(path)}\n\n{Extracts(all, 60000)}", false, false, prov, my.Token);
             if (my.IsCancellationRequested) return;
             if (!AdminLock.InSandbox) History.Add("ask", prov.Id, Store.Model(prov.Id), "pdf-check", Path.GetFileName(path), a);
@@ -455,6 +457,7 @@ class PdfPanel : NovaForm
             if (text.Length > 20000) text = text[..20000];
             status.Text = $"🌐 Translating page {p} into {Store.TrLang}…";
             var prov = Ai.Current() ?? throw new AiException("Add an AI key in Settings → AI & API keys");
+            using var _aiFor14 = Ai.For("pdf");   // ⚙ AI for each feature
             var r = await Ai.Enhance(prov, "translate", text, CancellationToken.None);
             lastQuestion = "";
             ShowAnswer($"[p.{p}] → {Store.TrLang}\n\n" + r);

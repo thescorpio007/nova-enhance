@@ -340,6 +340,7 @@ Rules:
             var sb = new StringBuilder();
             for (int i = 0; i < hits.Count; i++)
                 sb.Append($"{i}. From: {hits[i].FromName} | Subject: {hits[i].Subject} | Text: {hits[i].FirstLines(300)}\n");
+            using var _aiFor3 = Ai.For("brief");   // ⚙ AI for each feature
             var r = Ai.ParseJson(await Ai.Chat(
                 "For each email, write a one-line summary (max 14 words) and decide if the reader must reply or act. Reply with JSON only: {\"items\":[{\"i\":0,\"summary\":\"…\",\"needs_reply\":true}]}",
                 sb.ToString(), true, true, p, ct));
@@ -362,6 +363,7 @@ Rules:
         using var privateWork = Ai.Private();   // your emails / documents: the routing rule may keep them on the local AI
         if (!Store.AiSeesFull) return "A summary needs Settings → Email & AI → C or D (the full email is sent to the AI only when you ask).";
         var body = h.Body.Length > 12000 ? h.Body[..12000] : h.Body;
+        using var _aiFor2 = Ai.For("email");   // ⚙ AI for each feature
         return await Ai.Chat(
             "Summarise this email for a busy professional in 3–6 short bullet points: what is asked, decisions, dates and deadlines, attachments mentioned. Reply in English unless the email is in Arabic or French." + Modes.ProfileNote(),
             $"From: {h.FromName}\nTo: {h.To}\nCc: {h.Cc}\nDate: {h.Date:dd MMM yyyy HH:mm}\nSubject: {h.Subject}\n\n{body}", true, false, null, ct);
@@ -378,6 +380,7 @@ Rules:
                   $"End with a short closing and the user's first name{(Me.FirstName.Length > 0 ? " (" + Me.FirstName + ")" : "")}." + Memory.StyleNote() + Modes.ProfileNote();
         var user = $"Email received from {h.FromName} on {h.Date:dd MMM yyyy}:\nSubject: {h.Subject}\n\n{body}" +
                    (string.IsNullOrWhiteSpace(instruction) ? "" : "\n\nThe user's instruction for the reply: " + instruction);
+        using var _aiFor1 = Ai.For("email");   // ⚙ AI for each feature
         var draft = await Ai.Chat(sys, user, false, false, null, ct);
         try { File.WriteAllText(Path.Combine(Paths.Drafts, $"{DateTime.Now:yyyy-MM-dd-HHmm} {History.SafeName(h.Subject)}.txt"), $"Re: {h.Subject}\r\nTo: {h.FromName}\r\n\r\n{draft.Replace("\n", "\r\n")}"); } catch { }
         History.Add("ask", Ai.Active()?.Id ?? "", "", "draft", h.Subject, draft);

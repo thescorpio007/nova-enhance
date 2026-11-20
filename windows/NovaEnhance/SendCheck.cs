@@ -89,7 +89,6 @@ static class SendCheck
         {
             if (passNext) { passNext = false; Log.Write("🛡 Send: your choice in the check window — sent"); return; }
             if (!On) { Log.Write("🛡 Send: check is off — sent"); return; }
-            if (AdminLock.Locked) { Log.Write("🛡 Send: Nova is locked — sent without the check"); return; }
             using var step = UiWatch.Outlook("reading the email you are sending");
             dynamic m = item;
             int cls = 0; try { cls = (int)m.Class; } catch { }
@@ -205,6 +204,7 @@ static class SendCheck
                   "an unclear or ambiguous sentence, something promised but missing, numbers or dates that contradict each other, a rude or too-blunt sentence, a wrong recipient name in the greeting. No issues = []. ") +
                   " Never invent facts.";
         var user = $"Subject: {s.Subject}\nTo: {s.To}\nCc: {s.Cc}\nAttachments: {(s.Atts.Count > 0 ? string.Join(", ", s.Atts) : "none")}\n\nEMAIL TEXT:\n{s.Own}";
+        using var _aiFor20 = NovaEnhance.Ai.For("sendcheck");   // ⚙ AI for each feature
         var j = NovaEnhance.Ai.ParseJson(await NovaEnhance.Ai.Chat(sys, user, true, true, null, ct));
         var issues = new List<(string, string, string)>();
         foreach (var x in (j["issues"] as JsonArray ?? new JsonArray()).OfType<JsonObject>())
@@ -240,6 +240,8 @@ static class SendCheck
 /// <summary>🛡 The large window: your email next to the checked one, the checks, and your choice.</summary>
 class SendCheckForm : NovaForm
 {
+    // 🔐 Works while Nova is locked (it protects whoever is sending): only this email's checks, no Brain, no links to other features.
+    public override bool AllowedWhileLocked => true;
     readonly object item;
     readonly SendCheck.Snap snap;
     readonly RichTextBox mine, theirs;
@@ -303,7 +305,19 @@ class SendCheckForm : NovaForm
             if (e.KeyCode == Keys.Escape) { e.Handled = true; Back(); }
             else if (e.KeyCode == Keys.Enter && !theirs.Focused && sendChecked.Enabled) { e.Handled = true; e.SuppressKeyPress = true; Send(true); }
         };
-        FormClosing += (_, _) => { cts?.Cancel(); if (!decided) Program.Balloon("🛡 Not sent", "Your email is still open in Outlook."); };
+        FormClosing += (_, e) =>
+        {
+            // ✕ without a choice: ask, so an email is never left unsent by mistake.
+            if (!decided && e.CloseReason == CloseReason.UserClosing)
+            {
+                var a = MessageBox.Show(this, "This email is not sent yet.\n\nYes = send your original now\nNo = back to Outlook to edit (not sent)\nCancel = stay here", "🛡 Check before sending", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+                if (a == DialogResult.Cancel) { e.Cancel = true; return; }
+                if (a == DialogResult.Yes) { decided = true; cts?.Cancel(); BeginInvoke(() => Done("✓ Sent your original.")); e.Cancel = true; return; }
+                Back(); return;
+            }
+            cts?.Cancel();
+            if (!decided) Program.Balloon("🛡 Not sent", "Your email is still open in Outlook.");
+        };
     }
 
     void Card((string Level, string Title, string Note) c)
@@ -329,6 +343,7 @@ class SendCheckForm : NovaForm
 
     public async void Begin()
     {
+        AdminLock.Sandbox();   // 🔐 locked: this email only — no Brain
         Show(); Activate();
         quick = SendCheck.Quick(snap);
         DrawChecks(Array.Empty<(string, string, string)>());

@@ -523,6 +523,7 @@ class MailAskForm : NovaForm
             status.Text = $"✦ {label} is writing the answer from {sources.Count} sources…";
             Draw($"✦ {label} is writing the answer from {sources.Count} sources…");
             var user = (history.Length > 0 ? "EARLIER IN THIS CONVERSATION:\n" + history + "\n\n" : "") + "SOURCES:\n" + block + "\nTHE USER'S PROMPT:\n" + p;
+            using var _aiFor11 = Ai.For("email");   // ⚙ AI for each feature
             var ans = (await Ai.Chat(AnswerRules + NovaSearch.SourceRule + " [M…] = 🧠 Nova Memory, [H…] = 🕘 an earlier conversation." + (files.Count > 0 ? FileTalk.Rules : "") + FolderAsk.AdviceRule + Modes.ProfileNote(), user, false, false, null, my.Token)).Trim();
 
             status.Text = "🔎 Technical check — your AI re-reads its answer against the sources…";

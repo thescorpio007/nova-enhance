@@ -449,6 +449,7 @@ class NovaChat
         user.Append("Question: ").Append(text);
 
         Post(new JsonObject { ["t"] = "progress", ["text"] = $"Asking {prov.Label}…" });
+        using var _aiFor13 = Ai.For("chat", Ai.Picked(prov, "chat"));   // ⚙ AI for each feature
         var answer = await Ai.Chat(sys.ToString(), user.ToString(), !detailed, false, prov, stop);
         if (deep != null) answer += "\n\n" + deep.Searched;
         History.Add("chat", prov.Id, Store.Model(prov.Id), detailed ? "chat-detail" : "chat", text, answer);

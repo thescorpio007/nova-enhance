@@ -3,7 +3,7 @@ namespace NovaEnhance;
 /// <summary>Settings, split into sections like the phone app.</summary>
 class SettingsForm : NovaForm
 {
-    static readonly string[] AllSections = { "🧠 Nova Brain", "🔐 Admin", "AI & API keys", "About me", "Enhancement", "Email & AI", "📥 Email index", "🗂 Mailboxes & archives", "📂 Folders in the index", "📁 Email projects", "Folder search", "📁 Projects", "✦ Prompts", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "🧪 Activity history", "🔌 Test connector", "📱 Phone link", "About" };
+    static readonly string[] AllSections = { "🧠 Nova Brain", "🔐 Admin", "AI & API keys", "⚙ AI for each feature", "About me", "Enhancement", "Email & AI", "📥 Email index", "🗂 Mailboxes & archives", "📂 Folders in the index", "📁 Email projects", "Folder search", "📁 Projects", "✦ Prompts", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "🧪 Activity history", "🔌 Test connector", "📱 Phone link", "About" };
     /// <summary>🧪 Activity history and 🔌 Test connector are advanced tools: shown only when switched on (About → Advanced tools).</summary>
     static readonly string[] AdvancedSections = { "🧪 Activity history", "🔌 Test connector" };
     static string[] Sections = Visible();
@@ -31,7 +31,7 @@ class SettingsForm : NovaForm
             var sel = (e.State & DrawItemState.Selected) != 0;
             using var bg = new SolidBrush(sel ? Th.Card2 : nav.BackColor);
             e.Graphics.FillRectangle(bg, e.Bounds);
-            var subPage = e.Index > 0 && Array.IndexOf(Sections, "Email & AI") is var ea && e.Index > ea && e.Index <= ea + 4;
+            var subPage = (e.Index > 0 && Array.IndexOf(Sections, "Email & AI") is var ea && e.Index > ea && e.Index <= ea + 4) || Sections[e.Index] == "⚙ AI for each feature";
             var ind = subPage ? 34 : 16;
             TextRenderer.DrawText(e.Graphics, Sections[e.Index], Th.F(subPage ? 9.8f : 10.5f, sel), new Rectangle(e.Bounds.X + ind, e.Bounds.Y, e.Bounds.Width - ind, e.Bounds.Height),
                 sel ? Color.White : Color.FromArgb(0xC9, 0xCE, 0xD8), TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix);
@@ -81,6 +81,7 @@ class SettingsForm : NovaForm
             switch (section)
             {
                 case "AI & API keys": AiKeys(); break;
+                case "⚙ AI for each feature": AiPerFeature(); break;
                 case "About me": AboutMe(); break;
                 case "Enhancement": Enhancement(); break;
                 case "Email & AI": EmailAi(); break;
@@ -1256,6 +1257,59 @@ class SettingsForm : NovaForm
     }
 
     // ------------------------------------------------------------------ Shortcuts
+    // ------------------------------------------------------------------ ⚙ AI for each feature
+    void AiPerFeature()
+    {
+        Note("Choose which AI answers each Nova feature. Local AI not available (closed or not set up) → that feature uses your default AI and says so. 🔒 Private words never leave this PC, whatever you choose here.", Th.Text);
+        var def = Ai.Active();
+        var stat = page.Add(Th.L($"🖥 Local AI: {(Ai.HasKey("local") ? Ai.LocalName + " · " + Ai.LocalUrl + " · checking…" : "not set up (AI & API keys → Local AI)")}   ·   ✦ Default AI: {Ai.LabelOf(def)}", 10, Th.Text));
+        bool up = false;
+        var now = new List<(string Key, Label L)>();
+        string Name(string c) => c switch { "default" => "✦ Default AI", "local" => "🖥 Local AI", "localfirst" => "🖥 Local first", _ => Ai.ById(c).Label };
+        string Uses(string key)
+        {
+            var c = Ai.ChoiceOf(key);
+            if (c == "default") return Ai.LabelOf(def);
+            if (c is "local" or "localfirst") return !Ai.HasKey("local") ? $"⚠ {Ai.LabelOf(def)} · local AI not set up" : up ? Ai.LabelOf(Ai.ById("local")) : $"⚠ {Ai.LabelOf(def)} · local AI not available";
+            return Ai.HasKey(c) ? Ai.LabelOf(Ai.ById(c)) : $"⚠ {Ai.LabelOf(def)} · {Ai.ById(c).Label} has no key";
+        }
+        void Refresh() { foreach (var (k, l) in now) { l.Text = Uses(k); l.ForeColor = l.Text.StartsWith("⚠") ? Th.Warn : Th.Good; } }
+        _ = Task.Run(async () =>
+        {
+            up = await Ai.LocalUp();
+            try { BeginInvoke(() => { stat.Text = $"🖥 Local AI: {(Ai.HasKey("local") ? Ai.LocalName + " · " + Ai.LocalUrl + (up ? " · running ✓" : " · not available (closed) → features set to Local use your default AI and say so") : "not set up (AI & API keys → Local AI)")}   ·   ✦ Default AI: {Ai.LabelOf(def)}"; stat.ForeColor = up ? Th.Good : Th.Warn; Refresh(); }); } catch { }
+        });
+        var bar = page.Add(Th.Row(false));
+        bar.Controls.Add(Th.B("↺ Use the recommended list", () => { foreach (var f in Ai.Features) Ai.SetChoice(f.Key, f.Rec); Draw("⚙ AI for each feature"); }, true));
+        bar.Controls.Add(Th.B("🖥 Local AI for everything", () => { foreach (var f in Ai.Features) Ai.SetChoice(f.Key, "localfirst"); Draw("⚙ AI for each feature"); }));
+        bar.Controls.Add(Th.B("✦ Default AI for everything", () => { foreach (var f in Ai.Features) Ai.SetChoice(f.Key, "default"); Draw("⚙ AI for each feature"); }));
+        page.Add(Th.Check($"Try to start {Ai.LocalName} first (20–60 s) before using the default AI", Ai.LocalAutoStart, v => Ai.LocalAutoStart = v));
+        page.Add(Th.Section("Feature · AI · recommended · right now it uses"));
+        var options = new List<string> { "default", "local", "localfirst" };
+        options.AddRange(Ai.All.Where(p => p.Id != "local" && Ai.HasKey(p.Id)).Select(p => p.Id));
+        foreach (var f in Ai.Features)
+        {
+            var r = page.Add(Th.Row(false));
+            var lab = Th.L(f.Label + (f.Hint.Length > 0 ? "  · " + f.Hint : ""), 10, Th.Text); lab.AutoSize = false; lab.Width = 470; lab.Height = 26;
+            r.Controls.Add(lab);
+            var cur = Ai.ChoiceOf(f.Key);
+            var opts = options.Contains(cur) ? options : options.Append(cur).ToList();
+            var box = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 230, BackColor = Th.Card, ForeColor = Th.Text, Font = Th.F(10), FlatStyle = FlatStyle.Flat };
+            foreach (var o in opts) box.Items.Add(Name(o));
+            box.SelectedIndex = Math.Max(0, opts.IndexOf(cur));
+            var key = f.Key;
+            box.SelectedIndexChanged += (_, _) => { Ai.SetChoice(key, opts[box.SelectedIndex]); Refresh(); };
+            r.Controls.Add(box);
+            var rec = Th.L(Name(f.Rec).Replace("✦ ", "").Replace("🖥 ", ""), 9, Th.AccentText); rec.AutoSize = false; rec.Width = 110; rec.Height = 26;
+            r.Controls.Add(rec);
+            var u = Th.L(Uses(key), 9.5f, Th.Good); u.AutoSize = true;
+            r.Controls.Add(u);
+            now.Add((key, u));
+        }
+        Refresh();
+        Note("🧠 Meaning search keeps Gemini's embeddings (your email index was built with them). Each answer shows which AI gave it.", Th.Muted);
+    }
+
     // ------------------------------------------------------------------ 🔐 Admin lock
     void AdminPage()
     {

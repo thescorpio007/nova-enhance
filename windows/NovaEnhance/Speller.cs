@@ -173,6 +173,7 @@ static class Speller
         var sys = "You check grammar for " + Persona.Who + ". Find real grammar mistakes only: agreement, tense, articles, prepositions, wrong word, capitalisation of days/months/names. " +
                   "Ignore spelling of codes, project names, abbreviations and style choices. Reply with JSON only: {\"issues\":[{\"bad\":\"exact words from the text\",\"fix\":\"corrected words\",\"why\":\"one short reason\"}]}. " +
                   "\"bad\" must be copied exactly from the text (2 to 6 words around the mistake). Empty list if the text is fine.";
+        using var _aiFor22 = Ai.For("spelling");   // ⚙ AI for each feature
         var j = Ai.ParseJson(await Ai.Chat(sys, text, true, true, null, ct));
         foreach (var it in (j["issues"] as JsonArray ?? new JsonArray()).OfType<JsonObject>())
         {

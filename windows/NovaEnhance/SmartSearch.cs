@@ -373,6 +373,7 @@ static class SmartSearch
     public static async Task<string> CloudChat(string sys, string user, int seconds, CancellationToken ct)
     {
         var first = Cloud();
+        using var _aiFor21 = Ai.For("email");   // ⚙ AI for each feature
         try { return await SearchGate.Limit(t => Ai.Chat(sys, user, true, true, first, t), seconds, ct); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception e)

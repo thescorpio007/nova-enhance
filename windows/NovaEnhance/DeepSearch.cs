@@ -50,6 +50,7 @@ static class DeepSearch
                   "\"also\":[\"other spellings: without the model suffix, the brand alone if distinctive\"]}],\"refs\":[\"document or submittal numbers named in the extracts\"]}\n" +
                   "Up to 10 parts, the most identifying first (product names and models before generic words). Only names that really appear in the extracts or the question. Never invent.";
         var user = (history.Length > 0 ? "Earlier in the chat:\n" + history + "\n\n" : "") + "Document extracts:\n" + (attached.Length > 14000 ? attached[..14000] : attached) + "\n\nQuestion: " + question;
+        using var _aiFor7 = Ai.For("deep", Ai.Picked(prov, "deep"));   // ⚙ AI for each feature
         var j = Ai.ParseJson(await Ai.Chat(sys, user, true, true, prov, ct));
         var parts = new List<Part>();
         foreach (var p in (j["parts"] as JsonArray ?? new JsonArray()).OfType<JsonObject>())

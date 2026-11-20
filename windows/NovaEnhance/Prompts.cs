@@ -165,6 +165,7 @@ static class Prompts
         if (Ai.Active() == null) return p;
         try
         {
+            using var _aiFor18 = Ai.For("chat");   // ⚙ AI for each feature
             var j = Ai.ParseJson(await Ai.Chat(PlanSystem, "Question: " + question + "\nInstructions: " + instructions, true, true, null, ct));
             List<string> L(string k) => (j[k] as JsonArray)?.Select(x => x?.ToString() ?? "").Where(x => x.Length > 0).ToList() ?? new();
             var a = new PromptPlan
@@ -271,6 +272,7 @@ static class Prompts
                     if (text.Length > 2500) text = text[..2500];
                     sb.Append($"### Email {k + 1}\nFrom: {h.FromName}\nDate: {h.Date:dd MMM yyyy}\nSubject: {h.Subject}\n{text}\n\n");
                 }
+                using var _aiFor17 = Ai.For("chat");   // ⚙ AI for each feature
                 var j = Ai.ParseJson(await Ai.Chat(sys, sb.ToString(), true, true, null, ct));
                 foreach (var r in (j["results"] as JsonArray ?? new JsonArray()).OfType<JsonObject>())
                     if (int.TryParse(r["id"]?.ToString(), out var id) && id >= 1 && id <= batch.Count)

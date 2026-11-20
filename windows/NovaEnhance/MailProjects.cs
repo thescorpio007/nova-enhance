@@ -573,6 +573,7 @@ static class MailProjects
             {
                 // Your cloud AI (Gemini first), 60 s at most — the local model took up to 30 minutes per batch.
                 using var lim = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+                using var _aiFor12 = Ai.For("sorting");   // ⚙ AI for each feature
                 var j = Ai.ParseJson(Ai.Chat(sys, sb.ToString(), true, true, SmartSearch.Cloud(), lim.Token).GetAwaiter().GetResult());
                 if (j["p"] is JsonObject o)
                     foreach (var (k, v) in o)

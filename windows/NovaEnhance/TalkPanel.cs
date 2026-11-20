@@ -342,6 +342,7 @@ class TalkPanel : Panel
                       ListRule + (searchedNow ? " The list was just searched for this request: say briefly what it found (most relevant first, cite [E#] and [D#]) and what is missing." : Research != null && !silent ? SearchRule : "") + (files.Count > 0 ? FileTalk.Rules : "") + NovaSearch.SourceRule + FolderAsk.AdviceRule + Modes.ProfileNote();
             Draw("Nova is thinking…");
             act.Mark("read the list, picked emails, attachments, files", $"{src.Count} sources · {text.Length:N0} chars");
+            using var _aiFor23 = Ai.For("email");   // ⚙ AI for each feature
             var a = await Ai.Chat(sys, text, false);
             act.Note("answer", a);
             act.Result = $"{src.Count} sources";

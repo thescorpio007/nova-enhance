@@ -173,7 +173,13 @@ static class AdminLock
         // A normal start (or a Windows restart) locks; a crash restart by the Guardian keeps Nova open if you were using it.
         unlocked = Enabled && Program.Restored && WasOpenJustNow();
         if (unlocked) { lastUse = DateTime.Now; Note("🔓 still open after the 🛡 Guardian restart"); } else Alive(false);
-        SystemEvents.SessionSwitch += (_, e) => { if (e.Reason is SessionSwitchReason.SessionLock or SessionSwitchReason.ConsoleDisconnect or SessionSwitchReason.RemoteDisconnect) Lock("Windows locked"); };
+        SystemEvents.SessionSwitch += (_, e) =>
+        {
+            if (e.Reason is SessionSwitchReason.SessionLock or SessionSwitchReason.ConsoleDisconnect or SessionSwitchReason.RemoteDisconnect) Lock("Windows locked");
+            // Your Windows password (or Hello) unlocked the laptop → Nova opens too (option C).
+            else if (e.Reason is SessionSwitchReason.SessionUnlock && Enabled && !unlocked)
+                Program.UiContext?.Post(_ => { if (!unlocked) { Unlocked(); Note("🔓 unlocked with Windows"); } }, null);
+        };
         SystemEvents.PowerModeChanged += (_, e) => { if (e.Mode == PowerModes.Suspend) Lock("sleep"); };
         var t = new System.Windows.Forms.Timer { Interval = 20_000 };
         t.Tick += (_, _) =>
