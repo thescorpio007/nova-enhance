@@ -14,6 +14,7 @@ static class PhoneAgent
     {
         public string Id = "", ChatId = "", Question = "";
         public readonly List<string> Steps = new();
+        public readonly List<DateTime> StepAt = new();
         public string Detail = "";
         public JsonObject Confirm;   // waiting for ✓ / ✗
         public TaskCompletionSource<(List<long>, List<long>, string)?> Wait;
@@ -59,13 +60,21 @@ static class PhoneAgent
         var until = DateTime.Now.AddSeconds(100);
         int seen = a["seen"]?.GetValue<int>() ?? 0;
         while (DateTime.Now < until && r.Result == null && r.Error.Length == 0 && r.Confirm == null)
-            if (await r.Changed.WaitAsync(TimeSpan.FromSeconds(3)) && r.Steps.Count > seen + 2) break;
+            if (await r.Changed.WaitAsync(TimeSpan.FromSeconds(3)) && r.Steps.Count > seen) break;
         return State(r);
     }
 
     static JsonObject State(Run r)
     {
-        var o = new JsonObject { ["sid"] = r.Id, ["chat"] = r.ChatId, ["steps"] = new JsonArray(r.Steps.Select(s => (JsonNode)s).ToArray()), ["detail"] = r.Detail };
+        // ⏱ each step with its time (the running one: seconds so far), and the total
+        var steps = new JsonArray();
+        lock (r.Steps)
+            for (int i = 0; i < r.Steps.Count; i++)
+            {
+                var end = i + 1 < r.StepAt.Count ? r.StepAt[i + 1] : DateTime.Now;
+                steps.Add(new JsonObject { ["text"] = r.Steps[i], ["s"] = (int)(end - r.StepAt[i]).TotalSeconds, ["now"] = i + 1 == r.Steps.Count && r.Result == null && r.Error.Length == 0 && r.Confirm == null });
+            }
+        var o = new JsonObject { ["sid"] = r.Id, ["chat"] = r.ChatId, ["steps"] = steps, ["detail"] = r.Detail, ["total"] = (int)(DateTime.Now - r.At).TotalSeconds };
         if (r.Error.Length > 0) { o["state"] = "error"; o["text"] = r.Error; }
         else if (r.Result != null) { o["state"] = "done"; o["result"] = r.Result.DeepClone(); }
         else if (r.Confirm != null) { o["state"] = "confirm"; o["confirm"] = r.Confirm.DeepClone(); }
@@ -77,7 +86,7 @@ static class PhoneAgent
     {
         var host = new Agent.Host
         {
-            Progress = s => { lock (r.Steps) r.Steps.Add(s); r.Poke(); },
+            Progress = s => { lock (r.Steps) { r.Steps.Add(s); r.StepAt.Add(DateTime.Now); } r.Poke(); },
             Detail = s => { r.Detail = s; },
             Confirm = async (q, ex) =>
             {

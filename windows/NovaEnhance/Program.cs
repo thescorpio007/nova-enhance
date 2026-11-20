@@ -165,8 +165,10 @@ class NovaContext : ApplicationContext
             try
             {
                 var any = Busy.Any;
-                if (any != dotOn) { dotOn = any; tray.Icon = any ? Busy.DotIcon(Th.AppIcon) : Th.AppIcon; }
-                if (any) { var t = Busy.Tray(); tray.Text = t.Length > 127 ? t[..127] : t; }
+                // ⏱ the running time on the tray icon itself (amber after 30 s)
+                if (any) { tray.Icon = Busy.TimeIcon(Th.AppIcon, Busy.Seconds); var t = Busy.Tray(); tray.Text = t.Length > 127 ? t[..127] : t; }
+                else if (dotOn) tray.Icon = Th.AppIcon;
+                dotOn = any;
             }
             catch { }
         };

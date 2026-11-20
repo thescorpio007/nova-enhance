@@ -360,7 +360,7 @@ class MyPcActivity : BaseActivity() {
                 agSid = o.optString("sid", agSid); if (o.optString("chat").isNotBlank()) agChat = o.optString("chat")
                 val steps = o.optJSONArray("steps") ?: JSONArray(); agSeen = steps.length()
                 main.post {
-                    agItems.lastOrNull { it.optString("k") == "steps" }?.put("steps", steps)?.put("detail", o.optString("detail"))
+                    agItems.lastOrNull { it.optString("k") == "steps" }?.put("steps", steps)?.put("detail", o.optString("detail"))?.put("total", o.optInt("total"))
                     when (o.optString("state")) {
                         "confirm" -> { agBusy = false; agItems.add(JSONObject().put("k", "confirm").put("c", o.optJSONObject("confirm"))) }
                         "done" -> { agBusy = false; agItems.add(JSONObject().put("k", "result").put("r", o.optJSONObject("result"))) }
@@ -381,10 +381,19 @@ class MyPcActivity : BaseActivity() {
                 background = Ui.round(0xFF3B3570.toInt(), Ui.dp(c, 12).toFloat()); setPadding(Ui.dp(c, 12), Ui.dp(c, 8), Ui.dp(c, 12), Ui.dp(c, 8))
             }, Ui.lp(top = Ui.dp(c, 12)).apply { marginStart = Ui.dp(c, 40) })
             "steps" -> {
+                // ⏱ each step with its time; the running one counts (amber after 30 s)
                 val s = it.optJSONArray("steps") ?: JSONArray()
                 if (s.length() == 0) return
-                val t = (0 until s.length()).joinToString("\n") { i -> "✓ " + s.optString(i) } + (it.optString("detail").let { d -> if (d.isNotBlank() && agBusy) "\n   $d" else "" })
-                body.addView(Ui.text(c, t, 12.5f, Ui.GOOD), Ui.lp(top = Ui.dp(c, 6)))
+                for (i in 0 until s.length()) {
+                    val o = s.optJSONObject(i); val text = o?.optString("text") ?: s.optString(i); val sec = o?.optInt("s") ?: -1; val now = o?.optBoolean("now") == true && agBusy
+                    val r = Ui.row(c)
+                    val col = if (now) (if (sec > 30) Ui.AMBER else Ui.ACCENT) else if (sec > 30) Ui.AMBER else Ui.GOOD
+                    r.addView(Ui.text(c, (if (now) "⏱ " else "✓ ") + text, 12.5f, col), Ui.lp(0, weight = 1f))
+                    if (sec >= 0) r.addView(Ui.text(c, if (sec < 60) "$sec s" else "${sec / 60}:${"%02d".format(sec % 60)}", 12f, if (sec > 30) Ui.AMBER else Ui.MUTED, now))
+                    body.addView(r, Ui.lp(top = Ui.dp(c, if (i == 0) 6 else 1)))
+                }
+                if (agBusy && it.optString("detail").isNotBlank()) body.addView(Ui.text(c, "   " + it.optString("detail"), 11.5f, Ui.MUTED))
+                if (!agBusy && it.optInt("total") > 0) body.addView(Ui.text(c, "✓ ${it.optInt("total") / 60}:${"%02d".format(it.optInt("total") % 60)} in all", 11.5f, Ui.MUTED))
             }
             "confirm" -> {
                 val cf = it.optJSONObject("c") ?: return

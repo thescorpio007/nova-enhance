@@ -50,33 +50,35 @@ object Ui {
     }
 
     /**
-     * ● ● ● A status line that shows Nova is working: while its text ends with “…” (“⏳ Asking your PC…”), moving dots and a timer
-     * are added, and after 20 quiet seconds “still working, not stuck”. Designed by A.HAMROUNI
+     * ⏱ A status line that shows Nova is working: while its text ends with “…” (“⏳ Asking your PC…”), a timer counts up in front
+     * (“⏱ 0:35  ⏳ Asking your PC…”), the line turns amber after 30 s, and after 20 quiet seconds “still working, not stuck”. Designed by A.HAMROUNI
      */
+    const val AMBER = 0xFFFFD27A.toInt()
+
     fun thinking(tv: TextView): TextView {
         val h = android.os.Handler(android.os.Looper.getMainLooper())
-        val frames = arrayOf("●∙∙", "∙●∙", "∙∙●")
-        val rx = Regex("^[●∙]{3}  (.*?)   \\d+:\\d\\d(?: · .*?(?:not stuck|still working))?(.*)$", RegexOption.DOT_MATCHES_ALL)
-        var base = ""; var self = false; var frame = 0; var start = 0L; var changed = 0L; var on = false
+        val rx = Regex("^⏱ \\d+:\\d\\d  (.*?)(?: · (?:⏳|⚠)[^\\n]*?(?:not stuck|still working))?(.*)$", RegexOption.DOT_MATCHES_ALL)
+        var base = ""; var self = false; var start = 0L; var changed = 0L; var on = false
+        var color = tv.currentTextColor
         fun draw() {
             val now = System.currentTimeMillis()
             val el = (now - start) / 1000; val quiet = (now - changed) / 1000
             val w = if (quiet > 60) " · ⚠ taking longer than usual — still working" else if (quiet > 20) " · ⏳ still working, not stuck" else ""
             self = true
-            try { tv.text = "${frames[frame]}  $base   ${el / 60}:${"%02d".format(el % 60)}$w" } finally { self = false }
+            try { tv.text = "⏱ ${el / 60}:${"%02d".format(el % 60)}  $base$w"; tv.setTextColor(if (el > 30) AMBER else color) } finally { self = false }
         }
         lateinit var tick: Runnable
-        tick = Runnable { if (!on || (!tv.isAttachedToWindow && System.currentTimeMillis() - start > 3000)) { on = false; return@Runnable }; frame = (frame + 1) % 3; draw(); h.postDelayed(tick, 400) }
+        tick = Runnable { if (!on || (!tv.isAttachedToWindow && System.currentTimeMillis() - start > 3000)) { on = false; return@Runnable }; draw(); h.postDelayed(tick, 1000) }
         fun update(text: String) {
             var t = text
             rx.matchEntire(t)?.let { t = it.groupValues[1] + it.groupValues[2] }
             base = t; changed = System.currentTimeMillis()
             if (t.trimEnd().endsWith("…") || t.trimEnd().endsWith("...")) {
-                if (!on) { on = true; start = changed; frame = 0; h.postDelayed(tick, 400) }
+                if (!on) { on = true; start = changed; color = tv.currentTextColor; h.postDelayed(tick, 1000) }
                 h.post { if (on) draw() }
             } else if (on) {
                 on = false; h.removeCallbacks(tick)
-                if (t != text) { self = true; try { tv.text = t } finally { self = false } }
+                self = true; try { if (t != text) tv.text = t; tv.setTextColor(color) } finally { self = false }
             }
         }
         tv.addTextChangedListener(object : android.text.TextWatcher {

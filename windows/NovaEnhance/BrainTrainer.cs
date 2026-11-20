@@ -232,7 +232,7 @@ THE BRAIN NOW:{BrainText(b)}";
         public int Plus, Minus, LogChanged, Examples;
         public bool Blocking;
         public string Verdict = "";   // passed · weak · blocked
-        public int Yes, No;
+        public int Yes, No, Seconds;
     }
 
     static readonly Dictionary<string, TestRun> tests = new();
@@ -377,11 +377,11 @@ THE BRAIN NOW:{BrainText(b)}";
     }
 
     /// <summary>Your ✓ / ✗ on the examples → passed · weak · blocked. ✓ Apply opens only for “passed”.</summary>
-    public static JsonObject Verdict(string id, int yes, int no)
+    public static JsonObject Verdict(string id, int yes, int no, int secs = 0)
     {
         TestRun r;
         lock (tests) if (!tests.TryGetValue(id, out r)) return new JsonObject { ["t"] = "verdict", ["id"] = id, ["verdict"] = "blocked", ["why"] = "This test is no longer known — test again." };
-        r.Yes = yes; r.No = no;
+        r.Yes = yes; r.No = no; if (secs > 0) r.Seconds = secs;
         string why;
         if (r.Blocking) { r.Verdict = "blocked"; why = "Fix the contradiction / duplicate first (✎ Edit, or ⇢ merge), then test again."; }
         else if (yes == 0) { r.Verdict = "weak"; why = "No example was marked ✓ — the rule does not find what you mean yet."; }
@@ -405,7 +405,7 @@ THE BRAIN NOW:{BrainText(b)}";
         foreach (var id in ids)
         {
             var (_, rule) = Brain.Rules(brain).FirstOrDefault(x => x.Rule["id"]?.ToString() == id);
-            if (rule != null) rule["tested"] = new JsonObject { ["verdict"] = "passed", ["when"] = DateTime.Now.ToString("dd MMM yyyy HH:mm"), ["q"] = Agent.Clip(r.Question, 160), ["yes"] = r.Yes, ["no"] = r.No, ["plus"] = r.Plus, ["minus"] = r.Minus };
+            if (rule != null) rule["tested"] = new JsonObject { ["verdict"] = "passed", ["when"] = DateTime.Now.ToString("dd MMM yyyy HH:mm"), ["q"] = Agent.Clip(r.Question, 160), ["yes"] = r.Yes, ["no"] = r.No, ["plus"] = r.Plus, ["minus"] = r.Minus, ["secs"] = r.Seconds };
         }
     }
 

@@ -53,7 +53,7 @@ class BrainForm : WebPage
                 Run("🧪 Testing on your real data (nothing is saved)", async (st, de, ct) => { var r = await BrainTrainer.Test(ch, q, kind, st, de, ct); r["card"] = card; return r; });
                 break;
             }
-            case "verdict": { var r = BrainTrainer.Verdict(S("id"), m["yes"]?.GetValue<int>() ?? 0, m["no"]?.GetValue<int>() ?? 0); r["card"] = S("card"); Post(r); break; }
+            case "verdict": { var r = BrainTrainer.Verdict(S("id"), m["yes"]?.GetValue<int>() ?? 0, m["no"]?.GetValue<int>() ?? 0, m["secs"]?.GetValue<int>() ?? 0); r["card"] = S("card"); Post(r); break; }
             case "apply":
             {
                 var ch = m["changes"] as JsonArray ?? new JsonArray();
@@ -64,7 +64,7 @@ class BrainForm : WebPage
                 var before = Brain.Snapshot();
                 var (b, said) = Brain.Apply(before, ch, by);
                 BrainTrainer.MarkTested(b, Brain.Diff(before, b), ch, passed);
-                var v = Brain.Commit(b, by, (S("summary").Length > 0 ? S("summary") + " · " : "") + said + $" · 🧪 passed ({passed.Yes} ✓, +{passed.Plus} / −{passed.Minus}) “{Agent.Clip(passed.Question, 80)}”");
+                var v = Brain.Commit(b, by, (S("summary").Length > 0 ? S("summary") + " · " : "") + said + $" · 🧪 passed ({passed.Yes} ✓, +{passed.Plus} / −{passed.Minus}, tested in {passed.Seconds / 60}:{passed.Seconds % 60:00}) “{Agent.Clip(passed.Question, 80)}”");
                 BrainTrainer.Chat.Add(new JsonObject { ["role"] = "trainer", ["text"] = $"✓ Applied as version {v}: {said}" });
                 Post(new JsonObject { ["t"] = "toast", ["text"] = $"✓ Applied · version {v} saved with its test (↩ undo in Versions)" });
                 break;
