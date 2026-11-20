@@ -400,6 +400,13 @@ static class Screens
     public static void ShowForm(Form f) => Show(f);
 
     /// <summary>🧠 Nova Brain window.</summary>
+    /// <summary>The Brain window, if open, shows what arrived from the phone / the connector.</summary>
+    public static void BrainNudge()
+    {
+        if (Program.OffUi(BrainNudge)) return;
+        try { if (brainForm != null && !brainForm.IsDisposed) brainForm.Flush(); } catch { }
+    }
+
     public static void Brain()
     {
         if (Program.OffUi(Brain)) return;

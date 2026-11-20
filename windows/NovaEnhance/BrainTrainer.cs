@@ -59,6 +59,10 @@ TOOLS (data — use them before writing a rule that names people, companies, doc
 - ask: ONE short question to the user when the instruction is unclear or two readings change the rule. args question, options (2–4 short answers, written as “A · …”, “B · …”). This ends your turn; the user's choice comes back as the next message.
 - propose: the change. args reply (what you understood + what you checked in the data, short), changes [{{""op"":""add|change|remove"",""section"":""section id or a new section name"",""id"":""rule id for change/remove, empty for add"",""title"":""2-4 words"",""text"":""the full rule""}}], conflict (which rule it contradicts and why, or """"), test_question (a realistic request the user would type that this rule should change — for writing rules: a short sample text to improve), why (one line: what goes wrong today without it).
 - answer: a question answered, no change. args reply (name the rule ids and the evidence: email #ids, documents, dates).
+EXAMPLE FILES: the user may give you emails, PDFs or documents as EXAMPLES (✓ “like this” / ✗ “not like this”). Then:
+- Learn the PATTERN from them: who sends to whom (roles, companies, domains, To vs Cc), the document-number format, the key phrases, the attachments, what counts as an answer, and what in a ✗ example must be left out.
+- Check the pattern in the real emails (emails / followup) before proposing — other emails like the ✓ example must be found too.
+- In propose, add: learned (a list of short lines: “what I learned from your example”), must_find (the document numbers of the ✓ examples, so the 🧪 TEST checks they are found), must_not_find (the ✗ ones). Write the rule in general words (any project / client where it applies), with the example only as an “e.g.”.
 TRAINER RULES
 - Check before you write: if the rule names a company / person / domain / document format, look at real emails first (emails or followup) and use the exact domain and format you saw. Never guess a domain.
 - Ask when unclear: scope (which project, which types), what counts (reply with comments? a code? a forward?), and exceptions. One question at a time, with options. Do not ask what the data or the brain already answers.
@@ -71,7 +75,7 @@ TRAINER RULES
 THE BRAIN NOW:{BrainText(b)}";
 
     /// <summary>One message to the trainer: steps (tools), then a proposal, a question with options, or an answer.</summary>
-    public static async Task<JsonObject> Ask(string text, Action<string> step, Action<string> detail, CancellationToken ct)
+    public static async Task<JsonObject> Ask(string text, Action<string> step, Action<string> detail, CancellationToken ct, List<(string Name, bool Good, string Text)> examples = null)
     {
         var b = Brain.Snapshot();
         var sys = System(b);
@@ -83,8 +87,16 @@ THE BRAIN NOW:{BrainText(b)}";
             try { t.Append("FACT FROM THE SUBMITTAL LOG: ").Append(SubmittalLog.Explain(d.Value)).Append('\n'); } catch { }
         // 🎓 What you rejected in the agent's examples (✗), for lessons.
         foreach (var p in Agent.Feedback.Patterns().Take(3)) t.Append("NOTE (agent feedback): ").Append(p.Teach).Append('\n');
-        t.Append("USER: ").Append(text).Append('\n');
-        Chat.Add(new JsonObject { ["role"] = "user", ["text"] = text });
+        // 📎 Example files: the pattern to learn (✓ like this / ✗ not like this).
+        if (examples is { Count: > 0 })
+        {
+            t.Append("EXAMPLE FILES FROM THE USER (learn the pattern):\n");
+            int n = 0;
+            foreach (var (name, good, body) in examples)
+                t.Append($"=== Example {++n} · {(good ? "✓ LIKE THIS" : "✗ NOT LIKE THIS")} · {name} ===\n").Append(body.Length > 9000 ? body[..9000] + "\n…(cut)" : body).Append('\n');
+        }
+        t.Append("USER: ").Append(text.Length > 0 ? text : "Learn from these examples and propose the rule.").Append('\n');
+        Chat.Add(new JsonObject { ["role"] = "user", ["text"] = (examples is { Count: > 0 } ? "📎 " + string.Join(", ", examples.Select(e => (e.Good ? "✓ " : "✗ ") + e.Name)) + "\n" : "") + text });
         var steps = new JsonArray();
         using var aiFor = Ai.For("brain");
         Brain.Quiet.Value = true;   // the trainer gets the whole brain itself
@@ -179,6 +191,7 @@ THE BRAIN NOW:{BrainText(b)}";
         {
             ["t"] = "answer", ["kind"] = "propose", ["reply"] = reply, ["why"] = a["why"]?.ToString() ?? "", ["conflict"] = a["conflict"]?.ToString() ?? "",
             ["changes"] = changes.DeepClone(), ["diff"] = diff, ["checks"] = checks, ["testQuestion"] = a["test_question"]?.ToString() ?? "",
+            ["learned"] = (a["learned"] as JsonArray)?.DeepClone() ?? new JsonArray(), ["mustFind"] = (a["must_find"] as JsonArray)?.DeepClone() ?? new JsonArray(), ["mustNotFind"] = (a["must_not_find"] as JsonArray)?.DeepClone() ?? new JsonArray(),
             ["kindOf"] = KindOf(b, changes), ["steps"] = steps, ["by"] = Ai.LastBy
         };
     }
@@ -230,6 +243,7 @@ THE BRAIN NOW:{BrainText(b)}";
     {
         public string Id = "", Changes = "", Question = "", Kind = "";
         public int Plus, Minus, LogChanged, Examples;
+        public bool MissedExample;
         public bool Blocking;
         public string Verdict = "";   // passed · weak · blocked
         public int Yes, No, Seconds;
@@ -241,7 +255,7 @@ THE BRAIN NOW:{BrainText(b)}";
     static string Key(JsonArray changes) => Regex.Replace(changes?.ToJsonString() ?? "", @"\s+", "");
 
     /// <summary>Runs the test question with the current brain and with the proposal (nothing saved): ➕ / ➖, examples, checks.</summary>
-    public static async Task<JsonObject> Test(JsonArray changes, string question, string kind, Action<string> step, Action<string> detail, CancellationToken ct)
+    public static async Task<JsonObject> Test(JsonArray changes, string question, string kind, Action<string> step, Action<string> detail, CancellationToken ct, JsonArray mustFind = null, JsonArray mustNotFind = null)
     {
         var now = Brain.Snapshot();
         var (after, _) = Brain.Apply(now, changes, "test");
@@ -337,6 +351,17 @@ THE BRAIN NOW:{BrainText(b)}";
         var contra = (ai["contradictions"] as JsonArray)?.DeepClone().AsArray() ?? new JsonArray();
         var dups = new JsonArray((quick["duplicates"] as JsonArray ?? new()).Select(x => x?.DeepClone()).Concat((ai["duplicates"] as JsonArray ?? new()).Select(x => x?.DeepClone())).ToArray());
         var weak = new JsonArray((ai["weak"] as JsonArray ?? new()).Select(x => x?.DeepClone()).Concat((quick["vague"] as JsonArray ?? new()).Select(x => x?.DeepClone())).Concat((quick["syntax"] as JsonArray ?? new()).Select(x => x?.DeepClone())).ToArray());
+        // 📎 Your ✓ examples must come out, your ✗ ones must not.
+        if (kind != "writing")
+        {
+            var all = ((res["after"]?["text"]?.ToString() ?? "") + " " + string.Join(" ", (res["after"]?["rows"] as JsonArray ?? new()).OfType<JsonObject>().Select(r => string.Join(" ", (r["cells"] as JsonArray ?? new()).Select(x => x?.ToString())))) + " " + (res["log"]?.ToJsonString() ?? "")).ToUpperInvariant();
+            string Base(string d) => Regex.Replace((d ?? "").Trim().ToUpperInvariant(), @"[-_ ]?R(EV)?\d{1,2}$", "");
+            var found = new JsonArray(); var missed = new JsonArray();
+            foreach (var d in (mustFind ?? new()).Select(x => x?.ToString() ?? "").Where(x => x.Length > 3)) (all.Contains(Base(d)) ? found : missed).Add(d);
+            foreach (var d in (mustNotFind ?? new()).Select(x => x?.ToString() ?? "").Where(x => x.Length > 3)) if (all.Contains(Base(d))) missed.Add("✗ " + d + " (should NOT be found)");
+            res["examplesFound"] = found; res["examplesMissed"] = missed;
+            if (missed.Count > 0) { run.MissedExample = true; weak.Add("Your example is not handled right: " + string.Join(", ", missed.Select(x => x?.ToString())) + " — sharpen the rule (✎ / suggested wording) and test again."); }
+        }
         if (kind != "writing" && run.Plus == 0 && run.Minus == 0 && run.LogChanged == 0) weak.Add("The new rule changes nothing in this test — try another test question, or the rule is not needed.");
         run.Blocking = contra.Count > 0 || dups.Count > 0 || (quick["syntax"] as JsonArray)?.Count > 0;
         res["checks"] = new JsonObject { ["contradictions"] = contra, ["duplicates"] = dups, ["weak"] = weak, ["better"] = ai["better"]?.ToString() ?? "" };
@@ -386,6 +411,7 @@ THE BRAIN NOW:{BrainText(b)}";
         if (r.Blocking) { r.Verdict = "blocked"; why = "Fix the contradiction / duplicate first (✎ Edit, or ⇢ merge), then test again."; }
         else if (yes == 0) { r.Verdict = "weak"; why = "No example was marked ✓ — the rule does not find what you mean yet."; }
         else if (no > yes) { r.Verdict = "weak"; why = $"Most examples are ✗ ({no} of {yes + no}) — sharpen the rule (use the suggested wording) and test again."; }
+        else if (r.MissedExample) { r.Verdict = "weak"; why = "Your 📎 example is not found the right way by the rule — sharpen it and test again."; }
         else if (r.Kind != "writing" && r.Plus == 0 && r.Minus == 0 && r.LogChanged == 0) { r.Verdict = "weak"; why = "The rule changes nothing in this test — try a test question it should change."; }
         else { r.Verdict = "passed"; why = $"{yes} ✓ · {r.Plus} more found · {r.Minus} dropped" + (r.LogChanged > 0 ? $" · {r.LogChanged} log item(s) change" : ""); }
         return new JsonObject { ["t"] = "verdict", ["id"] = id, ["verdict"] = r.Verdict, ["why"] = why };
@@ -496,6 +522,27 @@ THE BRAIN NOW:{BrainText(b)}";
     // ------------------------------------------------------------------ proposals from the connector (Claude) → the same 🧪 TEST
 
     public static readonly List<JsonObject> FromConnector = new();
+    public static readonly List<JsonObject> FromPhone = new();
+
+    /// <summary>An email as a text file (From · To · Cc · Date · Subject · files · text) — an example for the trainer.</summary>
+    public static string MailFile(MailHit h)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "Nova brain examples"); Directory.CreateDirectory(dir);
+        var name = Regex.Replace(h.Subject ?? "email", @"[^\p{L}\p{N} _.-]", "_"); if (name.Length > 80) name = name[..80];
+        var path = Path.Combine(dir, $"{name} ({h.Date:yyyy-MM-dd HHmm}).txt");
+        File.WriteAllText(path, $"EMAIL\nFrom: {h.FromName} <{h.FromAddr}>{(h.Sent ? " (me)" : "")}\nTo: {h.To} [{h.ToAddr}]\nCc: {h.Cc} [{h.CcAddr}]\nDate: {h.Date:yyyy-MM-dd HH:mm}\nSubject: {h.Subject}\nAttachments: {h.AttNames}\nFolder: {h.Folder}\n\n{h.Body}", new UTF8Encoding(false));
+        return path;
+    }
+
+    /// <summary>📱 “🎓 Teach the Brain” on the phone: the emails become examples in the Brain window on the PC.</summary>
+    public static string QueueFromPhone(string text, List<MailHit> mails, bool good)
+    {
+        var files = new JsonArray(mails.Select(h => (JsonNode)new JsonObject { ["path"] = MailFile(h), ["name"] = (h.Subject ?? "email") + ".txt", ["good"] = good }).ToArray());
+        lock (FromPhone) FromPhone.Add(new JsonObject { ["t"] = "teach", ["text"] = text, ["files"] = files });
+        Screens.Brain();
+        Screens.BrainNudge();
+        return $"Sent to the 🧠 Brain trainer on your PC ({mails.Count} email(s)) — open the Brain there: it proposes the rule, then 🧪 TEST and ✓ Apply.";
+    }
 
     public static string QueueFromConnector(JsonArray changes, string summary)
     {
@@ -510,6 +557,7 @@ THE BRAIN NOW:{BrainText(b)}";
         };
         lock (FromConnector) FromConnector.Add(p);
         Screens.Brain();
+        Screens.BrainNudge();
         return $"Sent to the 🧠 Nova Brain window on the PC ({diff.Count} change(s)) — it is applied only after the user's 🧪 TEST passes and ✓ Apply.";
     }
 }

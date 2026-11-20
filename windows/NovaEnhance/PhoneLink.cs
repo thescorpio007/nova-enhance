@@ -727,7 +727,16 @@ static class PhoneLink
                 res = await Task.Run(() => ProjectFinder.Handle(m));
                 break;
             }
-            case "agent": res = await PhoneAgent.Handle(a); break;   // 🧭 the Nova agent from the phone (✓ / ✗ examples there)
+            case "agent": res = await PhoneAgent.Handle(a); break;   // 🧭
+            case "brainteach":
+            {
+                // 🎓 Teach the Brain from the phone: these emails are examples (✓ like this / ✗ not like this)
+                var ids = (a["ids"] as JsonArray ?? new()).Select(x => long.TryParse(x?.ToString(), out var v) ? v : 0).Where(v => v > 0).ToList();
+                var mails = MailIndex.ByIds(ids, 10, 200000).Where(h => !Private(h.Subject, h.Folder, h.AttNames)).ToList();
+                if (mails.Count == 0) throw new Exception("these emails are not on the PC (or 🔒 private)");
+                res = new JsonObject { ["text"] = BrainTrainer.QueueFromPhone(a["text"]?.ToString() ?? "", mails, a["good"]?.GetValue<bool>() != false) };
+                break;
+            }   // 🧭 the Nova agent from the phone (✓ / ✗ examples there)
             case "sync": _ = Task.Run(() => RunSafe("asked by the phone")); res = new JsonObject { ["ok"] = true }; break;
             case "hello": PhoneSeen = DateTime.Now; if (a["phone"]?.ToString() is { Length: > 0 } ph) PhoneName = ph; res = new JsonObject { ["pc"] = Environment.MachineName, ["build"] = Program.Shown }; break;
             default: throw new Exception("unknown request " + op);

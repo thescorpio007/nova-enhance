@@ -453,6 +453,32 @@ class MyPcActivity : BaseActivity() {
         }
     }
 
+    /** 🎓 This email as an example for the Brain trainer on the PC (✓ like this / ✗ not like this) + what to learn. */
+    private fun teachBrain(h: PcLink.Hit) {
+        val c = this
+        val box = Ui.col(c, 16)
+        box.addView(Ui.text(c, h.subject, 13.5f, Ui.TEXT, true))
+        val q = Ui.input(c, "What should Nova learn? e.g. “emails like this are client review requests — track if the client answered”", true, 3)
+        box.addView(q, Ui.lp(top = Ui.dp(c, 8)))
+        var good = true
+        val (sv, row) = Ui.chipRow(c)
+        lateinit var y: TextView; lateinit var n: TextView
+        y = Ui.chip(c, "✓ like this", true) { good = true; y.setTextColor(Ui.GOOD); n.setTextColor(Ui.MUTED) }
+        n = Ui.chip(c, "✗ not like this", false) { good = false; n.setTextColor(Ui.BAD); y.setTextColor(Ui.MUTED) }
+        row.addView(y, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6))); row.addView(n, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT))
+        box.addView(sv, Ui.lp(top = Ui.dp(c, 8)))
+        box.addView(Ui.text(c, "The Brain window opens on your PC with this email as an example: the trainer proposes the rule, then 🧪 TEST and ✓ Apply there.", 11.5f, Ui.MUTED), Ui.lp(top = Ui.dp(c, 8)))
+        android.app.AlertDialog.Builder(c).setTitle("🎓 Teach the Brain").setView(box)
+            .setPositiveButton("Send to my PC") { _, _ ->
+                val text = q.text.toString().trim(); val app = applicationContext
+                say("⏳ Sending to your PC…")
+                Thread {
+                    val r = runCatching { PcLink.ask(app, "brainteach", JSONObject().put("ids", JSONArray().put(h.id)).put("text", text).put("good", good)) { s -> say(s) } }
+                    main.post { r.onSuccess { Ui.toast(c, "🎓 Sent — open the Brain on your PC"); say("✓ " + it.optString("text")) }.onFailure { say("⚠ " + (it.message ?: "your PC did not answer")) } }
+                }.start()
+            }.setNegativeButton("Cancel", null).show()
+    }
+
     /** 🧠 The brain from your PC, read-only, with 🧪 tested ✓ on each rule. */
     private fun brainView() {
         val v = PcLink.json(this, "brain.json")?.let { runCatching { JSONObject(it).optJSONArray("brainView") }.getOrNull() }
@@ -1128,6 +1154,7 @@ class MyPcActivity : BaseActivity() {
         b("✦ Draft reply") { draft(h) }
         b("✓ Handled") { pcDo("handled", JSONObject().put("i", h.id).put("on", true), "✓ Marked as handled on your PC") }
         b("↗ Share") { shareMenu(h) }
+        b("🎓 Teach the Brain") { teachBrain(h) }
         body.addView(sv, Ui.lp(top = Ui.dp(c, 8)))
         attachments(h)
         // The text, readable: links as 🔗, earlier messages folded.

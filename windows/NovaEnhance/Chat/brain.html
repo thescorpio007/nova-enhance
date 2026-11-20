@@ -44,6 +44,12 @@ button:disabled{opacity:.38;cursor:not-allowed}
 .hk{background:#1B2030;border:1px solid #2A3040;border-radius:9px;padding:5px 14px;min-width:96px}.hk b{font-size:18px;display:block}
 .lesson{background:#1E1B33;border:1px solid #4A42A0;border-radius:9px;padding:7px 10px;margin:6px 0;display:flex;gap:10px;align-items:center;justify-content:space-between;font-size:12.5px}.lesson.bad2{background:#2A1416;border-color:#6A2A30}
 .msg .by{margin-top:4px}
+#bfiles{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:4px}#bfiles:empty{display:none}
+.fchip{display:inline-flex;align-items:center;gap:6px;background:#232A3A;border:1px solid #3A4256;border-radius:16px;padding:2px 4px 2px 10px;font-size:12px;max-width:100%}
+.fchip .n{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fchip button{padding:1px 8px;font-size:11.5px;border-radius:12px}
+.fchip button.g{background:#12301F;color:#3DDC97;border-color:#1F5C38}.fchip button.b{background:#3A1A1D;color:#FF8A8A;border-color:#6A2A30}.fchip.priv{border-color:#6A2A30;color:#FF8A8A}
+#askBox.drag{border-color:#7C6CFF;background:#1E1B33}
+.learned{background:#10131B;border:1px solid #2E3448;border-radius:9px;padding:6px 10px;margin-top:6px;font-size:12.5px;white-space:normal}.learned li{margin:2px 0}
 </style>
 </head>
 <body>
@@ -58,9 +64,10 @@ button:disabled{opacity:.38;cursor:not-allowed}
     <div id="lessons"></div>
     <div id="msgs2"></div>
     <div id="busy2"></div>
-    <div style="background:#181C24;border:1px solid #2E3546;border-radius:10px;padding:6px 8px;margin-top:6px">
-      <textarea id="ask" rows="3" placeholder="Write an instruction or a question… (Enter = send · Shift+Enter = new line)"></textarea>
-      <div class="row"><span class="grow"></span><button class="primary" id="send">Send</button></div>
+    <div id="askBox" style="background:#181C24;border:1px solid #2E3546;border-radius:10px;padding:6px 8px;margin-top:6px">
+      <div id="bfiles"></div>
+      <textarea id="ask" rows="3" placeholder="Write an instruction or a question — or 📎 add an example (email, PDF, Word…) and say “make a rule like this” (Enter = send · Shift+Enter = new line · drop or paste files here)"></textarea>
+      <div class="row"><button id="bAttach" title="emails .msg / .eml, PDF, Word, Excel, text, pictures">📎 Example file</button><button id="bOutlook" title="the email selected in Outlook">✉ Outlook email</button><span class="grow"></span><button class="primary" id="send">Send</button></div>
     </div>
   </div>
 </div>

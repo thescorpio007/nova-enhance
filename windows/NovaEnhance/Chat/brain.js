@@ -178,8 +178,50 @@
 
   // ---------------------------------------------------------------- 🎓 the trainer (talk to the brain)
   function addMsg(cls, text) { var m = el("div", "msg " + cls, text); $("msgs2").appendChild(m); $("msgs2").scrollTop = 1e9; return m; }
-  function say(t) { if (!t) return; addMsg("me", t); post({ t: "ask", text: t }); }
-  function send() { var t = $("ask").value.trim(); if (!t) return; $("ask").value = ""; say(t); }
+  // 📎 example files (✓ like this / ✗ not like this)
+  var bfiles = [];
+  function drawFiles() {
+    var b = $("bfiles"); b.innerHTML = "";
+    bfiles.forEach(function (f, i) {
+      var c = el("span", "fchip" + (f.private ? " priv" : "")); c.title = f.path;
+      c.appendChild(el("span", "n", (f.private ? "🔒 " : "📄 ") + f.name));
+      var g = el("button", f.good !== false ? "g" : "b", f.good !== false ? "✓ like this" : "✗ not like this");
+      g.title = "click to switch: an example to follow (✓) or to leave out (✗)";
+      g.onclick = function () { f.good = f.good === false; drawFiles(); };
+      var x = el("button", null, "✕"); x.onclick = function () { bfiles.splice(i, 1); drawFiles(); };
+      c.appendChild(g); c.appendChild(x); b.appendChild(c);
+    });
+  }
+  function addFiles(list) { (list || []).forEach(function (f) { if (!bfiles.some(function (x) { return x.path === f.path; })) { f.good = f.good !== false; bfiles.push(f); } }); drawFiles(); $("ask").focus(); }
+  function say(t, files) {
+    files = files || [];
+    if (!t && !files.length) return;
+    var me = addMsg("me", t || "Learn from these examples and propose the rule.");
+    if (files.length) me.appendChild(el("div", "small", "📎 " + files.map(function (f) { return (f.good === false ? "✗ " : "✓ ") + f.name; }).join(" · ")));
+    post({ t: "ask", text: t || "", files: files });
+  }
+  function send() {
+    var t = $("ask").value.trim(); var fs = bfiles.filter(function (f) { return !f.private; });
+    if (!t && !fs.length) return;
+    $("ask").value = ""; bfiles = []; drawFiles(); say(t, fs);
+  }
+  $("bAttach").onclick = function () { post({ t: "pickFiles" }); };
+  $("bOutlook").onclick = function () { post({ t: "outlookMail" }); };
+  function sendFile(f) {
+    if (f.size > 40 * 1024 * 1024) { toast("⚠ " + f.name + " is too big"); return; }
+    var r = new FileReader();
+    r.onload = function () { var s = String(r.result); post({ t: "pasteFile", name: f.name || "", b64: s.substring(s.indexOf(",") + 1) }); };
+    r.readAsDataURL(f);
+  }
+  var ab = $("askBox");
+  ab.addEventListener("dragover", function (e) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; ab.classList.add("drag"); });
+  ab.addEventListener("dragleave", function () { ab.classList.remove("drag"); });
+  ab.addEventListener("drop", function (e) { e.preventDefault(); ab.classList.remove("drag"); var fs = e.dataTransfer && e.dataTransfer.files; if (fs) for (var i = 0; i < fs.length && i < 8; i++) sendFile(fs[i]); });
+  $("ask").addEventListener("paste", function (e) {
+    var cd = e.clipboardData; if (!cd) return;
+    if (Array.prototype.slice.call(cd.types || []).indexOf("Files") < 0) return;
+    e.preventDefault(); post({ t: "pasteClipboard" });
+  });
   $("send").onclick = send;
   $("ask").onkeydown = function (e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } };
 
@@ -202,6 +244,13 @@
       a.appendChild(el("div", "muted small", "pick one, or type your own answer below"));
     }
     if (m.kind !== "propose" || !m.changes || !m.changes.length) { if (m.by) a.appendChild(el("div", "by", "by " + m.by)); return; }
+    if (m.learned && m.learned.length) {
+      var lb = el("div", "learned"); lb.appendChild(el("b", null, "🎓 What I learned from your example"));
+      var ul = el("ul"); ul.style.margin = "4px 0 0 16px"; ul.style.padding = "0";
+      m.learned.forEach(function (x) { ul.appendChild(el("li", null, String(x))); }); lb.appendChild(ul);
+      if ((m.mustFind || []).length) lb.appendChild(el("div", "muted small", "🧪 the test checks that it finds: " + m.mustFind.join(", ") + ((m.mustNotFind || []).length ? " · and not: " + m.mustNotFind.join(", ") : "")));
+      a.appendChild(lb);
+    }
     if (m.why) a.appendChild(el("div", "muted small", "Why: " + m.why));
     if (m.conflict) a.appendChild(el("div", "chg", "⚠ " + m.conflict));
     var id = "c" + (++nCard);
@@ -235,7 +284,7 @@
     clearInterval(c.iv); c.t0 = Date.now();
     c.iv = setInterval(function () { c.res.textContent = "🧪 testing… " + Thinking.mmss(Math.round((Date.now() - c.t0) / 1000)) + (wkSteps ? " · step " + wkSteps : ""); }, 1000);
     pendingCard = id;
-    post({ t: "test", changes: c.m.changes, question: c.tq, kind: c.m.kindOf || "", card: id });
+    post({ t: "test", changes: c.m.changes, question: c.tq, kind: c.m.kindOf || "", card: id, mustFind: c.m.mustFind || [], mustNotFind: c.m.mustNotFind || [] });
   }
   var pendingCard = null;
   function drawTest(m) {
@@ -283,6 +332,7 @@
     });
     // checks
     var ck = m.checks || {}, cl = el("div", "checks");
+    (m.examplesFound || []).forEach(function (x) { cl.appendChild(el("div", "ok", "✓ Your example " + x + " is found")); });
     if (!(ck.contradictions || []).length) cl.appendChild(el("div", "ok", "✓ No contradiction with your rules"));
     (ck.contradictions || []).forEach(function (x) { cl.appendChild(el("div", "bad", "⛔ Contradiction · " + (x.why || x))); });
     if (!(ck.duplicates || []).length) cl.appendChild(el("div", "ok", "✓ Not a duplicate"));
@@ -381,6 +431,8 @@
     else if (m.t === "test2") drawTest(m);
     else if (m.t === "verdict") drawVerdict(m);
     else if (m.t === "health") { health = m; view = "health"; drawSecs(); drawMid(); }
+    else if (m.t === "bfiles") addFiles(m.files);
+    else if (m.t === "teach") say(m.text || "", m.files || []);   // 📱 from the phone: the emails as examples
     else if (m.t === "chatLoad") {
       if ((m.chat || []).length) $("msgs2").innerHTML = "";
       (m.chat || []).forEach(function (x) { addMsg(x.role === "user" ? "me" : "ai", x.text); });

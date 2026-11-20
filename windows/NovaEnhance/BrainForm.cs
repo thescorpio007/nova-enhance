@@ -36,7 +36,7 @@ class BrainForm : WebPage
             case "init":
                 Post(State());
                 Post(new JsonObject { ["t"] = "chatLoad", ["chat"] = BrainTrainer.Chat.DeepClone(), ["lessons"] = Lessons() });
-                lock (BrainTrainer.FromConnector) { foreach (var p in BrainTrainer.FromConnector) Post(p); BrainTrainer.FromConnector.Clear(); }
+                Flush();
                 break;
             case "stop": cts?.Cancel(); break;
             case "open": NovaChat.OpenSource(new JsonObject { ["kind"] = "email", ["entry"] = S("entry"), ["store"] = S("store") }); break;
@@ -46,11 +46,40 @@ class BrainForm : WebPage
             case "unlock": Work("Opening…", () => { Brain.Unlock(S("pw")); return State(); }); break;
             case "pending": Work("Checking the brain from your backup…", () => new JsonObject { ["t"] = "toast", ["text"] = Brain.RestorePending(S("pw")) }); break;
             case "lock": Brain.Lock(); break;
-            case "ask": { var text = S("text"); Run("🎓 The trainer is reading your brain", (st, de, ct) => BrainTrainer.Ask(text, st, de, ct)); break; }
+            case "ask":
+            {
+                var text = S("text");
+                var files = m["files"] as JsonArray ?? new JsonArray();
+                if (files.Count > 0) { AskWithFiles(text, files.DeepClone().AsArray()); break; }
+                Run("🎓 The trainer is reading your brain", (st, de, ct) => BrainTrainer.Ask(text, st, de, ct));
+                break;
+            }
+            // 📎 Example files for the trainer: pick · paste · drop · the email selected in Outlook
+            case "pickFiles":
+            {
+                using var d = new OpenFileDialog { Multiselect = true, Title = "Examples for the Brain trainer (emails .msg / .eml, PDF, Word, Excel, text, pictures)" };
+                if (d.ShowDialog(this) == DialogResult.OK) Post(Files(d.FileNames));
+                break;
+            }
+            case "pasteFile":
+                try { Post(Files(new[] { FileTalk.SaveBytes(S("name"), Convert.FromBase64String(S("b64"))) })); }
+                catch (Exception e) { Post(new JsonObject { ["t"] = "toast", ["text"] = "⚠ Could not add the file: " + e.Message }); }
+                break;
+            case "pasteClipboard": { var got = FileTalk.FromClipboard(); if (got.Count > 0) Post(Files(got)); break; }
+            case "outlookMail":
+                try
+                {
+                    var h = MailIndex.CurrentMail();
+                    if (h == null) { Post(new JsonObject { ["t"] = "toast", ["text"] = "Select an email in Outlook first" }); break; }
+                    Post(Files(new[] { BrainTrainer.MailFile(h) }));
+                }
+                catch (Exception e) { Post(new JsonObject { ["t"] = "toast", ["text"] = "⚠ " + e.Message }); }
+                break;
             case "test":
             {
                 var ch = m["changes"] as JsonArray ?? new JsonArray(); var q = S("question"); var kind = S("kind"); var card = S("card");
-                Run("🧪 Testing on your real data (nothing is saved)", async (st, de, ct) => { var r = await BrainTrainer.Test(ch, q, kind, st, de, ct); r["card"] = card; return r; });
+                var mf = (m["mustFind"] as JsonArray)?.DeepClone().AsArray(); var mn = (m["mustNotFind"] as JsonArray)?.DeepClone().AsArray();
+                Run("🧪 Testing on your real data (nothing is saved)", async (st, de, ct) => { var r = await BrainTrainer.Test(ch, q, kind, st, de, ct, mf, mn); r["card"] = card; return r; });
                 break;
             }
             case "verdict": { var r = BrainTrainer.Verdict(S("id"), m["yes"]?.GetValue<int>() ?? 0, m["no"]?.GetValue<int>() ?? 0, m["secs"]?.GetValue<int>() ?? 0); r["card"] = S("card"); Post(r); break; }
@@ -165,6 +194,53 @@ class BrainForm : WebPage
             catch (OperationCanceledException) { Post(new JsonObject { ["t"] = "wfail", ["text"] = "Stopped." }); }
             catch (Exception e) { Log.Error("Nova Brain", e); Post(new JsonObject { ["t"] = "wfail", ["text"] = e.Message }); }
         });
+    }
+
+    /// <summary>Proposals from the connector, and “🎓 Teach the Brain” from the phone (emails as examples).</summary>
+    public void Flush()
+    {
+        if (!Ready) return;
+        lock (BrainTrainer.FromConnector) { foreach (var p in BrainTrainer.FromConnector) Post(p); BrainTrainer.FromConnector.Clear(); }
+        lock (BrainTrainer.FromPhone) { foreach (var p in BrainTrainer.FromPhone) Post(p); BrainTrainer.FromPhone.Clear(); }
+    }
+
+    static JsonObject Files(IEnumerable<string> paths) => new()
+    {
+        ["t"] = "bfiles", ["files"] = new JsonArray(paths.Select(p => (JsonNode)new JsonObject
+        {
+            ["path"] = p, ["name"] = Path.GetFileName(p), ["private"] = Projects.Private.IsMatch(Path.GetFileName(p))
+        }).ToArray())
+    };
+
+    /// <summary>📎 Reads each example (on this window, so pictures ask your consent first), then the trainer learns from them.</summary>
+    async void AskWithFiles(string text, JsonArray files)
+    {
+        cts?.Cancel(); cts = new CancellationTokenSource();
+        var ct = cts.Token;
+        Post(new JsonObject { ["t"] = "work", ["title"] = "🎓 The trainer is reading your examples" });
+        using var busy = Busy.Begin("🎓 Brain trainer · examples");
+        try
+        {
+            var ex = new List<(string, bool, string)>();
+            foreach (var f in files.OfType<JsonObject>())
+            {
+                var path = f["path"]?.ToString() ?? ""; var name = f["name"]?.ToString() ?? Path.GetFileName(path); var good = f["good"]?.GetValue<bool>() != false;
+                Post(new JsonObject { ["t"] = "wstep", ["text"] = $"📄 Reading {(good ? "✓" : "✗")} {name}", ["step"] = true });
+                // 🔒 private words: the file is never read nor sent to the AI
+                if (Projects.Private.IsMatch(name)) { ex.Add((name, good, "(🔒 not read — private words in the name)")); continue; }
+                string body;
+                try { body = await FileTalk.Text(path, this, ct, s => Post(new JsonObject { ["t"] = "wstep", ["text"] = s }), text); }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception e) { body = "(could not read: " + e.Message + ")"; }
+                if (Projects.Private.IsMatch(body)) { ex.Add((name, good, "(🔒 not sent to the AI — private words inside)")); continue; }
+                ex.Add((name, good, body));
+            }
+            var r = await Task.Run(() => BrainTrainer.Ask(text, s => Post(new JsonObject { ["t"] = "wstep", ["text"] = s, ["step"] = true }), s => Post(new JsonObject { ["t"] = "wstep", ["text"] = s }), ct, ex), ct);
+            Post(new JsonObject { ["t"] = "wdone" });
+            Post(r);
+        }
+        catch (OperationCanceledException) { Post(new JsonObject { ["t"] = "wfail", ["text"] = "Stopped." }); }
+        catch (Exception e) { Log.Error("Nova Brain · examples", e); Post(new JsonObject { ["t"] = "wfail", ["text"] = e.Message }); }
     }
 
     static JsonArray Lessons() => new(Agent.Feedback.Patterns().Select(p => (JsonNode)new JsonObject { ["what"] = p.What, ["count"] = p.Count, ["teach"] = p.Teach }).ToArray());
