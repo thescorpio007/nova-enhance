@@ -26,6 +26,7 @@
     start: function (text) { question = text; ensure(); show(true); head(); post({ t: "ag.ask", text: text }); },
     handle: function (m) {
       if (!/^ag\./.test(m.t || "")) return false;
+      if (m.t === "ag.start") { window.AgentUi.start(m.text); return true; }
       ensure();
       if (m.t === "ag.step") { var s = document.getElementById("agSteps"); if (s) s.appendChild(el("div", "stp", m.text)); }
       else if (m.t === "ag.confirm") {
