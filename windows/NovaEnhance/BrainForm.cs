@@ -33,19 +33,40 @@ class BrainForm : WebPage
         string S(string k) => m[k]?.ToString() ?? "";
         switch (S("t"))
         {
-            case "init": Post(State()); break;
+            case "init":
+                Post(State());
+                Post(new JsonObject { ["t"] = "chatLoad", ["chat"] = BrainTrainer.Chat.DeepClone(), ["lessons"] = Lessons() });
+                lock (BrainTrainer.FromConnector) { foreach (var p in BrainTrainer.FromConnector) Post(p); BrainTrainer.FromConnector.Clear(); }
+                break;
+            case "stop": cts?.Cancel(); break;
+            case "open": NovaChat.OpenSource(new JsonObject { ["kind"] = "email", ["entry"] = S("entry"), ["store"] = S("store") }); break;
+            case "chatClear": BrainTrainer.Chat.Clear(); break;
+            case "health": Run("🩺 Health check of every rule", (st, de, ct) => BrainTrainer.Health(st, ct)); break;
             case "create": Work("Making your brain…", () => { Brain.Create(S("pw")); Brain.BackupNow("manual"); return State(); }); break;
             case "unlock": Work("Opening…", () => { Brain.Unlock(S("pw")); return State(); }); break;
             case "pending": Work("Checking the brain from your backup…", () => new JsonObject { ["t"] = "toast", ["text"] = Brain.RestorePending(S("pw")) }); break;
             case "lock": Brain.Lock(); break;
-            case "ask": Work("🧠 Reading your brain…", () => Ask(S("text"), m["history"] as JsonArray)); break;
-            case "test": Work("🧪 Testing on your real emails…", () => Test(m["changes"] as JsonArray, m["days"]?.GetValue<int>() ?? 30)); break;
+            case "ask": { var text = S("text"); Run("🎓 The trainer is reading your brain", (st, de, ct) => BrainTrainer.Ask(text, st, de, ct)); break; }
+            case "test":
+            {
+                var ch = m["changes"] as JsonArray ?? new JsonArray(); var q = S("question"); var kind = S("kind"); var card = S("card");
+                Run("🧪 Testing on your real data (nothing is saved)", async (st, de, ct) => { var r = await BrainTrainer.Test(ch, q, kind, st, de, ct); r["card"] = card; return r; });
+                break;
+            }
+            case "verdict": { var r = BrainTrainer.Verdict(S("id"), m["yes"]?.GetValue<int>() ?? 0, m["no"]?.GetValue<int>() ?? 0); r["card"] = S("card"); Post(r); break; }
             case "apply":
             {
                 var ch = m["changes"] as JsonArray ?? new JsonArray();
-                var (b, said) = Brain.Apply(Brain.Snapshot(), ch, S("by").Length > 0 ? S("by") : "you · brain chat");
-                var v = Brain.Commit(b, S("by").Length > 0 ? S("by") : "you · brain chat", (S("summary").Length > 0 ? S("summary") + " · " : "") + said);
-                Post(new JsonObject { ["t"] = "toast", ["text"] = $"✓ Applied · version {v} saved (↩ undo in Versions)" });
+                // 🔒 Only a proposal that passed its 🧪 TEST (exactly these changes) can be applied.
+                var passed = BrainTrainer.Passed(S("test"), ch);
+                if (passed == null) { Post(new JsonObject { ["t"] = "toast", ["text"] = "🧪 Test it first — ✓ Apply opens after a passed test (an edit needs a new test)" }); break; }
+                var by = S("by").Length > 0 ? S("by") : "you · brain trainer · 🧪 tested";
+                var before = Brain.Snapshot();
+                var (b, said) = Brain.Apply(before, ch, by);
+                BrainTrainer.MarkTested(b, Brain.Diff(before, b), ch, passed);
+                var v = Brain.Commit(b, by, (S("summary").Length > 0 ? S("summary") + " · " : "") + said + $" · 🧪 passed ({passed.Yes} ✓, +{passed.Plus} / −{passed.Minus}) “{Agent.Clip(passed.Question, 80)}”");
+                BrainTrainer.Chat.Add(new JsonObject { ["role"] = "trainer", ["text"] = $"✓ Applied as version {v}: {said}" });
+                Post(new JsonObject { ["t"] = "toast", ["text"] = $"✓ Applied · version {v} saved with its test (↩ undo in Versions)" });
                 break;
             }
             case "saveSection":
@@ -123,72 +144,28 @@ class BrainForm : WebPage
 
     static string CurrentPw() => Store.Secret("win_brain_pw");
 
-    // ---------------------------------------------------------------- 💬 the brain chat
+    // ---------------------------------------------------------------- 🎓 trainer / 🧪 test / 🩺 health: long work with ● ● ● steps
 
-    static JsonObject Ask(string text, JsonArray history)
+    CancellationTokenSource cts;
+
+    void Run(string title, Func<Action<string>, Action<string>, CancellationToken, Task<JsonObject>> f)
     {
-        var b = Brain.Snapshot();
-        var rules = new System.Text.StringBuilder();
-        foreach (var sec in (b["sections"] as JsonArray ?? new JsonArray()).OfType<JsonObject>())
+        cts?.Cancel(); cts = new CancellationTokenSource();
+        var ct = cts.Token;
+        Post(new JsonObject { ["t"] = "work", ["title"] = title });
+        _ = Task.Run(async () =>
         {
-            rules.Append($"\n## {sec["icon"]} {sec["name"]} (section id: {sec["id"]}; used for: {string.Join(", ", (sec["tags"] as JsonArray)?.Select(t => t?.ToString()) ?? Array.Empty<string>())})\n");
-            foreach (var r in (sec["rules"] as JsonArray ?? new JsonArray()).OfType<JsonObject>())
-                rules.Append($"- {r["id"]} {(r["off"]?.GetValue<bool>() == true ? "(switched off) " : "")}{r["title"]}: {r["text"]}\n");
-        }
-        // “Why was WIR-15280 closed?” → what the Submittal log sees for that document.
-        var facts = "";
-        foreach (Match d in Regex.Matches(text, @"\b(?:[A-Z0-9]{2,6}-){0,5}(WIR|MIR|MAR|PQS|RFI|SDS)-\d{2,6}\b", RegexOptions.IgnoreCase))
-            try { facts += SubmittalLog.Explain(d.Value) + "\n"; } catch { }
-        var sys = "You are the Nova Brain assistant. Nova Brain is the user's own rule book that guides the app Nova Enhance (an assistant for an architect: Outlook emails, project files, " +
-                  "submittal logs, deep search, writing). The user talks to you in their own words. Two kinds of message:\n" +
-                  "1) A question (\"why did Nova…\", \"what do you do when…\"): answer from the rules (name the rule ids) and the facts given; propose no change unless asked.\n" +
-                  "2) An instruction to remember, change, add or remove something: propose the smallest exact change to the rules.\n" +
-                  "Rules are short, clear sentences. A rule may hold settings written as [name = value] that the app reads (e.g. [overdue.WIR = 2], [log.types = WIR, MIR], [mza.match = …], [closed.files = …]); keep that syntax exactly when you change a setting.\n" +
-                  "Prefer changing an existing rule over adding a near-duplicate. If the new instruction contradicts an existing rule, say so in the reply and propose replacing it. Never invent facts about the user's projects.\n" +
-                  "Reply with JSON only: {\"reply\":\"what you understood / your answer, short\",\"conflict\":\"\" or \"which rule it contradicts and why\",\"changes\":[{\"op\":\"add|change|remove\",\"section\":\"section id or a new section name\",\"id\":\"rule id for change/remove (empty for add)\",\"title\":\"2-4 words\",\"text\":\"the full new rule text\"}]}\n\n" +
-                  "THE BRAIN NOW:" + rules;
-        var user = new System.Text.StringBuilder();
-        foreach (var h in (history ?? new JsonArray()).OfType<JsonObject>().TakeLast(8)) user.Append(h["role"]).Append(": ").Append(h["text"]).Append('\n');
-        if (facts.Length > 0) user.Append("FACTS FROM THE SUBMITTAL LOG:\n").Append(facts);
-        user.Append("user: ").Append(text);
-        Brain.Quiet.Value = true;
-        string raw;
-        using var _aiFor4 = Ai.For("brain");   // ⚙ AI for each feature
-        try { raw = Ai.Chat(sys, user.ToString(), false, true).GetAwaiter().GetResult(); }
-        finally { Brain.Quiet.Value = false; }
-        var j = Ai.ParseJson(raw);
-        var changes = j["changes"] as JsonArray ?? new JsonArray();
-        var (after, _) = Brain.Apply(b, changes, "you · brain chat");
-        var diff = Brain.Diff(b, after);
-        bool testable = diff.OfType<JsonObject>().Any(d => Regex.IsMatch(d["section"]?.ToString() ?? "", "submittal|tower|zone|level", RegexOptions.IgnoreCase));
-        return new JsonObject
-        {
-            ["t"] = "answer", ["reply"] = j["reply"]?.ToString() ?? raw, ["conflict"] = j["conflict"]?.ToString() ?? "",
-            ["changes"] = changes.DeepClone(), ["diff"] = diff, ["testable"] = testable, ["by"] = Ai.LastBy
-        };
+            using var busy = Busy.Begin(title);
+            try
+            {
+                var r = await f(s => Post(new JsonObject { ["t"] = "wstep", ["text"] = s, ["step"] = true }), s => Post(new JsonObject { ["t"] = "wstep", ["text"] = s }), ct);
+                Post(new JsonObject { ["t"] = "wdone" });
+                Post(r);
+            }
+            catch (OperationCanceledException) { Post(new JsonObject { ["t"] = "wfail", ["text"] = "Stopped." }); }
+            catch (Exception e) { Log.Error("Nova Brain", e); Post(new JsonObject { ["t"] = "wfail", ["text"] = e.Message }); }
+        });
     }
 
-    /// <summary>🧪 The proposed rules run on your real emails next to the current ones: what changes, item by item.</summary>
-    static JsonObject Test(JsonArray changes, int days)
-    {
-        var now = Brain.Snapshot();
-        var (after, _) = Brain.Apply(now, changes ?? new JsonArray(), "test");
-        var o = new SubmittalLog.Options { From = DateTime.Today.AddDays(-days) };
-        var a = SubmittalLog.Run(o, now).Items.ToDictionary(i => i.No + "|" + i.Rev);
-        var b = SubmittalLog.Run(o, after).Items;
-        var rows = new JsonArray();
-        int changed = 0, toClosed = 0, fromClosed = 0;
-        foreach (var i in b)
-        {
-            a.TryGetValue(i.No + "|" + i.Rev, out var old);
-            var s0 = old == null ? "—" : old.Status + (old.Code.Length > 0 ? " · " + old.Code : "");
-            var s1 = i.Status + (i.Code.Length > 0 ? " · " + i.Code : "");
-            if (s0 == s1) continue;
-            changed++;
-            if (i.Status == "Closed" && old?.Status != "Closed") toClosed++;
-            if (old?.Status == "Closed" && i.Status != "Closed") fromClosed++;
-            if (rows.Count < 40) rows.Add(new JsonObject { ["no"] = i.No + " " + i.Rev, ["now"] = s0, ["then"] = s1, ["why"] = i.Why });
-        }
-        return new JsonObject { ["t"] = "test", ["days"] = days, ["rows"] = rows, ["changed"] = changed, ["toClosed"] = toClosed, ["fromClosed"] = fromClosed, ["total"] = b.Count };
-    }
+    static JsonArray Lessons() => new(Agent.Feedback.Patterns().Select(p => (JsonNode)new JsonObject { ["what"] = p.What, ["count"] = p.Count, ["teach"] = p.Teach }).ToArray());
 }

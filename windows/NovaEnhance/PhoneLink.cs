@@ -406,7 +406,7 @@ static class PhoneLink
         o["rules"] = rules;
         try { o["prompts"] = JsonNode.Parse(JsonSerializer.Serialize(NovaEnhance.Prompts.All(), JO)); } catch { }
         try { o["work"] = JsonNode.Parse(JsonSerializer.Serialize(Work.All(), JO)); } catch { }
-        try { o["guide"] = NovaEnhance.Brain.ForPhone(); o["settings"] = NovaEnhance.Brain.AllSettings(); } catch { }
+        try { o["guide"] = NovaEnhance.Brain.ForPhone(); o["settings"] = NovaEnhance.Brain.AllSettings(); o["brainView"] = NovaEnhance.Brain.ViewForPhone(); } catch { }
         try { o["track"] = Tracker.ForPhone(); } catch { }
         try { o["logprefs"] = LogPrefs.Get(); } catch { }   // ✎ My log settings (hidden projects / types, your types, discipline groups, periods)   // 🧩 the field pack: what the log tracks, who is “us”   // 🧠 the same Nova Brain rules on the phone
         var text = o.ToJsonString();
@@ -727,6 +727,7 @@ static class PhoneLink
                 res = await Task.Run(() => ProjectFinder.Handle(m));
                 break;
             }
+            case "agent": res = await PhoneAgent.Handle(a); break;   // 🧭 the Nova agent from the phone (✓ / ✗ examples there)
             case "sync": _ = Task.Run(() => RunSafe("asked by the phone")); res = new JsonObject { ["ok"] = true }; break;
             case "hello": PhoneSeen = DateTime.Now; if (a["phone"]?.ToString() is { Length: > 0 } ph) PhoneName = ph; res = new JsonObject { ["pc"] = Environment.MachineName, ["build"] = Program.Shown }; break;
             default: throw new Exception("unknown request " + op);

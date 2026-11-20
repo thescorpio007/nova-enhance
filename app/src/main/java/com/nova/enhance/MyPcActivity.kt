@@ -217,6 +217,7 @@ class MyPcActivity : BaseActivity() {
             "files" -> filesPage()
             "starred" -> starredPage()
             "settings" -> settingsPage()
+            "agent" -> agentPage()
         }
         body.addView(Ui.signature(this))
     }
@@ -290,7 +291,8 @@ class MyPcActivity : BaseActivity() {
                 card("📁 Projects", projs?.let { a -> (0 until a.length()).joinToString(" · ") { a.getJSONObject(it).optString("code") } } ?: "") { }
                 card("📂 Project files", "%,d files · names and text inside".format(f)) { runFind("", "files") }
                 card("⭐ Starred", "$stars file(s) on the phone · open offline") { show("starred") }
-                card("🧠 Same brain as your PC", if (PcLink.brainNote(c).isBlank()) "not received yet" else "your words, project vocabulary and names are used by every correction") { }
+                card("🧭 Ask Nova (agent)", "type freely — your PC checks the Brain, the log, emails and threads · you confirm examples here") { show("agent") }
+                card("🧠 Same brain as your PC", if (PcLink.brainNote(c).isBlank()) "not received yet" else "every rule, with 🧪 tested ✓ — tap to read") { brainView() }
                 card("🔐 Nova PIN code", "forgot the PIN on your laptop? the one-time recovery code shows here") { adminCode() }
                 card("⚙ Phone link", "update every ${getSharedPreferences("nova_pc", MODE_PRIVATE).getInt("every_min", 60)} min · unpair") { show("settings") }
             }
@@ -312,6 +314,156 @@ class MyPcActivity : BaseActivity() {
                 }.onFailure { status.text = "⚠ " + (it.message ?: "your PC did not answer") }
             }
         }.start()
+    }
+
+    // ------------------------------------------------------------------ 🧭 the Nova agent from the phone (it runs on your PC)
+
+    private var agChat = ""; private var agSid = ""; private var agBusy = false; private var agSeen = 0
+    private val agItems = mutableListOf<JSONObject>()
+
+    private fun agentPage() {
+        val c = this
+        body.addView(Ui.text(c, "🧭 Ask Nova", 18f, Ui.TEXT, true))
+        if (agItems.isEmpty()) body.addView(Ui.text(c, "Type freely, e.g. “C7 submittals my colleagues sent Charbel for approval that he hasn't answered”. Your PC uses your Brain, the log, emails and threads; you tick ✓ / ✗ on a few examples here, then you get the table. The conversation is also in Nova Chat on the PC.", 12.5f, Ui.MUTED), Ui.lp(top = Ui.dp(c, 4)))
+        for (it in agItems) drawAg(it)
+        if (agBusy) body.addView(Ui.thinking(Ui.text(c, "⏳ Nova is working on your PC…", 13f, Ui.ACCENT)), Ui.lp(top = Ui.dp(c, 8)))
+        val q = Ui.input(c, if (agItems.isEmpty()) "🧭 Ask Nova…" else "Reply or follow-up: “only the older ones” · “add the MARs” · “draft a reminder”", true, 2)
+        body.addView(q, Ui.lp(top = Ui.dp(c, 10)))
+        val r = Ui.row(c)
+        r.addView(Ui.button(c, if (agBusy) "■ Stop" else "Send", !agBusy) {
+            if (agBusy) { agCall(JSONObject().put("sid", agSid).put("stop", true)); agBusy = false; show("agent") }
+            else { val t = q.text.toString().trim(); if (t.isNotEmpty()) agentAsk(t) }
+        }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 8)))
+        if (agItems.isNotEmpty() && !agBusy) r.addView(Ui.smallButton(c, "✚ New conversation") { agItems.clear(); agChat = ""; agSid = ""; show("agent") })
+        body.addView(r, Ui.lp(top = Ui.dp(c, 6)))
+        main.post { (body.parent as? android.widget.ScrollView)?.fullScroll(android.view.View.FOCUS_DOWN) }
+    }
+
+    private fun agentAsk(t: String) {
+        agItems.add(JSONObject().put("k", "q").put("text", t))
+        agBusy = true; agSeen = 0
+        agItems.add(JSONObject().put("k", "steps").put("steps", JSONArray()))
+        show("agent")
+        agCall(JSONObject().put("q", t).put("chat", agChat))
+    }
+
+    /** One call to the PC; repeats while the PC is still working, stops for ✓ / ✗ or the result. */
+    private fun agCall(args: JSONObject) {
+        val c = applicationContext
+        Thread {
+            var a = args
+            while (true) {
+                val r = runCatching { PcLink.ask(c, "agent", a) { s -> say(s) } }
+                val o = r.getOrNull()
+                if (o == null) { main.post { agBusy = false; agItems.add(JSONObject().put("k", "error").put("text", r.exceptionOrNull()?.message ?: "your PC did not answer")); if (page == "agent") show("agent") }; return@Thread }
+                if (a.optBoolean("stop")) return@Thread
+                agSid = o.optString("sid", agSid); if (o.optString("chat").isNotBlank()) agChat = o.optString("chat")
+                val steps = o.optJSONArray("steps") ?: JSONArray(); agSeen = steps.length()
+                main.post {
+                    agItems.lastOrNull { it.optString("k") == "steps" }?.put("steps", steps)?.put("detail", o.optString("detail"))
+                    when (o.optString("state")) {
+                        "confirm" -> { agBusy = false; agItems.add(JSONObject().put("k", "confirm").put("c", o.optJSONObject("confirm"))) }
+                        "done" -> { agBusy = false; agItems.add(JSONObject().put("k", "result").put("r", o.optJSONObject("result"))) }
+                        "error", "unknown" -> { agBusy = false; agItems.add(JSONObject().put("k", "error").put("text", o.optString("text"))) }
+                    }
+                    say(""); if (page == "agent") show("agent")
+                }
+                if (o.optString("state") != "running") return@Thread
+                a = JSONObject().put("sid", agSid).put("seen", agSeen)
+            }
+        }.start()
+    }
+
+    private fun drawAg(it: JSONObject) {
+        val c = this
+        when (it.optString("k")) {
+            "q" -> body.addView(Ui.text(c, it.optString("text"), 14.5f, Ui.TEXT).apply {
+                background = Ui.round(0xFF3B3570.toInt(), Ui.dp(c, 12).toFloat()); setPadding(Ui.dp(c, 12), Ui.dp(c, 8), Ui.dp(c, 12), Ui.dp(c, 8))
+            }, Ui.lp(top = Ui.dp(c, 12)).apply { marginStart = Ui.dp(c, 40) })
+            "steps" -> {
+                val s = it.optJSONArray("steps") ?: JSONArray()
+                if (s.length() == 0) return
+                val t = (0 until s.length()).joinToString("\n") { i -> "✓ " + s.optString(i) } + (it.optString("detail").let { d -> if (d.isNotBlank() && agBusy) "\n   $d" else "" })
+                body.addView(Ui.text(c, t, 12.5f, Ui.GOOD), Ui.lp(top = Ui.dp(c, 6)))
+            }
+            "confirm" -> {
+                val cf = it.optJSONObject("c") ?: return
+                val k = Ui.card(c)
+                k.addView(Ui.text(c, "✓ / ✗ " + cf.optString("question"), 14.5f, Ui.TEXT, true))
+                val items = cf.optJSONArray("items") ?: JSONArray()
+                val verdict = HashMap<Long, Boolean>()
+                val done = it.optBoolean("sent")
+                for (i in 0 until items.length()) {
+                    val h = items.getJSONObject(i); val id = h.optLong("id")
+                    k.addView(Ui.text(c, h.optString("subject"), 13.5f, Ui.TEXT, true), Ui.lp(top = Ui.dp(c, 8)))
+                    k.addView(Ui.text(c, "${h.optString("date")} · from ${h.optString("from")} · to ${h.optString("to")}" + (if (h.optString("cc").isNotBlank()) " · cc ${h.optString("cc")}" else ""), 11.5f, Ui.MUTED))
+                    if (h.optString("lines").isNotBlank()) k.addView(Ui.text(c, h.optString("lines"), 11.5f, Ui.MUTED))
+                    if (!done) {
+                        val row = Ui.row(c)
+                        lateinit var y: TextView; lateinit var n: TextView
+                        y = Ui.chip(c, "✓ yes", false) { verdict[id] = true; y.setTextColor(Ui.GOOD); n.setTextColor(Ui.MUTED) }
+                        n = Ui.chip(c, "✗ no", false) { verdict[id] = false; n.setTextColor(Ui.BAD); y.setTextColor(Ui.MUTED) }
+                        row.addView(y, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6))); row.addView(n, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT))
+                        k.addView(row, Ui.lp(top = Ui.dp(c, 4)))
+                    }
+                }
+                if (!done) {
+                    val note = Ui.input(c, "anything to add? e.g. “only formal approval requests”", false)
+                    k.addView(note, Ui.lp(top = Ui.dp(c, 8)))
+                    k.addView(Ui.button(c, "Continue →", true) {
+                        val yes = JSONArray(); val no = JSONArray(); verdict.forEach { (id, v) -> if (v) yes.put(id) else no.put(id) }
+                        it.put("sent", true); agBusy = true; show("agent")
+                        agCall(JSONObject().put("sid", agSid).put("seen", agSeen).put("confirm", JSONObject().put("yes", yes).put("no", no).put("note", note.text.toString())))
+                    }, Ui.lp(top = Ui.dp(c, 6)))
+                } else k.addView(Ui.text(c, "✓ sent to your PC", 12f, Ui.MUTED), Ui.lp(top = Ui.dp(c, 4)))
+                body.addView(k, Ui.lp(top = Ui.dp(c, 8)))
+            }
+            "result" -> {
+                val r = it.optJSONObject("r") ?: return
+                body.addView(Ui.text(c, r.optString("text"), 14f, Ui.TEXT), Ui.lp(top = Ui.dp(c, 8)))
+                if (r.optString("note").isNotBlank()) body.addView(Ui.text(c, r.optString("note"), 12f, 0xFFFFB547.toInt()))
+                val cols = r.optJSONArray("columns") ?: JSONArray(); val rows = r.optJSONArray("rows") ?: JSONArray()
+                val tsv = StringBuilder((0 until cols.length()).joinToString("\t") { i -> cols.optString(i) }).append('\n')
+                for (i in 0 until rows.length()) {
+                    val cells = rows.getJSONObject(i).optJSONArray("cells") ?: JSONArray()
+                    val k = Ui.card(c)
+                    for (j in 0 until cells.length()) {
+                        val v = cells.optString(j)
+                        val col = when { v.contains("⏳") || v.contains("no reply", true) || v.contains("no response", true) -> 0xFFFFB547.toInt(); v.contains("✅") || v.contains("replied", true) -> Ui.GOOD; else -> if (j == 0) Ui.TEXT else Ui.MUTED }
+                        k.addView(Ui.text(c, (if (j > 0 && j < cols.length()) cols.optString(j) + ": " else "") + v, if (j == 0) 13.5f else 12.5f, col, j == 0))
+                    }
+                    body.addView(k, Ui.lp(top = Ui.dp(c, 6)))
+                    tsv.append((0 until cells.length()).joinToString("\t") { j -> cells.optString(j) }).append('\n')
+                }
+                val br = Ui.row(c)
+                if (rows.length() > 0) br.addView(Ui.smallButton(c, "⧉ Copy the table (${rows.length()} rows)") { Ui.copy(c, tsv.toString()); Ui.toast(c, "Copied — paste it in Excel or an email") }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 8)))
+                body.addView(br, Ui.lp(top = Ui.dp(c, 6)))
+                body.addView(Ui.text(c, "by ${r.optString("by")} · also in Nova Chat on your PC (⬇ CSV there)", 11.5f, Ui.MUTED))
+            }
+            "error" -> body.addView(Ui.text(c, "⚠ " + it.optString("text"), 13f, Ui.BAD), Ui.lp(top = Ui.dp(c, 8)))
+        }
+    }
+
+    /** 🧠 The brain from your PC, read-only, with 🧪 tested ✓ on each rule. */
+    private fun brainView() {
+        val v = PcLink.json(this, "brain.json")?.let { runCatching { JSONObject(it).optJSONArray("brainView") }.getOrNull() }
+        if (v == null || v.length() == 0) { Ui.toast(this, "Not received yet — update from your PC"); return }
+        val sb = android.text.SpannableStringBuilder()
+        var tested = 0; var all = 0
+        for (i in 0 until v.length()) {
+            val s = v.getJSONObject(i)
+            sb.append("\n").append(s.optString("name").uppercase()).append("\n")
+            val rules = s.optJSONArray("rules") ?: JSONArray()
+            for (j in 0 until rules.length()) {
+                val r = rules.getJSONObject(j); all++
+                val t = r.optJSONObject("tested"); if (t != null) tested++
+                sb.append("${r.optString("id")}  ${if (t != null) "🧪✓" else "○"}  ${r.optString("title")}${if (r.optBoolean("off")) " (off)" else ""}\n   ${r.optString("text")}\n")
+                if (t != null) sb.append("   🧪 tested ${t.optString("when")} · ${t.optInt("yes")} ✓\n")
+            }
+        }
+        val tv = Ui.text(this, sb.toString(), 12.5f, Ui.TEXT).apply { setTextIsSelectable(true); setPadding(Ui.dp(this@MyPcActivity, 16), 0, Ui.dp(this@MyPcActivity, 16), 0) }
+        android.app.AlertDialog.Builder(this).setTitle("🧠 Nova Brain · $tested of $all tested")
+            .setView(android.widget.ScrollView(this).apply { addView(tv) }).setPositiveButton("OK", null).show()
     }
 
     private fun projectChips() {

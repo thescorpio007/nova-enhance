@@ -74,7 +74,7 @@ static class Ai
         ("vision", "🖼 Reading images & scans", "OCR, drawings", "default"),
         ("brief", "☀ Morning brief", "", "default"),
         ("chat", "✦ Nova Chat · ✦ Prompts", "", "default"),
-        ("brain", "🧠 Nova Brain chat · rules", "", "default")
+        ("brain", "🧠 Nova Brain chat · trainer · 🧪 tests", "the strongest AI: it writes your rules", "cloud")
     };
 
     /// <summary>default · local · localfirst · or an AI id (gemini, claude, chatgpt…).</summary>
@@ -82,6 +82,7 @@ static class Ai
     {
         var v = Store.Str("win_aifor_" + key, "");
         if (v.Length == 0 && key == "vision" && VisionBy == "local") return "local";
+        if (v.Length == 0 && key == "brain") return "cloud";   // 🧠 the trainer writes your rules: the strongest (cloud) AI by default
         return v.Length == 0 ? "default" : v;
     }
 
@@ -126,6 +127,8 @@ static class Ai
         if (string.IsNullOrEmpty(f) || picked.Value) return p ?? Current();
         var c = ChoiceOf(f);
         if (c == "default") return p ?? Current();
+        // ☁ The strongest cloud AI with a key (your default unless it is the local one) — never local.
+        if (c == "cloud") return CloudBackup() ?? p ?? Current();
         if (c is "local" or "localfirst")
         {
             if (HasKey("local")) return ById("local");

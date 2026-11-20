@@ -30,17 +30,32 @@ table{width:100%;border-collapse:collapse;font-size:12.3px}th{background:#232A3A
 #toast{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);background:#232A3A;border:1px solid #3A4256;border-radius:10px;padding:8px 16px;display:none}
 #busy2{color:#B9B0FF;font-size:12px;min-height:16px}
 select{background:#232A3A;color:#ECEEF3;border:0;border-radius:6px;padding:4px 8px}
+button.testb{background:#F5B83D;color:#1A1300;font-weight:700;border-color:#F5B83D}
+button:disabled{opacity:.38;cursor:not-allowed}
+.opts{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.opts button{white-space:normal;text-align:left}
+.tbox{background:#10131B;border:1px solid #2E3448;border-radius:10px;padding:9px 10px;margin-top:8px;white-space:normal}
+.tbox textarea.tq{width:100%;min-height:38px;background:#1A1E28;color:#E6E8EE;border:1px solid #2A3040;border-radius:7px;padding:6px 8px;font:inherit;font-size:12.5px}
+.ba{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0}.side{background:#0B0E14;border-radius:8px;padding:7px 8px;font-size:12px;max-height:260px;overflow:auto}.side b{display:block;margin-bottom:4px}
+.side .r{padding:2px 0;border-bottom:1px solid #1A1F2B}.side .r.plus{color:#3DDC97}.side .r.minus{color:#FF8A8A}.side .txt{white-space:pre-wrap;line-height:1.45}
+.exr{display:grid;grid-template-columns:auto auto 1fr;gap:6px;align-items:start;padding:5px 0;border-bottom:1px solid #1E2433;font-size:12.5px}.exr .s{font-weight:600}.exr button{padding:2px 9px}.exr button.on{background:#7C6CFF;color:#fff}
+.checks{font-size:12.5px;line-height:1.7;margin:6px 0}.chg{color:#FFD27A}
+.verdict{border-radius:8px;padding:6px 10px;font-weight:700;margin-top:6px;font-size:13px}.verdict:empty{display:none}.verdict.passed{background:#12301F;color:#3DDC97;border:1px solid #1F5C38}.verdict.weak{background:#3A3016;color:#FFB547;border:1px solid #6A5520}.verdict.blocked{background:#3A1A1D;color:#FF8A8A;border:1px solid #6A2A30}
+.tbadge{font-size:11px;color:#6B7385;white-space:nowrap}.tbadge.yes{color:#3DDC97}
+.hk{background:#1B2030;border:1px solid #2A3040;border-radius:9px;padding:5px 14px;min-width:96px}.hk b{font-size:18px;display:block}
+.lesson{background:#1E1B33;border:1px solid #4A42A0;border-radius:9px;padding:7px 10px;margin:6px 0;display:flex;gap:10px;align-items:center;justify-content:space-between;font-size:12.5px}.lesson.bad2{background:#2A1416;border-color:#6A2A30}
+.msg .by{margin-top:4px}
 </style>
 </head>
 <body>
 <div id="top"><b class="t">🧠 Nova Brain</b><span id="pill"></span><span class="muted small" id="meta"></span><span class="grow"></span>
-  <button id="bBackup">💾 Back up now</button><button id="bVers">🕘 Versions &amp; backups</button><button id="bLock">🔒 Lock</button></div>
+  <button id="bHealth">🩺 Health check</button><button id="bBackup">💾 Back up now</button><button id="bVers">🕘 Versions &amp; backups</button><button id="bLock">🔒 Lock</button></div>
 <div id="cols">
   <div id="secsWrap" data-split="left" data-col="0" data-min="180" data-max="520" style="border-right:1px solid #232836;overflow:auto"><div id="secs"></div></div>
   <div id="mid"></div>
   <div id="chat" data-split="right" data-col="2" data-min="300" data-max="900">
-    <b>💬 Talk to the brain</b>
-    <div class="muted small" style="margin:2px 0 8px">tell it in your own words · it proposes the exact change · nothing changes without ✓ Apply</div>
+    <div class="row"><b>🎓 Talk to the brain · trainer</b><span class="grow"></span><button id="bClear" title="start a new conversation (the rules stay)">✚ New</button></div>
+    <div class="muted small" style="margin:2px 0 8px">tell it in your own words · it checks your real emails, asks when unclear, proposes the exact change · 🧪 TEST → ✓ Apply</div>
+    <div id="lessons"></div>
     <div id="msgs2"></div>
     <div id="busy2"></div>
     <div style="background:#181C24;border:1px solid #2E3546;border-radius:10px;padding:6px 8px;margin-top:6px">
@@ -52,6 +67,7 @@ select{background:#232A3A;color:#ECEEF3;border:0;border-radius:6px;padding:4px 8
 <div id="lock" class="hide"><div class="box" id="lockBox"></div></div>
 <div id="toast"></div>
 <script src="colresize.js"></script>
+<script src="thinking.js"></script>
 <script src="brain.js"></script>
 <script src="split.js"></script>
 </body>

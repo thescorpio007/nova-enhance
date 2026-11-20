@@ -1265,11 +1265,12 @@ class SettingsForm : NovaForm
         var stat = page.Add(Th.L($"🖥 Local AI: {(Ai.HasKey("local") ? Ai.LocalName + " · " + Ai.LocalUrl + " · checking…" : "not set up (AI & API keys → Local AI)")}   ·   ✦ Default AI: {Ai.LabelOf(def)}", 10, Th.Text));
         bool up = false;
         var now = new List<(string Key, Label L)>();
-        string Name(string c) => c switch { "default" => "✦ Default AI", "local" => "🖥 Local AI", "localfirst" => "🖥 Local first", _ => Ai.ById(c).Label };
+        string Name(string c) => c switch { "default" => "✦ Default AI", "cloud" => "☁ Strongest cloud AI", "local" => "🖥 Local AI", "localfirst" => "🖥 Local first", _ => Ai.ById(c).Label };
         string Uses(string key)
         {
             var c = Ai.ChoiceOf(key);
             if (c == "default") return Ai.LabelOf(def);
+            if (c == "cloud") return def != null && def.Id != "local" ? Ai.LabelOf(def) : "☁ your cloud AI";
             if (c is "local" or "localfirst") return !Ai.HasKey("local") ? $"⚠ {Ai.LabelOf(def)} · local AI not set up" : up ? Ai.LabelOf(Ai.ById("local")) : $"⚠ {Ai.LabelOf(def)} · local AI not available";
             return Ai.HasKey(c) ? Ai.LabelOf(Ai.ById(c)) : $"⚠ {Ai.LabelOf(def)} · {Ai.ById(c).Label} has no key";
         }
@@ -1285,7 +1286,7 @@ class SettingsForm : NovaForm
         bar.Controls.Add(Th.B("✦ Default AI for everything", () => { foreach (var f in Ai.Features) Ai.SetChoice(f.Key, "default"); Draw("⚙ AI for each feature"); }));
         page.Add(Th.Check($"Try to start {Ai.LocalName} first (20–60 s) before using the default AI", Ai.LocalAutoStart, v => Ai.LocalAutoStart = v));
         page.Add(Th.Section("Feature · AI · recommended · right now it uses"));
-        var options = new List<string> { "default", "local", "localfirst" };
+        var options = new List<string> { "default", "cloud", "local", "localfirst" };
         options.AddRange(Ai.All.Where(p => p.Id != "local" && Ai.HasKey(p.Id)).Select(p => p.Id));
         foreach (var f in Ai.Features)
         {

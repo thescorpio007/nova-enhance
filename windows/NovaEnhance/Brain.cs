@@ -139,7 +139,27 @@ static class Brain
     }
 
     /// <summary>A copy of the brain (for showing or changing without touching the real one).</summary>
-    public static JsonObject Snapshot() { lock (L) return (data ?? Defaults()).DeepClone().AsObject(); }
+    public static JsonObject Snapshot() { if (Override.Value is { } o) return o.DeepClone().AsObject(); lock (L) return (data ?? Defaults()).DeepClone().AsObject(); }
+
+    /// <summary>🧪 TEST: inside this async flow every part of Nova reads this brain instead of the real one (nothing is saved).</summary>
+    public static readonly AsyncLocal<JsonObject> Override = new();
+
+    /// <summary>For the phone: every rule with its id, title and 🧪 test mark (read-only view).</summary>
+    public static JsonArray ViewForPhone()
+    {
+        var a = new JsonArray();
+        foreach (var sec in (Snapshot()["sections"] as JsonArray ?? new JsonArray()).OfType<JsonObject>())
+            a.Add(new JsonObject
+            {
+                ["name"] = ((sec["icon"]?.ToString() ?? "") + " " + sec["name"]).Trim(),
+                ["rules"] = new JsonArray((sec["rules"] as JsonArray ?? new JsonArray()).OfType<JsonObject>().Select(r => (JsonNode)new JsonObject
+                {
+                    ["id"] = r["id"]?.ToString(), ["title"] = r["title"]?.ToString(), ["text"] = SetRx.Replace(r["text"]?.ToString() ?? "", m => m.Value).Trim(),
+                    ["off"] = r["off"]?.GetValue<bool>() == true, ["tested"] = r["tested"]?.DeepClone()
+                }).ToArray())
+            });
+        return a;
+    }
 
     /// <summary>Replaces the brain with a changed copy: version +1, history line, saved, version file written.</summary>
     public static int Commit(JsonObject changed, string by, string summary)

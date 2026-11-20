@@ -373,6 +373,61 @@ RULES
         return res;
     }
 
+    /// <summary>One of the agent's data tools, for the 🧠 Brain trainer (emails · thread · followup · log).</summary>
+    public static async Task<string> Tool(string name, JsonObject args, Session s, Action<string> detail, CancellationToken ct) => name switch
+    {
+        "emails" => await Task.Run(() => ToolEmails(args, s), ct),
+        "thread" => await Task.Run(() => ToolThread(args, s), ct),
+        "followup" => await Task.Run(() => ToolFollowup(args, s, detail, ct), ct),
+        "log" => await Task.Run(() => ToolLog(args, s, ct), ct),
+        _ => "unknown tool " + name
+    };
+
+    public static string Clip(string s, int n) => Short(s, n);
+
+    // ------------------------------------------------------------------ 🎓 what you rejected (✗), for the Brain trainer
+
+    public static class Feedback
+    {
+        static string FilePath => Path.Combine(Paths.Root, "Rules", "agent-feedback.jsonl");
+        static readonly Regex TypeRx = new(@"-(WIR|MIR|MAR|MSS|SDS|SSM|PQS|RFI|TSR|LTR|EI|MOM|RPT|HSE|NCR|SOR|VO|PAY|DSR|PLN|HOV|RTS|CAL|AUTH)-", RegexOptions.IgnoreCase);
+
+        public static void Rejected(List<MailHit> no, string question, string note)
+        {
+            if (no.Count == 0 || AdminLock.InSandbox) return;
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+                var lines = no.Select(h => new JsonObject
+                {
+                    ["at"] = DateTime.Now.ToString("s"), ["type"] = TypeRx.Match(h.Subject ?? "") is { Success: true } m ? m.Groups[1].Value.ToUpperInvariant() : "",
+                    ["dom"] = Dom(h.FromAddr), ["subject"] = Short(h.Subject, 120), ["q"] = Short(question, 120), ["note"] = Short(note, 160)
+                }.ToJsonString());
+                File.AppendAllLines(FilePath, lines);
+            }
+            catch (Exception e) { Log.Warn("agent feedback", e.Message); }
+        }
+
+        /// <summary>Patterns in what you rejected in the last 30 days (a type or a sender's company, 3 times or more).</summary>
+        public static List<(string What, int Count, string Teach)> Patterns()
+        {
+            var res = new List<(string, int, string)>();
+            try
+            {
+                if (!File.Exists(FilePath)) return res;
+                var since = DateTime.Now.AddDays(-30);
+                var rows = File.ReadAllLines(FilePath).Select(l => { try { return JsonNode.Parse(l)?.AsObject(); } catch { return null; } })
+                    .Where(o => o != null && DateTime.TryParse(o["at"]?.ToString(), out var d) && d > since).ToList();
+                foreach (var g in rows.GroupBy(o => o!["type"]?.ToString() ?? "").Where(g => g.Key.Length > 0 && g.Count() >= 3))
+                    res.Add(($"{g.Key} items", g.Count(), $"In the agent's examples I rejected {g.Key} items {g.Count()} times (e.g. “{g.First()!["subject"]}”). Teach Nova to leave {g.Key} out of these searches unless I ask for them."));
+                foreach (var g in rows.GroupBy(o => o!["dom"]?.ToString() ?? "").Where(g => g.Key.Length > 3 && g.Count() >= 3))
+                    res.Add(($"emails from {g.Key}", g.Count(), $"In the agent's examples I rejected emails from {g.Key} {g.Count()} times (e.g. “{g.First()!["subject"]}”). Teach Nova how to treat {g.Key} in these searches."));
+            }
+            catch { }
+            return res;
+        }
+    }
+
     static async Task<string> Ask(List<long> ids, string question, Session s, Host host)
     {
         var ex = ids.Select(i => s.Seen.TryGetValue(i, out var h) ? h : null).Where(h => h != null).ToList();
@@ -381,6 +436,7 @@ RULES
         var r = await host.Confirm(question, ex);
         if (r == null) return null;
         var (yes, no, note) = r.Value;
+        Feedback.Rejected(no.Select(i => s.Seen.TryGetValue(i, out var h) ? h : null).Where(h => h != null).ToList(), question, note);   // 🎓 the Brain trainer learns from your ✗
         return $"The user checked the examples: ✓ match: {string.Join(", ", yes.Select(i => "#" + i))}; ✗ not what I mean: {string.Join(", ", no.Select(i => "#" + i))}" +
                (string.IsNullOrWhiteSpace(note) ? "" : "; the user says: " + note);
     }

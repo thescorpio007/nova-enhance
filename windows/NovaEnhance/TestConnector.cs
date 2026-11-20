@@ -142,7 +142,7 @@ static class TestConnector
             "submittal" => $"run the 📋 Submittal log ({S(req, "types", "all types")} · {S(req, "project", "all projects")} · last {S(req, "days", "30")} days)",
             "projects" => "read your 📁 projects list and the projects found in your emails",
             "brain_read" => "read the 🧠 Nova Brain rules" + (S(req, "section").Length > 0 ? $" (section {S(req, "section")})" : ""),
-            "brain_update" => "PROPOSE changes to the 🧠 Nova Brain (you will see each change and approve it separately)",
+            "brain_update" => "PROPOSE changes to the 🧠 Nova Brain (shown in the Brain window; applied only after your 🧪 TEST passes and ✓ Apply)",
             _ => tool
         };
         try
@@ -391,20 +391,8 @@ static class TestConnector
                 if (!Brain.Unlocked) throw new Exception("the 🧠 Nova Brain is locked on the PC — open it first");
                 var changes = a["changes"] as JsonArray ?? throw new Exception("changes is missing");
                 var summary = S(a, "summary");
-                var before = Brain.Snapshot();
-                var (after, said) = Brain.Apply(before, changes, "Claude · connector");
-                var diff = Brain.Diff(before, after);
-                if (diff.Count == 0) { sb.AppendLine("No rule would change."); break; }
-                var text = string.Join("\n", diff.OfType<JsonObject>().Select(d => d["op"]?.ToString() switch
-                {
-                    "remove" => $"− {d["id"]}  {d["old"]}",
-                    "change" => $"✎ {d["id"]}  {d["text"]}\n      (was: {d["old"]})",
-                    _ => $"+ {d["id"]}  {d["text"]}   ({d["section"]})"
-                }));
-                var ok = await ApproveBrain(summary, text);
-                if (!ok) { sb.AppendLine("✗ Declined on the PC — nothing changed."); break; }
-                var v = Brain.Commit(after, "Claude · connector ✓ you", (summary.Length > 0 ? summary + " · " : "") + said);
-                sb.AppendLine($"✓ Applied on the PC · version {v} · {said}");
+                // 🧪 Like every proposal: shown in the 🧠 Brain window, applied only after your TEST passes and ✓ Apply.
+                sb.AppendLine(BrainTrainer.QueueFromConnector(changes, summary));
                 break;
             }
             default: throw new Exception("unknown tool " + tool);

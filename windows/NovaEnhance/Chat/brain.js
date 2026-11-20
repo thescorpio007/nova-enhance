@@ -61,6 +61,7 @@
   }
   function drawMid() {
     if (view === "versions") return drawVersions();
+    if (view === "health") return drawHealth();
     var box = $("mid"); box.innerHTML = "";
     var s = sections().filter(function (x) { return x.id === cur; })[0] || sections()[0];
     if (!s) return;
@@ -87,7 +88,10 @@
       } else {
         var c2 = el("div"); var t = el("div"); if (r.title) t.appendChild(el("b", null, r.title + " · ")); t.appendChild(document.createTextNode(r.text || "")); c2.appendChild(t);
         c2.appendChild(el("div", "by", (r.by || "") + (r.when ? " · " + when(r.when) : "")));
-        d.appendChild(c2); d.appendChild(el("span"));
+        d.appendChild(c2);
+        var tb = el("span", "tbadge" + (r.tested ? " yes" : ""), r.tested ? "🧪 tested ✓" : "○ untested");
+        tb.title = r.tested ? "passed " + r.tested.when + " · “" + (r.tested.q || "") + "” · " + r.tested.yes + " ✓ · +" + r.tested.plus + " / −" + r.tested.minus : "not tested yet (rules from before 🧪 TEST, the built-in ones and your own edits)";
+        d.appendChild(tb);
       }
       card.appendChild(d);
     });
@@ -172,49 +176,179 @@
     return d;
   }
 
-  // ---------------------------------------------------------------- 💬 chat
+  // ---------------------------------------------------------------- 🎓 the trainer (talk to the brain)
   function addMsg(cls, text) { var m = el("div", "msg " + cls, text); $("msgs2").appendChild(m); $("msgs2").scrollTop = 1e9; return m; }
-  function send() {
-    var t = $("ask").value.trim(); if (!t) return;
-    addMsg("me", t); history.push({ role: "user", text: t }); $("ask").value = "";
-    post({ t: "ask", text: t, history: history.slice(0, -1) });
-  }
+  function say(t) { if (!t) return; addMsg("me", t); post({ t: "ask", text: t }); }
+  function send() { var t = $("ask").value.trim(); if (!t) return; $("ask").value = ""; say(t); }
   $("send").onclick = send;
   $("ask").onkeydown = function (e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } };
 
-  function drawAnswer(m) {
-    var a = addMsg("ai", m.reply);
-    history.push({ role: "brain", text: m.reply });
-    if (m.conflict) a.appendChild(el("div", "chg", "⚠ " + m.conflict));
-    if (!m.changes || !m.changes.length) return;
-    a.appendChild(diffBox(m.diff));
-    var res = el("div", "small"); a.appendChild(res);
-    var bar = el("div", "row"); bar.style.marginTop = "6px";
-    bar.appendChild(btn("✓ Apply", true, function () { post({ t: "apply", changes: m.changes, summary: "" }); bar.remove(); res.textContent = "✓ applied"; }));
-    bar.appendChild(btn("✎ Edit", false, function () {
-      bar.remove();
-      var ed = el("div", "edit");
-      m.changes.forEach(function (c) { var tx = el("textarea"); tx.value = c.text || ""; tx.oninput = function () { c.text = tx.value; }; ed.appendChild(el("div", "id", (c.op || "") + " " + (c.id || "") + " · " + (c.section || ""))); if (c.op !== "remove") ed.appendChild(tx); });
-      ed.appendChild(btn("✓ Apply as edited", true, function () { post({ t: "apply", changes: m.changes }); ed.remove(); res.textContent = "✓ applied"; }));
-      a.appendChild(ed);
-    }));
-    if (m.testable) {
-      bar.appendChild(btn("🧪 Test (30 days)", false, function () { pendingTest = res; post({ t: "test", changes: m.changes, days: 30 }); }));
-      bar.appendChild(btn("90 days", false, function () { pendingTest = res; post({ t: "test", changes: m.changes, days: 90 }); }));
-    }
-    bar.appendChild(btn("✗ Cancel", false, function () { bar.remove(); res.textContent = "cancelled — nothing changed"; }));
-    a.appendChild(bar);
-    a.appendChild(el("div", "muted small", "Applying saves a new version first — ↩ undo anytime in Versions."));
+  // ● ● ● the work card (trainer steps · test · health)
+  var wk = null;
+  function work(title) {
+    var holder = el("div"); $("msgs2").appendChild(holder);
+    wk = window.Thinking ? Thinking.start(holder, title + "…", { onStop: function () { post({ t: "stop" }); } }) : null;
+    $("msgs2").scrollTop = 1e9;
   }
-  var pendingTest = null;
-  function drawTest(m) {
-    var box = pendingTest || addMsg("ai", ""); box.innerHTML = "";
-    box.appendChild(el("div", null, "🧪 Last " + m.days + " days (" + m.total + " items): " + m.changed + " change · " + m.toClosed + " become Closed · " + m.fromClosed + " stop being Closed."));
-    if (m.rows.length) {
-      var t = el("table"); var hr = el("tr"); ["Document", "Now", "With the new rule"].forEach(function (x) { hr.appendChild(el("th", null, x)); }); t.appendChild(hr);
-      m.rows.forEach(function (r) { var tr = el("tr"); tr.title = r.why; tr.appendChild(el("td", "id", r.no)); tr.appendChild(el("td", null, r.now)); tr.appendChild(el("td", null, r.then)); t.appendChild(tr); });
-      box.appendChild(t); if (window.ColResize) ColResize.attach(t, "brain.test");
+
+  var cards = {}, nCard = 0;
+  function drawAnswer(m) {
+    var a = addMsg("ai", m.reply || "");
+    if (m.kind === "ask" && m.options && m.options.length) {
+      var ob = el("div", "opts");
+      m.options.forEach(function (o) { ob.appendChild(btn(String(o), false, function () { ob.querySelectorAll("button").forEach(function (b) { b.disabled = true; }); say(String(o)); })); });
+      a.appendChild(ob);
+      a.appendChild(el("div", "muted small", "pick one, or type your own answer below"));
     }
+    if (m.kind !== "propose" || !m.changes || !m.changes.length) { if (m.by) a.appendChild(el("div", "by", "by " + m.by)); return; }
+    if (m.why) a.appendChild(el("div", "muted small", "Why: " + m.why));
+    if (m.conflict) a.appendChild(el("div", "chg", "⚠ " + m.conflict));
+    var id = "c" + (++nCard);
+    var c = cards[id] = { m: m, a: a, test: "", edited: false };
+    c.diffEl = diffBox(m.diff); a.appendChild(c.diffEl);
+    var ck = m.checks || {};
+    (ck.duplicates || []).forEach(function (x) { a.appendChild(el("div", "bad small", "⛔ " + x.why)); });
+    (ck.vague || []).concat(ck.syntax || []).forEach(function (x) { a.appendChild(el("div", "chg small", "⚠ " + x)); });
+    var bar = el("div", "row"); bar.style.marginTop = "6px"; bar.style.flexWrap = "wrap"; c.bar = bar;
+    c.testBtn = btn("🧪 TEST", false, function () { runTest(id); }); c.testBtn.className = "testb";
+    c.apply = btn("✓ Apply", true, function () { if (c.apply.disabled) return; post({ t: "apply", changes: m.changes, test: c.test, summary: "" }); bar.remove(); c.res.textContent = "✓ applied (a version is saved with its test)"; });
+    c.apply.disabled = true; c.apply.title = "🔒 opens after a passed 🧪 TEST";
+    bar.appendChild(c.testBtn); bar.appendChild(c.apply);
+    bar.appendChild(btn("✎ Edit", false, function () { editCard(id); }));
+    bar.appendChild(btn("✗ Cancel", false, function () { bar.remove(); c.res.textContent = "cancelled — nothing changed"; }));
+    a.appendChild(bar);
+    c.res = el("div", "muted small", "🔒 ✓ Apply opens after a passed test · the test saves nothing"); a.appendChild(c.res);
+    c.tq = m.testQuestion || "";
+    if (m.by) a.appendChild(el("div", "by", "by " + m.by));
+  }
+  function lockApply(c, why) { c.apply.disabled = true; c.test = ""; c.res.textContent = why || "🔒 ✓ Apply opens after a passed test"; }
+  function editCard(id) {
+    var c = cards[id]; if (c.ed) return;
+    var ed = c.ed = el("div", "edit");
+    c.m.changes.forEach(function (ch) { var tx = el("textarea"); tx.value = ch.text || ""; tx.oninput = function () { ch.text = tx.value; lockApply(c, "✎ edited — 🧪 test again"); }; ed.appendChild(el("div", "id", (ch.op || "") + " " + (ch.id || "") + " · " + (ch.section || ""))); if (ch.op !== "remove") ed.appendChild(tx); });
+    c.a.insertBefore(ed, c.bar);
+  }
+  function runTest(id) {
+    var c = cards[id]; lockApply(c, "🧪 testing…");
+    pendingCard = id;
+    post({ t: "test", changes: c.m.changes, question: c.tq, kind: c.m.kindOf || "", card: id });
+  }
+  var pendingCard = null;
+  function drawTest(m) {
+    var c = cards[m.card]; if (!c) return;
+    if (c.tbox) c.tbox.remove();
+    var b = c.tbox = el("div", "tbox");
+    b.appendChild(el("b", null, "🧪 Test · " + (m.kind === "writing" ? "a sample text" : m.kind === "log" ? "the 📋 log + a search" : "a search")));
+    var qr = el("div", "row"); var q = el("textarea", "tq"); q.value = m.question; q.rows = 2; q.oninput = function () { c.tq = q.value; };
+    qr.appendChild(q); b.appendChild(el("div", "muted small", "test question (change it and 🧪 test again):")); b.appendChild(qr);
+    // before | after
+    var ba = el("div", "ba");
+    function side(title, x) {
+      var col = el("div", "side"); col.appendChild(el("b", null, title));
+      if (m.kind === "writing") col.appendChild(el("div", "txt", (x && x.text) || ""));
+      else {
+        (x.rows || []).forEach(function (r) { col.appendChild(el("div", "r " + (r.mark || ""), (r.mark === "plus" ? "➕ " : r.mark === "minus" ? "➖ " : "") + (r.cells || []).join(" · "))); });
+        if (!(x.rows || []).length) col.appendChild(el("div", "muted small", Agent0(x.text)));
+      }
+      return col;
+    }
+    function Agent0(t) { return (t || "(nothing found)").slice(0, 300); }
+    ba.appendChild(side("Your brain now" + (m.kind === "writing" ? "" : " · " + ((m.before && m.before.rows) || []).length + " found"), m.before || {}));
+    ba.appendChild(side("With the new rule" + (m.kind === "writing" ? "" : " · " + ((m.after && m.after.rows) || []).length + " found"), m.after || {}));
+    b.appendChild(ba);
+    if (m.log) {
+      b.appendChild(el("div", "small", "📋 log, last " + m.log.days + " days: " + m.log.changed + " of " + m.log.total + " items change status"));
+      if (m.log.rows && m.log.rows.length) {
+        var t = el("table"); var hr = el("tr"); ["Document", "Now", "With the new rule"].forEach(function (x) { hr.appendChild(el("th", null, x)); }); t.appendChild(hr);
+        m.log.rows.forEach(function (r) { var tr = el("tr"); tr.title = r.why; tr.appendChild(el("td", "id", r.no)); tr.appendChild(el("td", null, r.now)); tr.appendChild(el("td", null, r.then)); t.appendChild(tr); });
+        b.appendChild(t);
+      }
+    }
+    // ✓ / ✗
+    b.appendChild(el("b", "small", "✓ / ✗ — are these right?"));
+    var verdict = {};
+    (m.examples || []).forEach(function (h) {
+      var r = el("div", "exr"), y = el("button", null, "✓"), n = el("button", null, "✗");
+      y.onclick = function () { verdict[h.id] = true; y.className = "on"; n.className = ""; };
+      n.onclick = function () { verdict[h.id] = false; n.className = "on"; y.className = ""; };
+      var tx = el("div"); tx.appendChild(el("div", "s", h.subject || "")); tx.appendChild(el("div", "muted small", [h.date, h.from ? "from " + h.from : "", h.to ? "to " + h.to : ""].filter(Boolean).join(" · ")));
+      if (h.lines) tx.appendChild(el("div", "muted small", h.lines));
+      if (h.entry) { tx.style.cursor = "pointer"; tx.title = "open in Outlook"; tx.onclick = function () { post({ t: "open", entry: h.entry, store: h.store }); }; }
+      r.appendChild(y); r.appendChild(n); r.appendChild(tx); b.appendChild(r);
+    });
+    // checks
+    var ck = m.checks || {}, cl = el("div", "checks");
+    if (!(ck.contradictions || []).length) cl.appendChild(el("div", "ok", "✓ No contradiction with your rules"));
+    (ck.contradictions || []).forEach(function (x) { cl.appendChild(el("div", "bad", "⛔ Contradiction · " + (x.why || x))); });
+    if (!(ck.duplicates || []).length) cl.appendChild(el("div", "ok", "✓ Not a duplicate"));
+    (ck.duplicates || []).forEach(function (x) { cl.appendChild(el("div", "bad", "⛔ Duplicate · " + (x.why || x))); });
+    (ck.weak || []).forEach(function (x) { cl.appendChild(el("div", "chg", "⚠ " + x)); });
+    if (ck.better) cl.appendChild(el("div", "muted small", "💡 Suggested wording: " + ck.better));
+    b.appendChild(cl);
+    var vb = el("div", "row"); vb.style.flexWrap = "wrap";
+    vb.appendChild(btn("✔ Confirm my ✓ / ✗", true, function () {
+      var yes = 0, no = 0; Object.keys(verdict).forEach(function (k) { if (verdict[k]) yes++; else no++; });
+      post({ t: "verdict", id: m.id, yes: yes, no: no, card: m.card });
+    }));
+    if (ck.better) vb.appendChild(btn("✎ Use the suggested wording", false, function () {
+      var ch = c.m.changes.filter(function (x) { return x.op !== "remove"; })[0]; if (!ch) return;
+      ch.text = ck.better; c.a.replaceChild(c.diffEl = diffBox([{ op: ch.op === "change" ? "change" : "add", id: ch.id || "(new)", text: ck.better, section: ch.section }]), c.diffEl);
+      if (c.ed) { c.ed.remove(); c.ed = null; } lockApply(c, "✎ new wording — 🧪 test again");
+    }));
+    (ck.duplicates || []).forEach(function (x) { if (x.with) vb.appendChild(btn("⇢ Merge into " + x.with, false, function () { say("Merge this proposal into " + x.with + " instead of adding a new rule: change " + x.with + " so it covers both, then propose it."); })); });
+    vb.appendChild(btn("🧪 Test again", false, function () { runTest(m.card); }));
+    b.appendChild(vb);
+    c.vline = el("div", "verdict"); b.appendChild(c.vline);
+    c.test = m.id; c.apply.disabled = true;
+    c.res.textContent = m.blocking ? "⛔ blocked — fix the problems above first" : "tick ✓ / ✗, then ✔ Confirm — ✓ Apply opens when the test passes";
+    c.a.insertBefore(b, c.bar);
+    b.scrollIntoView({ block: "nearest" });
+  }
+  function drawVerdict(m) {
+    var c = cards[m.card]; if (!c || !c.vline) return;
+    c.vline.className = "verdict " + m.verdict;
+    c.vline.textContent = (m.verdict === "passed" ? "✅ Passed · " : m.verdict === "weak" ? "⚠ Weak · " : "⛔ Blocked · ") + m.why;
+    if (m.verdict === "passed") { c.apply.disabled = false; c.apply.title = ""; c.res.textContent = "✅ tested — ✓ Apply saves a new version with this test · ↩ undo anytime in Versions"; c.testBtn.textContent = "🧪 Test again"; }
+    else lockApply(c, m.verdict === "weak" ? "⚠ weak — sharpen the rule (✎ Edit / suggested wording) and test again" : "⛔ blocked — fix it, then test again");
+    c.test = m.verdict === "passed" ? m.id : "";
+  }
+
+  // ---------------------------------------------------------------- 🩺 health check
+  var health = null;
+  function drawHealth() {
+    var box = $("mid"); box.innerHTML = "";
+    var h = el("div", "row"); h.appendChild(el("b", null, "🩺 Brain health check")).style.fontSize = "16px";
+    h.appendChild(el("span", "grow")); h.appendChild(btn("↻ Check again", false, function () { post({ t: "health" }); })); h.appendChild(btn("← Back to the rules", false, function () { view = "section"; drawSecs(); drawMid(); }));
+    box.appendChild(h);
+    if (!health) { box.appendChild(el("div", "muted", "Checking every rule… (see the steps on the right)")); return; }
+    var sum = el("div", "row"); sum.style.margin = "10px 0";
+    [["✅ strong", health.strong, "ok"], ["⚠ weak", health.weak, "chg"], ["⛔ to fix", health.bad, "bad"], ["○ untested", health.untested, "muted"]].forEach(function (x) { var k = el("div", "hk"); k.appendChild(el("b", x[2], String(x[1]))); k.appendChild(el("span", "muted small", x[0])); sum.appendChild(k); });
+    box.appendChild(sum);
+    (health.lessons || []).forEach(function (l) {
+      var d = el("div", "lesson"); d.appendChild(el("span", null, "🎓 You rejected " + l.what + " " + l.count + " times in the agent's examples. "));
+      d.appendChild(btn("Teach Nova", true, function () { say(l.teach); })); box.appendChild(d);
+    });
+    (health.contradictions || []).forEach(function (c) {
+      if (!c.ids || !c.ids.length) return;
+      var d = el("div", "lesson bad2"); d.appendChild(el("span", null, "⛔ " + c.ids.join(" ↔ ") + ": " + c.why + (c.fix ? " → " + c.fix : "")));
+      d.appendChild(btn("🎓 Fix with the trainer", false, function () { say("Fix the contradiction between " + c.ids.join(" and ") + ": " + c.why + (c.fix ? " Suggested: " + c.fix : "")); })); box.appendChild(d);
+    });
+    var t = el("table"); var hr = el("tr"); ["Rule", "Section", "Strength", "What to fix", ""].forEach(function (x) { hr.appendChild(el("th", null, x)); }); t.appendChild(hr);
+    (health.rows || []).forEach(function (r) {
+      var tr = el("tr"); var td = el("td"); td.appendChild(el("span", "id", r.id)); td.appendChild(el("div", null, r.title || "")); td.title = r.text; tr.appendChild(td);
+      tr.appendChild(el("td", "muted small", r.section)); tr.appendChild(el("td", null, r.badge)); tr.appendChild(el("td", "small", (r.notes || []).join(" · ") || (r.tested ? "passed " + r.tested.when : "")));
+      var a = el("td"); if ((r.notes || []).length) a.appendChild(btn("🎓 Improve", false, function () { say("Improve rule " + r.id + " (" + (r.title || "") + "): " + (r.notes || []).join("; ") + ". Propose the better rule."); }));
+      else if (!r.tested) a.appendChild(btn("🧪 Test it", false, function () { say("Test rule " + r.id + " as it is: propose it unchanged (op change with the same text) with a good test question."); }));
+      tr.appendChild(a); t.appendChild(tr);
+    });
+    box.appendChild(t); if (window.ColResize) ColResize.attach(t, "brain.health");
+    box.appendChild(el("div", "muted small", "checked " + health.at + " · strong = tested and no problem · ⚠ weak = vague, finished project or nothing in 30 days of email · ⛔ = duplicate, contradiction or broken [setting]"));
+  }
+  $("bClear").onclick = function () { $("msgs2").innerHTML = ""; post({ t: "chatClear" }); addMsg("ai", "✚ New conversation — the rules stay as they are. What should Nova learn?"); };
+  $("bHealth").onclick = function () { view = "health"; health = null; drawSecs(); drawMid(); post({ t: "health" }); };
+  function lessonsBar(list) {
+    var lb = $("lessons"); lb.innerHTML = "";
+    (list || []).slice(0, 2).forEach(function (l) { var d = el("div", "lesson"); d.appendChild(el("span", null, "🎓 You rejected " + l.what + " " + l.count + "×. ")); d.appendChild(btn("Teach Nova", true, function () { say(l.teach); d.remove(); })); lb.appendChild(d); });
   }
 
   $("bBackup").onclick = function () { post({ t: "backupNow" }); };
@@ -223,19 +357,30 @@
 
   if (W) W.addEventListener("message", function (ev) {
     var m = ev.data;
-    if (m.t !== "busy") $("busy2").textContent = "";
+    if (m.t !== "busy" && m.t !== "wstep") $("busy2").textContent = "";
     if (m.t === "state") {
       st = m; drawTop(); drawLock();
       if (st.unlocked) {
         if (!history.length && !$("msgs2").children.length) {
-          addMsg("ai", "Hi — I hold " + st.rules + " rules in " + sections().length + " sections. Ask me why Nova did something, or give me a new instruction and I'll show you exactly what changes.\n\nTry: “Why was SLV-ZUC-CW-WIR-15280 marked Closed?” · “For RS5, a reply with -signed.pdf means closed” · “WIRs are overdue after 3 days”.");
+          addMsg("ai", "🎓 Hi — I'm your Brain trainer. I hold " + st.rules + " rules in " + sections().length + " sections. Tell me what Nova should learn: I check your real emails first, ask when something is unclear, and every rule gets a 🧪 TEST before ✓ Apply.\n\nTry: “Why was SLV-ZUC-CW-WIR-15280 marked Closed?” · “For SLV, Omnium reviews before Züblin — teach Nova to track it” · “WIRs are overdue after 3 days”.");
         }
         drawSecs(); drawMid(); if (view === "versions") post({ t: "versions" });
       }
     }
     else if (m.t === "busy") $("busy2").textContent = "⏳ " + m.text;
     else if (m.t === "answer") drawAnswer(m);
-    else if (m.t === "test") drawTest(m);
+    else if (m.t === "work") work(m.title);
+    else if (m.t === "wstep") { if (wk) { if (m.step) wk.step(m.text); else wk.detail(m.text); $("msgs2").scrollTop = 1e9; } }
+    else if (m.t === "wdone") { if (wk) wk.done(); wk = null; }
+    else if (m.t === "wfail") { if (wk) wk.fail(m.text); else toast("⚠ " + m.text); wk = null; }
+    else if (m.t === "test2") drawTest(m);
+    else if (m.t === "verdict") drawVerdict(m);
+    else if (m.t === "health") { health = m; view = "health"; drawSecs(); drawMid(); }
+    else if (m.t === "chatLoad") {
+      if ((m.chat || []).length) $("msgs2").innerHTML = "";
+      (m.chat || []).forEach(function (x) { addMsg(x.role === "user" ? "me" : "ai", x.text); });
+      lessonsBar(m.lessons);
+    }
     else if (m.t === "versions") { vers = m.list || []; if (view === "versions") drawMid(); }
     else if (m.t === "backups") { baks = m.list || []; if (view === "versions") drawMid(); }
     else if (m.t === "diff") { diffOf = m; drawMid(); }
