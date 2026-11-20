@@ -491,6 +491,7 @@ static class Screens
             bool body = false, all = false;
             if (h != IntPtr.Zero && OutlookBody.IsOutlook(h))
             {
+                using var step = UiWatch.Outlook("reading your email for ✦ Enhance");
                 var own = OutlookBody.Read();
                 if (own.Length > 0 && (string.IsNullOrWhiteSpace(text) || Norm(text).StartsWith(Norm(own)) || Norm(text).Length > Norm(own).Length + 20 && Norm(text).Contains(Norm(own))))
                 { text = own; body = true; }
@@ -532,6 +533,7 @@ static class Screens
         if (Program.OffUi(() => MailAsk(h, subjectHint))) return;
         if (mailAsk == null || mailAsk.IsDisposed) mailAsk = new MailAskForm();
         Show(mailAsk);
+        using var step = UiWatch.Outlook("reading the email for 💬 Talk about this email");
         if (h != null) mailAsk.ShowMail(h); else mailAsk.LoadCurrent(subjectHint ?? "");
     }
 

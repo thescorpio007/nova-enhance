@@ -246,6 +246,15 @@ static class UiWatch
 
     public static void Step(string what) => Doing = what;
 
+    /// <summary>Names what the window is waiting for while it talks to Outlook (the freeze log then says which call): <c>using var _ = UiWatch.Outlook("sending");</c></summary>
+    public static IDisposable Outlook(string what)
+    {
+        var prev = Doing;
+        Doing = "Outlook · " + what;
+        return new Back(prev);
+    }
+    sealed class Back : IDisposable { readonly string p; public Back(string p) => this.p = p; public void Dispose() => Doing = p; }
+
     public static void Start()
     {
         var t = new System.Windows.Forms.Timer { Interval = 500 };

@@ -91,6 +91,7 @@ static class AdminLock
     {
         if (!Enabled || !unlocked) return;
         unlocked = false;
+        Alive(false);
         Note("🔐 locked · " + why);
         Program.UiContext?.Post(_ =>
         {
@@ -106,6 +107,7 @@ static class AdminLock
     static void Unlocked()
     {
         unlocked = true; lastUse = DateTime.Now;
+        Alive(true);
         Note("🔓 unlocked");
         foreach (var f in hidden.ToList()) try { if (!f.IsDisposed) f.Show(); } catch { }
         hidden.Clear();
@@ -136,6 +138,23 @@ static class AdminLock
 
     static void Note(string text) { try { using var j = Activity.Begin("🔐 admin lock", text); } catch { } }
 
+    // ------------------------------------------------------------------ kept open across a Guardian restart
+
+    /// <summary>“Open at this moment” (protected by Windows): a restart by the 🛡 Guardian within your idle time keeps Nova open.</summary>
+    static void Alive(bool open)
+    {
+        try { Store.SetSecret("win_admin_alive", open ? DateTime.UtcNow.Ticks.ToString() : ""); } catch { }
+    }
+
+    static DateTime aliveAt = DateTime.MinValue;
+
+    static bool WasOpenJustNow()
+    {
+        if (!long.TryParse(Store.Secret("win_admin_alive"), out var t)) return false;
+        var ago = DateTime.UtcNow - new DateTime(t, DateTimeKind.Utc);
+        return ago >= TimeSpan.Zero && ago < TimeSpan.FromMinutes(IdleMinutes) && IdleMinutesNow() < IdleMinutes;
+    }
+
     // ------------------------------------------------------------------ automatic locking
 
     [StructLayout(LayoutKind.Sequential)] struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
@@ -151,7 +170,9 @@ static class AdminLock
     /// <summary>Started with Nova: locked at start, then on idle, Windows lock and sleep.</summary>
     public static void Start()
     {
-        unlocked = false;
+        // A normal start (or a Windows restart) locks; a crash restart by the Guardian keeps Nova open if you were using it.
+        unlocked = Enabled && Program.Restored && WasOpenJustNow();
+        if (unlocked) { lastUse = DateTime.Now; Note("🔓 still open after the 🛡 Guardian restart"); } else Alive(false);
         SystemEvents.SessionSwitch += (_, e) => { if (e.Reason is SessionSwitchReason.SessionLock or SessionSwitchReason.ConsoleDisconnect or SessionSwitchReason.RemoteDisconnect) Lock("Windows locked"); };
         SystemEvents.PowerModeChanged += (_, e) => { if (e.Mode == PowerModes.Suspend) Lock("sleep"); };
         var t = new System.Windows.Forms.Timer { Interval = 20_000 };
@@ -160,6 +181,7 @@ static class AdminLock
             if (!Enabled || !unlocked) return;
             // Idle = nobody touched the laptop for your idle time.
             if (IdleMinutesNow() >= IdleMinutes) Lock($"{IdleMinutes} min idle");
+            else if (DateTime.Now - aliveAt > TimeSpan.FromSeconds(50)) { aliveAt = DateTime.Now; Alive(true); }   // still in use: a crash restart now keeps Nova open
         };
         t.Start();
     }

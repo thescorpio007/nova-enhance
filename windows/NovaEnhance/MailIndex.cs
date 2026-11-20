@@ -145,6 +145,7 @@ static class Outlook
     {
         // 📂 An email read directly from a .pst file: it opens in Nova's archive reader.
         if (entry != null && entry.StartsWith("pst:")) { Program.UiContext?.Post(_ => Screens.PstReader(entry), null); return; }
+        using var step = UiWatch.Outlook("opening an email");
         dynamic app = Get();
         dynamic ns = app.GetNamespace("MAPI");
         // 📂 An archive Nova closed after indexing is opened again; a renamed archive is found (Item).

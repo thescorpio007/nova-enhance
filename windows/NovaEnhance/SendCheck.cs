@@ -24,6 +24,13 @@ static class SendCheck
     static readonly Guid AppEvents = new("0006300E-0000-0000-C000-000000000046");   // Outlook ApplicationEvents_11
     const int ItemSendId = 0xF002;
     static object hooked;
+    static int hookedPid;
+
+    /// <summary>Outlook's process (no call into Outlook — a busy Outlook can't hold Nova here).</summary>
+    static int OutlookPid()
+    {
+        try { var ps = System.Diagnostics.Process.GetProcessesByName("OUTLOOK"); var id = ps.Length > 0 ? ps[0].Id : 0; foreach (var p in ps) p.Dispose(); return id; } catch { return 0; }
+    }
     static ItemSendHandler handler;
     static bool passNext;
 
@@ -36,15 +43,21 @@ static class SendCheck
         // Checked every 10 s: a restarted Outlook is watched again almost at once.
         if (watch == null) { watch = new System.Windows.Forms.Timer { Interval = 10_000 }; watch.Tick += (_, _) => Ensure(); watch.Start(); }
         if (!On) { if (hooked != null) Log.Write("🛡 check before sending: off"); Unhook(); Status = "Off"; return; }
-        try { if (hooked != null) { _ = ((dynamic)hooked).Name; return; } }
-        catch { hooked = null; Log.Write("🛡 check before sending: Outlook closed or restarted — connecting again"); }
+        // Still the same Outlook? Checked by its process, not by asking Outlook (asking a busy Outlook every 10 s froze Nova).
+        if (hooked != null)
+        {
+            var pid = OutlookPid();
+            if (pid != 0 && pid == hookedPid) return;
+            hooked = null; Log.Write("🛡 check before sending: Outlook closed or restarted — connecting again");
+        }
+        using var step = UiWatch.Outlook("check before sending: connecting to Send");
         try
         {
             object app = Outlook.Running();
             if (app == null) { Status = "Waiting for Outlook to open…"; return; }
             handler = OnItemSend;
             ComEventsHelper.Combine(app, AppEvents, ItemSendId, handler);
-            hooked = app;
+            hooked = app; hookedPid = OutlookPid();
             Status = $"✓ Watching Outlook's Send (since {DateTime.Now:HH:mm:ss})";
             warned = false;
             Log.Write("🛡 check before sending: connected to Outlook's Send");
@@ -77,6 +90,7 @@ static class SendCheck
             if (passNext) { passNext = false; Log.Write("🛡 Send: your choice in the check window — sent"); return; }
             if (!On) { Log.Write("🛡 Send: check is off — sent"); return; }
             if (AdminLock.Locked) { Log.Write("🛡 Send: Nova is locked — sent without the check"); return; }
+            using var step = UiWatch.Outlook("reading the email you are sending");
             dynamic m = item;
             int cls = 0; try { cls = (int)m.Class; } catch { }
             string subj = ""; try { subj = (string)m.Subject ?? ""; } catch { }
@@ -391,6 +405,8 @@ class SendCheckForm : NovaForm
 
     void Done(string note)
     {
+        Hide();   // the window goes at once; Outlook sends after
+        using var step = UiWatch.Outlook("sending the checked email");
         try { SendCheck.SendNow(item); Program.Balloon("🛡 Check before sending", note); }
         catch (Exception e) { Program.Balloon("🛡 Not sent", "Outlook refused: " + e.Message); }
         decided = true;
@@ -418,6 +434,7 @@ class SendCheckForm : NovaForm
     void Back()
     {
         decided = true;
+        using var step = UiWatch.Outlook("showing the email again to edit");
         try { dynamic m = item; m.Display(false); } catch { }
         Close();
     }
@@ -428,6 +445,7 @@ class SendCheckForm : NovaForm
         if (d.ShowDialog(this) != DialogResult.OK) return;
         try
         {
+            using var step = UiWatch.Outlook("attaching files");
             dynamic m = item;
             foreach (var f in d.FileNames) { m.Attachments.Add(f); snap.Atts.Add(Path.GetFileName(f)); }
             quick = SendCheck.Quick(snap);
