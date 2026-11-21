@@ -722,7 +722,7 @@ static class PhoneLink
                 var h = MailIndex.ByIds(new[] { id }, 1, 200000).FirstOrDefault() ?? throw new Exception("email not in the index");
                 if (Private(h.Subject, h.Folder, h.AttNames)) throw new Exception("🔒 private");
                 string html = null;
-                try { var f = await MailPreview.Render(h); if (f != null) html = OnePage(f); } catch (Exception e) { act.Mark("formatted", e.Message); }
+                try { var f = await MailPreview.Render(h); if (f != null) html = OnePage(f); } catch (Exception e) { Log.Warn("phone · formatted", e.Message); }
                 html ??= "<html><head><meta charset='utf-8'></head><body><pre style='white-space:pre-wrap;font-family:Calibri,Segoe UI,Arial;font-size:15px'>" + System.Net.WebUtility.HtmlEncode(h.Body ?? "") + "</pre></body></html>";
                 var o = Hit(h); o["html"] = html;
                 o["atts"] = new JsonArray((h.AttNames ?? "").Split(';').Select(x => x.Trim()).Where(x => x.Length > 0).Select(x => (JsonNode)x).ToArray());
