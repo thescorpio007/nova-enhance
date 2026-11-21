@@ -39,6 +39,7 @@ object PcLink {
 
     fun paired(c: Context): Boolean = sp(c).getString("key", "").orEmpty().length > 20
     fun pcName(c: Context): String = sp(c).getString("pc", "").orEmpty()
+    fun keyFor(c: Context): ByteArray = key(c)
     private fun key(c: Context): ByteArray = Base64.decode(sp(c).getString("key", ""), Base64.DEFAULT)
     private fun ips(c: Context): List<String> = sp(c).getString("ips", "").orEmpty().split(',').filter { it.isNotBlank() }
     private fun port(c: Context): Int = sp(c).getInt("port", 47323)
@@ -317,6 +318,7 @@ object PcLink {
                 } finally { db.endTransaction() }
             }
             name == "brief.nes" || name == "brain.nes" || name == "starred.nes" -> File(d, name.removeSuffix(".nes") + ".json").writeText(text(c, box))
+            name == "applied.nes" -> Outbox.receipts(c, JSONObject(text(c, box)))   // 📤 what the PC applied from the outbox
             name.startsWith("starred/") -> {
                 // The real file: its name comes from the ⭐ list.
                 val idx = try { JSONArray(File(d, "starred.json").readText()) } catch (_: Exception) { JSONArray() }
@@ -570,16 +572,19 @@ object PcLink {
 
     private fun scheduleJob(c: Context) {
         val js = c.getSystemService(Context.JOB_SCHEDULER_SERVICE) as JobScheduler
-        val every = c.getSharedPreferences("nova_pc", Context.MODE_PRIVATE).getInt("every_min", 60).coerceIn(15, 720)
+        val p = c.getSharedPreferences("nova_pc", Context.MODE_PRIVATE)
+        if (!p.getBoolean("every_v2", false)) { if (p.getInt("every_min", 60) == 60) p.edit().putInt("every_min", 15).apply(); p.edit().putBoolean("every_v2", true).apply() }
+        val every = p.getInt("every_min", 15).coerceIn(15, 720)
+        // kept after a restart of the phone (RECEIVE_BOOT_COMPLETED)
         js.schedule(JobInfo.Builder(JOB_ID, ComponentName(c, PcSyncJob::class.java))
-            .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY).setPeriodic(every * 60_000L).setPersisted(false).build())
+            .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY).setPeriodic(every * 60_000L).setPersisted(true).build())
     }
 }
 
 /** ⏰ The hourly update of 🖥 My PC. */
 class PcSyncJob : JobService() {
     override fun onStartJob(params: JobParameters): Boolean {
-        Thread { try { PcLink.sync(applicationContext) } finally { jobFinished(params, false) } }.start()
+        Thread { try { Outbox.flush(applicationContext); PcLink.sync(applicationContext) } finally { jobFinished(params, false) } }.start()
         return true
     }
     override fun onStopJob(params: JobParameters): Boolean = true

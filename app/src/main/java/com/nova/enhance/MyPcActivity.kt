@@ -65,7 +65,9 @@ class MyPcActivity : BaseActivity() {
         root.setBackgroundColor(Ui.BG)
         setContentView(root)
         handle(intent)
-        if (PcLink.paired(c)) PcLink.schedule(c)   // the hourly update (again after a restart of the phone)
+        if (PcLink.paired(c)) PcLink.schedule(c)   // the update every 15 min (again after a restart of the phone)
+        // Older than 15 min: updated now (and the 📤 outbox sent) — the screen never waits for it.
+        if (PcLink.paired(c) && System.currentTimeMillis() - PcLink.lastSync(c) > 15 * 60_000L) main.postDelayed({ syncNow() }, 800)
         show(if (PcLink.paired(c)) "home" else "pair")
         pendingFile?.let { pendingFile = null; openShared(it) }
         // 🧊 Did Nova freeze last time? Android keeps the report: saved here, under ⚙ → Last freeze report.
@@ -108,8 +110,12 @@ class MyPcActivity : BaseActivity() {
 
     override fun onBackPressed() {
         if (page == "web" && lastMail != null) { openMail(lastMail!!); return }
-        if (page != "home" && page != "pair") show(if (page == "mail" && items.isNotEmpty()) "find" else if (page == "mail" && hits.isNotEmpty()) "search" else "home") else super.onBackPressed()
+        // ↩ Back to the screen the email was opened from (brief, log, starred, history, agent, search…) at the same place.
+        if (page == "mail") { val to = mailFrom.ifBlank { "home" }; mailFrom = ""; show(to, restore = true); return }
+        if (page != "home" && page != "pair") show("home") else super.onBackPressed()
     }
+    private var mailFrom = ""
+    private val scrollAt = HashMap<String, Int>()
     private var lastMail: PcLink.Hit? = null
 
     private lateinit var sourceBar: LinearLayout
@@ -133,6 +139,9 @@ class MyPcActivity : BaseActivity() {
                 if (GDrive.configured(c)) Ui.button(c, "☁ Sign in with Google — then the PC can be off") { googleSignIn() }
                 else Ui.text(c, "☁ Google Drive: this copy of Nova has no Google sign-in built in yet.", 12f, Ui.MUTED),
                 Ui.lp(top = Ui.dp(c, 6)))
+        // 📤 Signed in before the outbox: one more sign-in lets the phone send its changes through Google Drive.
+        if (GDrive.signedIn(c) && !GDrive.canWrite(c) && (cur == "auto" || cur == "drive"))
+            sourceBar.addView(Ui.button(c, "☁ Sign in again once — so your changes reach the PC through Google Drive") { googleSignIn() }, Ui.lp(top = Ui.dp(c, 6)))
         // The last sign-in error stays here until the next try.
         if (!GDrive.signedIn(c) && !GDrive.pending && GDrive.lastError(c).isNotEmpty())
             sourceBar.addView(Ui.text(c, "⚠ Last try: " + GDrive.lastError(c), 12f, Ui.MUTED), Ui.lp(top = Ui.dp(c, 4)))
@@ -183,8 +192,12 @@ class MyPcActivity : BaseActivity() {
         val c = this
         if (!PcLink.paired(c)) { status.text = "Not paired yet"; return }
         val t = PcLink.lastSync(c)
-        status.text = (if (t > 0) "✓ Updated ${SimpleDateFormat("dd MMM HH:mm", Locale.UK).format(Date(t))} via ${PcLink.lastWay(c)}" else "Not updated yet — press ⟳") +
-            " · ${PcLink.pcName(c)}" + PcLink.lastNote(c).let { if (it.isNotBlank()) "\n$it" else "" }
+        val old = t > 0 && System.currentTimeMillis() - t > 2 * 3_600_000L
+        status.text = (if (t <= 0) "Not updated yet — press ⟳"
+            else if (old) "⚠ Last update from your PC: ${SimpleDateFormat("dd MMM HH:mm", Locale.UK).format(Date(t))} — is Nova running on the PC? press ⟳"
+            else "✓ Updated ${SimpleDateFormat("dd MMM HH:mm", Locale.UK).format(Date(t))} via ${PcLink.lastWay(c)}") +
+            " · ${PcLink.pcName(c)}" + PcLink.lastNote(c).let { if (it.isNotBlank()) "\n$it" else "" } + Outbox.line(c).let { if (it.isNotBlank()) "\n$it" else "" }
+        status.setTextColor(if (old) Ui.AMBER else Ui.MUTED)
     }
 
     private fun syncNow() {
@@ -193,13 +206,13 @@ class MyPcActivity : BaseActivity() {
         Thread {
             val r = PcLink.sync(applicationContext) { say(it) }
             main.post { headerStatus(); status.text = r + "\n" + status.text; if (page == "home") show("home") }
-            if (PcLink.queued(applicationContext).length() > 0) { val n = PcLink.flushQueue(applicationContext); if (n > 0) say("✓ $n “handled” mark(s) sent to your PC") }
+            val n = Outbox.flush(applicationContext); if (n > 0) say("📤 $n change(s) sent")
         }.start()
     }
 
     // ------------------------------------------------------------------ pages
 
-    private fun show(p: String) {
+    private fun show(p: String, restore: Boolean = false) {
         page = p
         body.removeAllViews()
         headerStatus()
@@ -220,6 +233,9 @@ class MyPcActivity : BaseActivity() {
             "agent" -> agentPage()
         }
         body.addView(Ui.signature(this))
+        // ↩ the same place in the list (and again once a list that loads by itself is drawn)
+        val sv = body.parent as? ScrollView
+        if (restore) scrollAt[p]?.let { y -> sv?.post { sv.scrollTo(0, y) }; main.postDelayed({ if (page == p) sv?.scrollTo(0, y) }, 450) } else sv?.scrollTo(0, 0)
     }
 
     private fun card(title: String, sub: String, right: String = "", click: () -> Unit) {
@@ -294,7 +310,7 @@ class MyPcActivity : BaseActivity() {
                 card("🧭 Ask Nova (agent)", "type freely — your PC checks the Brain, the log, emails and threads · you confirm examples here") { show("agent") }
                 card("🧠 Same brain as your PC", if (PcLink.brainNote(c).isBlank()) "not received yet" else "every rule, with 🧪 tested ✓ — tap to read") { brainView() }
                 card("🔐 Nova PIN code", "forgot the PIN on your laptop? the one-time recovery code shows here") { adminCode() }
-                card("⚙ Phone link", "update every ${getSharedPreferences("nova_pc", MODE_PRIVATE).getInt("every_min", 60)} min · unpair") { show("settings") }
+                card("⚙ Phone link", "update every ${getSharedPreferences("nova_pc", MODE_PRIVATE).getInt("every_min", 15)} min · unpair") { show("settings") }
             }
         }.start()
     }
@@ -473,8 +489,8 @@ class MyPcActivity : BaseActivity() {
                 val text = q.text.toString().trim(); val app = applicationContext
                 say("⏳ Sending to your PC…")
                 Thread {
-                    val r = runCatching { PcLink.ask(app, "brainteach", JSONObject().put("ids", JSONArray().put(h.id)).put("text", text).put("good", good)) { s -> say(s) } }
-                    main.post { r.onSuccess { Ui.toast(c, "🎓 Sent — open the Brain on your PC"); say("✓ " + it.optString("text")) }.onFailure { say("⚠ " + (it.message ?: "your PC did not answer")) } }
+                    val r = runCatching { Outbox.send(app, "brainteach", JSONObject().put("ids", JSONArray().put(h.id)).put("text", text).put("good", good), "🎓 Teach the Brain · " + h.subject.take(50)) { s -> say(s) } }
+                    main.post { r.onSuccess { if (it != null) { Ui.toast(c, "🎓 Sent — open the Brain on your PC"); say("✓ " + it.optString("text")) } else say("📤 Kept — " + Outbox.line(app)) }.onFailure { say("⚠ " + (it.message ?: "failed")) } }
                 }.start()
             }.setNegativeButton("Cancel", null).show()
     }
@@ -932,10 +948,13 @@ class MyPcActivity : BaseActivity() {
         show("found")
         val c = applicationContext
         Thread {
-            val r = runCatching { PcLink.ask(c, "projfound", args ?: JSONObject().put("t", "pf.load")) { s -> main.post { status.text = s } } }
+            val a = args ?: JSONObject().put("t", "pf.load")
+            // ✚ add · ⇢ merge · ✗ ignore are changes: through the 📤 outbox (they reach the PC even if it is off now)
+            val change = a.optString("t") != "pf.load"
+            val r = runCatching { if (change) Outbox.send(c, "projfound", a, "＋ " + a.optString("t").removePrefix("pf.") + " " + a.optString("value")) { s -> main.post { status.text = s } } ?: JSONObject().put("said", "📤 Kept — " + Outbox.line(c)) else PcLink.ask(c, "projfound", a) { s -> main.post { status.text = s } } }
             main.post {
                 foundBusy = false
-                r.onSuccess { found = it }.onFailure { found = JSONObject().put("said", "⚠ " + (it.message ?: "your PC did not answer")) }
+                r.onSuccess { found = if (it.has("said") && !it.has("items") && found != null) found!!.put("said", it.optString("said")) else it }.onFailure { found = JSONObject().put("said", "⚠ " + (it.message ?: "your PC did not answer")) }
                 if (page == "found") show("found")
             }
         }.start()
@@ -1130,6 +1149,7 @@ class MyPcActivity : BaseActivity() {
     // ------------------------------------------------------------------ ✉ one email
 
     private fun openMail(h0: PcLink.Hit) {
+        if (page != "mail" && page != "web") { mailFrom = page; scrollAt[page] = (body.parent as? ScrollView)?.scrollY ?: 0 }
         page = "mail"; lastMail = h0
         body.removeAllViews()
         body.addView(Ui.thinking(Ui.text(this, "⏳ Opening the email…", 13f, Ui.MUTED)))
@@ -1406,10 +1426,9 @@ class MyPcActivity : BaseActivity() {
     private fun pcDo(op: String, args: JSONObject, ok: String) {
         say("⏳ Asking your PC…")
         Thread {
-            val r = runCatching { PcLink.ask(applicationContext, op, args) { say(it) } }
-            // The PC is off: a "handled" mark is kept and sent when the PC answers again.
-            if (r.isFailure && op == "handled") { PcLink.queue(applicationContext, args); main.post { status.text = "✓ Marked here — your PC gets it when it is on again (${PcLink.queued(applicationContext).length()} waiting)" }; return@Thread }
-            main.post { status.text = r.fold({ ok }, { "⚠ " + it.message }) }
+            // 📤 Through the outbox: live when the PC answers, else via Google Drive — the PC applies it at its next start / within 15 min.
+            val r = runCatching { Outbox.send(applicationContext, op, args, ok) { say(it) } }
+            main.post { status.text = r.fold({ if (it != null) ok else "📤 Kept — " + Outbox.line(applicationContext) }, { "⚠ " + it.message }) }
         }.start()
     }
 
@@ -1659,7 +1678,7 @@ class MyPcActivity : BaseActivity() {
         }
         body.addView(Ui.section(c, "Update every"))
         val (sv, row) = Ui.chipRow(c)
-        for (m in listOf(30, 60, 180)) row.addView(Ui.chip(c, if (m < 60) "$m min" else "${m / 60} h", sp.getInt("every_min", 60) == m) {
+        for (m in listOf(15, 30, 60, 180)) row.addView(Ui.chip(c, if (m < 60) "$m min" else "${m / 60} h", sp.getInt("every_min", 15) == m) {
             sp.edit().putInt("every_min", m).apply(); PcLink.schedule(c); show("settings")
         }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
         body.addView(sv)

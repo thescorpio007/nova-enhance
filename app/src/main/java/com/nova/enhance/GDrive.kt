@@ -86,7 +86,7 @@ object GDrive {
             server.soTimeout = 300_000
             val redirect = "http://127.0.0.1:${server.localPort}"
             val url = "https://accounts.google.com/o/oauth2/v2/auth?response_type=code&access_type=offline&prompt=consent" +
-                "&client_id=${enc(clientId(c))}&redirect_uri=${enc(redirect)}&scope=${enc("https://www.googleapis.com/auth/drive.readonly email")}" +
+                "&client_id=${enc(clientId(c))}&redirect_uri=${enc(redirect)}&scope=${enc("https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file email")}" +
                 "&code_challenge=$challenge&code_challenge_method=S256&state=$state"
             open(url)
             progressNote = "⏳ Sign in with Google in the browser, then come back to Nova…"
@@ -110,7 +110,7 @@ object GDrive {
                                     "redirect_uri" to redirect, "grant_type" to "authorization_code", "code_verifier" to verifier))
                                 val r = tok.optString("refresh_token")
                                 if (r.isBlank()) throw Exception("Google did not give a lasting sign-in — remove Nova Enhance in your Google account (Security → Third-party access) and sign in again")
-                                sp(c).edit().putString("gd_refresh", r).apply()
+                                sp(c).edit().putString("gd_refresh", r).putString("gd_scope", tok.optString("scope")).apply()
                                 access = tok.optString("access_token"); accessUntil = System.currentTimeMillis() + (tok.optLong("expires_in", 3600) - 120) * 1000
                                 val em = try { get(c, "$API/about?fields=user(emailAddress)").optJSONObject("user")?.optString("emailAddress").orEmpty() } catch (_: Exception) { "" }
                                 sp(c).edit().putString("gd_email", em).apply()
@@ -185,6 +185,42 @@ object GDrive {
         val (code, b) = raw(c, url)
         if (code !in 200..299) throw Exception("Google Drive HTTP $code")
         return JSONObject(String(b, Charsets.UTF_8))
+    }
+
+    /** 📤 The phone may write its own files (the outbox) — needs the newer sign-in (drive.file). */
+    fun canWrite(c: Context) = signedIn(c) && sp(c).getString("gd_scope", "").orEmpty().contains("drive.file")
+
+    /** 📤 Puts a file in “Nova phone outbox” in your Google Drive (made by Nova, so Nova sees only its own folder). */
+    fun upload(c: Context, name: String, data: ByteArray) {
+        if (!canWrite(c)) throw Exception("Google Drive: sign in again once on the phone to let it send changes (🖥 My PC → ⚙)")
+        var folder = sp(c).getString("gd_outbox", "").orEmpty()
+        if (folder.isEmpty()) {
+            val found = get(c, "$API/files?q=" + enc("name='Nova phone outbox' and mimeType='application/vnd.google-apps.folder' and trashed=false") + "&fields=files(id)").optJSONArray("files")
+            folder = found?.optJSONObject(0)?.optString("id").orEmpty()
+            if (folder.isEmpty()) folder = send(c, "POST", "$API/files?fields=id", "application/json", JSONObject().put("name", "Nova phone outbox").put("mimeType", "application/vnd.google-apps.folder").toString().toByteArray()).optString("id")
+            if (folder.isEmpty()) throw Exception("Google Drive: could not make the outbox folder")
+            sp(c).edit().putString("gd_outbox", folder).apply()
+        }
+        val boundary = "nova" + System.nanoTime()
+        val meta = JSONObject().put("name", name).put("parents", org.json.JSONArray().put(folder)).toString()
+        val body = java.io.ByteArrayOutputStream().apply {
+            write("--$boundary\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n$meta\r\n--$boundary\r\nContent-Type: application/octet-stream\r\n\r\n".toByteArray())
+            write(data); write("\r\n--$boundary--\r\n".toByteArray())
+        }.toByteArray()
+        try { send(c, "POST", "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id", "multipart/related; boundary=$boundary", body) }
+        catch (e: Exception) { if ((e.message ?: "").contains("404")) sp(c).edit().remove("gd_outbox").apply(); throw e }
+    }
+
+    private fun send(c: Context, method: String, url: String, type: String, data: ByteArray): JSONObject {
+        val h = URL(url).openConnection() as HttpURLConnection
+        h.requestMethod = method; h.doOutput = true; h.connectTimeout = 20000; h.readTimeout = 60000
+        h.setRequestProperty("Authorization", "Bearer " + token(c)); h.setRequestProperty("Content-Type", type)
+        h.outputStream.use { it.write(data) }
+        val code = h.responseCode
+        val txt = (if (code in 200..299) h.inputStream else h.errorStream)?.use { it.readBytes().toString(Charsets.UTF_8) } ?: ""
+        h.disconnect()
+        if (code !in 200..299) throw Exception("Google Drive HTTP $code" + (if (code == 403) " — sign in again once on the phone (🖥 My PC → ⚙)" else ""))
+        return try { JSONObject(txt) } catch (_: Exception) { JSONObject() }
     }
 
     fun download(c: Context, id: String): ByteArray? {

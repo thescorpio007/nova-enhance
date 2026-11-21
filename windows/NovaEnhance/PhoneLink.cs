@@ -27,7 +27,16 @@ static class PhoneLink
     public static bool DriveOn { get => Store.Bool("win_pl_drive_on", true); set => Store.SetBool("win_pl_drive_on", value); }
     public static bool RelayOn { get => Store.Bool("win_pl_relay_on", true); set => Store.SetBool("win_pl_relay_on", value); }
     public static bool WifiOn { get => Store.Bool("win_pl_wifi_on", true); set { Store.SetBool("win_pl_wifi_on", value); if (value) StartWifi(); else StopWifi(); } }
-    public static int EveryMin { get => Math.Clamp(Store.Int("win_pl_every", 60), 15, 720); set => Store.SetInt("win_pl_every", value); }
+    public static int EveryMin
+    {
+        get
+        {
+            // 15 min by default (was 60): the phone is never more than 15 min behind
+            if (!Store.Bool("win_pl_every_v2", false)) { if (Store.Int("win_pl_every", 60) == 60) Store.SetInt("win_pl_every", 15); Store.SetBool("win_pl_every_v2", true); }
+            return Math.Clamp(Store.Int("win_pl_every", 15), 15, 720);
+        }
+        set => Store.SetInt("win_pl_every", value);
+    }
     public static bool AfterBrief { get => Store.Bool("win_pl_after_brief", true); set => Store.SetBool("win_pl_after_brief", value); }
     /// <summary>"Full text for the last 24 months only" (older emails: subject, people, date, attachment names).</summary>
     public static bool Last12 { get => Store.Bool("win_pl_last12", false); set => Store.SetBool("win_pl_last12", value); }
@@ -164,17 +173,28 @@ static class PhoneLink
     // ------------------------------------------------------------------ the hourly job
 
     static Thread loop;
+    static volatile bool wake;
     static readonly object RunLock = new();
     public static void Start()
     {
         if (On && WifiOn) StartWifi();
         if (loop != null) return;
+        // 📤 After sleep: the phone's changes and a fresh copy at once.
+        try { Microsoft.Win32.SystemEvents.PowerModeChanged += (_, e) => { if (e.Mode == Microsoft.Win32.PowerModes.Resume) wake = true; }; } catch { }
         loop = new Thread(() => Guard.Run("phone link", () =>
         {
-            Thread.Sleep(TimeSpan.FromMinutes(3));
+            Thread.Sleep(TimeSpan.FromSeconds(60));
+            var outAt = DateTime.MinValue;
             while (true)
             {
-                if (On && DateTime.Now - S.LastRun >= TimeSpan.FromMinutes(EveryMin)) RunSafe("every " + EveryMin + " min");
+                if (On)
+                {
+                    WatchOutbox();
+                    // 📤 the phone's changes first (at start · every 15 min · after waking up)
+                    if (wake || DateTime.Now - outAt >= TimeSpan.FromMinutes(15)) { var why = wake ? "woke up" : outAt == DateTime.MinValue ? "start" : "every 15 min"; outAt = DateTime.Now; try { ReadOutbox(why).GetAwaiter().GetResult(); } catch (Exception e) { Log.Warn("phone outbox", e.Message); } }
+                    if (wake || DateTime.Now - S.LastRun >= TimeSpan.FromMinutes(EveryMin)) RunSafe(wake ? "woke up" : "every " + EveryMin + " min");
+                    wake = false;
+                }
                 Thread.Sleep(TimeSpan.FromMinutes(1));
             }
         })) { IsBackground = true, Name = "Nova phone link", Priority = ThreadPriority.BelowNormal };
@@ -483,6 +503,8 @@ static class PhoneLink
 
     static void Manifest(State s)
     {
+        // 📤 the list of phone changes already applied (kept through a full copy)
+        try { if (File.Exists(AppliedPath)) Write("applied.nes", AppliedList().ToJsonString()); } catch { }
         var files = new JsonArray();
         foreach (var f in Directory.GetFiles(Dir, "*.nes", SearchOption.AllDirectories).OrderBy(f => f))
         {
@@ -622,6 +644,17 @@ static class PhoneLink
         var op = req["op"]?.ToString() ?? "";
         var a = req["args"] as JsonObject ?? new JsonObject();
         using var act = Activity.Begin("📱 phone · " + op, a.ToJsonString());
+        // 📤 A change from the phone's outbox that arrives live: done once (the same change on Google Drive is skipped later).
+        var oid = a["oid"]?.ToString() ?? "";
+        if (oid.Length > 0 && Applied(oid)) { act.Result = "already applied"; return Convert.ToBase64String(Seal(Gzip(Encoding.UTF8.GetBytes(new JsonObject { ["ok"] = true, ["text"] = "✓ already applied on your PC" }.ToJsonString())))); }
+        var res = await Exec(op, a);
+        if (oid.Length > 0) MarkApplied(oid, op, "live");
+        act.Result = "ok";
+        return Convert.ToBase64String(Seal(Gzip(Encoding.UTF8.GetBytes(res.ToJsonString()))));
+    }
+
+    static async Task<JsonNode> Exec(string op, JsonObject a)
+    {
         JsonNode res;
         switch (op)
         {
@@ -741,8 +774,91 @@ static class PhoneLink
             case "hello": PhoneSeen = DateTime.Now; if (a["phone"]?.ToString() is { Length: > 0 } ph) PhoneName = ph; res = new JsonObject { ["pc"] = Environment.MachineName, ["build"] = Program.Shown }; break;
             default: throw new Exception("unknown request " + op);
         }
-        act.Result = "ok";
-        return Convert.ToBase64String(Seal(Gzip(Encoding.UTF8.GetBytes(res.ToJsonString()))));
+        return res;
+    }
+
+    // ------------------------------------------------------------------ 📤 the phone's outbox in Google Drive (changes made while the PC was off)
+
+    static readonly object OutLock = new();
+    static FileSystemWatcher outWatch;
+
+    static string OutboxDir => DriveRoot.Length > 0 ? Path.Combine(DriveRoot, "Nova phone outbox") : "";
+    static string AppliedPath => Path.Combine(Paths.Root, "Rules", "phone-applied.json");
+
+    static JsonObject AppliedList()
+    {
+        try { return File.Exists(AppliedPath) ? JsonNode.Parse(File.ReadAllText(AppliedPath))!.AsObject() : new JsonObject(); } catch { return new JsonObject(); }
+    }
+    static bool Applied(string id) { lock (OutLock) return AppliedList().ContainsKey(id); }
+
+    static void MarkApplied(string id, string op, string how)
+    {
+        lock (OutLock)
+        {
+            var o = AppliedList();
+            o[id] = new JsonObject { ["t"] = DateTimeOffset.Now.ToUnixTimeMilliseconds(), ["op"] = op, ["how"] = how };
+            // the last 300 are enough to never apply twice
+            if (o.Count > 300) foreach (var k in o.OrderBy(x => x.Value?["t"]?.GetValue<long>() ?? 0).Take(o.Count - 300).Select(x => x.Key).ToList()) o.Remove(k);
+            Directory.CreateDirectory(Path.GetDirectoryName(AppliedPath)!);
+            File.WriteAllText(AppliedPath, o.ToJsonString());
+            // the phone sees “✓ applied on your PC 14:05” with its next update
+            try { Write("applied.nes", o.ToJsonString()); } catch { }
+        }
+    }
+
+    /// <summary>📤 Applies what the phone left in “Nova phone outbox” (oldest first), once each, then removes it. At start, every 15 min, on wake-up, and when a file arrives.</summary>
+    public static async Task ReadOutbox(string why)
+    {
+        var dir = OutboxDir;
+        if (dir.Length == 0 || !Directory.Exists(dir) || !On) return;
+        string[] files;
+        try { files = Directory.GetFiles(dir, "*.nes").OrderBy(f => Path.GetFileName(f)).ToArray(); } catch { return; }
+        if (files.Length == 0) return;
+        using var act = Activity.Begin("📤 phone outbox", $"{files.Length} change(s) · {why}");
+        int done = 0;
+        foreach (var f in files)
+        {
+            try
+            {
+                JsonObject req;
+                try { req = JsonNode.Parse(Encoding.UTF8.GetString(Gunzip(Open(await File.ReadAllBytesAsync(f)))))!.AsObject(); }
+                catch (IOException) { continue; }   // still being written by Google Drive: next time
+                catch { Log.Warn("phone outbox", "not from the paired phone: " + Path.GetFileName(f)); try { File.Move(f, f + ".bad", true); } catch { } continue; }
+                var id = req["id"]?.ToString() ?? Path.GetFileNameWithoutExtension(f);
+                var op = req["op"]?.ToString() ?? "";
+                if (!Applied(id))
+                {
+                    var a = req["args"] as JsonObject ?? new JsonObject();
+                    using (Activity.Begin("📱 phone (outbox) · " + op, a.ToJsonString())) await Exec(op, a);
+                    MarkApplied(id, op, "drive");
+                    done++;
+                }
+                File.Delete(f);
+            }
+            catch (Exception e) { Log.Warn("phone outbox", Path.GetFileName(f) + ": " + e.Message); }
+        }
+        act.Result = $"{done} applied";
+        if (done > 0) Status = $"📤 {done} change(s) from the phone applied";
+    }
+
+    static byte[] Gunzip(byte[] b)
+    {
+        using var i = new System.IO.Compression.GZipStream(new MemoryStream(b), System.IO.Compression.CompressionMode.Decompress);
+        using var o = new MemoryStream(); i.CopyTo(o); return o.ToArray();
+    }
+
+    static void WatchOutbox()
+    {
+        try
+        {
+            var dir = OutboxDir;
+            if (dir.Length == 0 || outWatch != null) return;
+            Directory.CreateDirectory(dir);
+            outWatch = new FileSystemWatcher(dir, "*.nes") { EnableRaisingEvents = true };
+            DateTime last = DateTime.MinValue;
+            outWatch.Created += (_, _) => { if (DateTime.Now - last < TimeSpan.FromSeconds(20)) return; last = DateTime.Now; _ = Task.Run(async () => { await Task.Delay(8000); await ReadOutbox("a change arrived"); }); };
+        }
+        catch (Exception e) { Log.Warn("phone outbox", "watch: " + e.Message); }
     }
 
     /// <summary>The rendered email page with its pictures inside it (one file the phone can show offline).</summary>
