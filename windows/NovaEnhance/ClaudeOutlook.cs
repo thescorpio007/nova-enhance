@@ -59,6 +59,7 @@ static class ClaudeOutlook
         ["nova.followup"] = "Nova's own 📨 follow-up tool on its index (what the agent uses): to (name / address / domain), project, after, before, from — every request and the reply per document",
         ["fix.reindex"] = "Nova re-reads a folder completely (fills gaps): folder (part of the path) or id (its folder)",
         ["fix.project"] = "puts emails into a project in Nova: ids (list), project (code) — ↩ undo in Activity / Email projects",
+        ["nova.health"] = "runs the 🧠 Brain health check (every contradiction, vague rules, untested) — read only",
         ["fix.brain"] = "applies 🧠 Brain changes directly (summary, changes [op add|change|remove, section, id, title, text]) — only while you allow Claude; a version is saved first (↩ undo in Brain → Versions & backups); a broken [setting] is refused",
         ["fix.status"] = "Claude's connection: allowed until when",
     };
@@ -87,6 +88,7 @@ static class ClaudeOutlook
             "fix.reindex" => await Task.Run(() => Reindex(a)),
             "fix.project" => await Task.Run(() => Project(a)),
             "fix.brain" => OnUi(() => FixBrain(a)),
+            "nova.health" => await Health(),
             "fix.status" => $"{ClaudeAccess.Line} · Nova {Program.Shown}",
             _ => throw new Exception("unknown tool " + tool + " · tools: " + string.Join(", ", Help.Keys))
         };
@@ -96,6 +98,19 @@ static class ClaudeOutlook
 
     /// <summary>🧠 You asked Claude to apply Brain changes itself (while its access is on): the change is checked for broken [settings],
     /// saved as a new version (↩ undo in Versions & backups), shown in the trainer and as a tray note, and logged in Activity.</summary>
+    /// <summary>🩺 The Brain health check, as Claude reads it: every contradiction and every rule note.</summary>
+    static async Task<string> Health()
+    {
+        if (!Brain.Unlocked) throw new Exception("the 🧠 Nova Brain is locked on the PC — open it first");
+        var h = await BrainTrainer.Health(_ => { }, CancellationToken.None);
+        var sb = new StringBuilder($"🩺 Brain version {Brain.Version} · strong {h["strong"]} · weak {h["weak"]} · to fix {h["bad"]} · untested {h["untested"]}\n");
+        foreach (var c in (h["contradictions"] as JsonArray ?? new()).OfType<JsonObject>())
+            sb.AppendLine($"⛔ {string.Join(" ↔ ", (c["ids"] as JsonArray)?.Select(x => x?.ToString()) ?? Array.Empty<string>())}: {c["why"]} → {c["fix"]}");
+        foreach (var r in (h["rows"] as JsonArray ?? new()).OfType<JsonObject>())
+            if ((r["notes"] as JsonArray)?.Count > 0) sb.AppendLine($"· {r["id"]}: {string.Join(" · ", (r["notes"] as JsonArray)!.Select(x => x?.ToString()))}");
+        return sb.ToString();
+    }
+
     static string OnUi(Func<string> f)
     {
         if (Program.UiContext == null) return f();

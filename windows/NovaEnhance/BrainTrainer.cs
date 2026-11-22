@@ -605,12 +605,35 @@ THE BRAIN NOW:{BrainText(b)}";
         var contra = new JsonArray();
         try
         {
-            var sys = "You review the user's rule book (Nova Brain) for CONTRADICTIONS between rules (two rules that cannot both be followed) and rules too vague to apply. " +
-                      "Reply with JSON only: {\"contradictions\":[{\"ids\":[\"A-01\",\"B-02\"],\"why\":\"…\",\"fix\":\"one sentence: what to change\"}],\"vague\":[{\"id\":\"…\",\"why\":\"…\"}]}. Only real problems.";
+            // 🩺 EVERY contradiction in one check (was: the AI named one pair, the next showed only after it was fixed): the AI reads
+            // the whole brain section by section, then is asked up to twice more “any others?” with what it already found.
+            var sys = "You review the user's rule book (Nova Brain) for CONTRADICTIONS between rules (two rules that cannot both be followed, " +
+                      "or that give the same list, setting, code or number differently) and rules too vague to apply. Check EVERY pair of rules, " +
+                      "section by section, and list ALL contradictions you find — never stop at the first one. " +
+                      "Reply with JSON only: {\"contradictions\":[{\"ids\":[\"A-01\",\"B-02\"],\"why\":\"…\",\"fix\":\"one sentence: what to change\"}],\"vague\":[{\"id\":\"…\",\"why\":\"…\"}]}. Only real problems; an empty list is fine.";
             using var aiFor = Ai.For("brain");
             Brain.Quiet.Value = true;
-            JsonObject j;
-            try { j = Ai.ParseJson(await Ai.Chat(sys, "THE RULES:" + BrainText(b, false), false, true, null, ct)) ?? new JsonObject(); }
+            var j = new JsonObject { ["contradictions"] = new JsonArray(), ["vague"] = new JsonArray() };
+            var seen = new HashSet<string>();
+            try
+            {
+                for (int round = 0; round < 3; round++)
+                {
+                    var found = string.Join("\n", (j["contradictions"] as JsonArray)!.OfType<JsonObject>().Select(c => string.Join(" ↔ ", (c["ids"] as JsonArray)?.Select(x => x?.ToString()) ?? Array.Empty<string>()) + ": " + c["why"]));
+                    var ask = "THE RULES:" + BrainText(b, false) + (round == 0 ? "" : "\n\nALREADY FOUND (do not repeat them):\n" + found + "\n\nAre there any OTHER contradictions? Give only new ones (an empty list if none).");
+                    if (round > 0) step($"Looking for more contradictions (round {round + 1})");
+                    var r = Ai.ParseJson(await Ai.Chat(sys, ask, false, true, null, ct)) ?? new JsonObject();
+                    int added = 0;
+                    foreach (var c in (r["contradictions"] as JsonArray ?? new()).OfType<JsonObject>())
+                    {
+                        var key = string.Join("|", ((c["ids"] as JsonArray)?.Select(x => x?.ToString() ?? "") ?? Array.Empty<string>()).OrderBy(x => x));
+                        if (key.Length == 0 || !seen.Add(key)) continue;
+                        (j["contradictions"] as JsonArray)!.Add(c.DeepClone()); added++;
+                    }
+                    if (round == 0) foreach (var v in (r["vague"] as JsonArray ?? new()).OfType<JsonObject>()) (j["vague"] as JsonArray)!.Add(v.DeepClone());
+                    if (added == 0) break;
+                }
+            }
             finally { Brain.Quiet.Value = false; }
             foreach (var c in (j["contradictions"] as JsonArray ?? new()).OfType<JsonObject>())
             {
