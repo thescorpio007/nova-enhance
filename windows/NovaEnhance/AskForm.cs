@@ -862,7 +862,7 @@ class AskForm : NovaForm
         wordsLink = stack.Add(new LinkLabel { Text = "↩ search the words instead", AutoSize = true, LinkColor = Th.AccentText, ActiveLinkColor = Th.Accent, Font = Th.F(9), Margin = new Padding(0, 0, 0, 2), Visible = false });
         wordsLink.LinkClicked += (_, _) => { skipIntent = true; agSess = null; Run(question.Text, false); };
         // 🧭 Nova agent: ⬇ CSV · 💬 continue in Nova Chat · ⭐ save as prompt (shown after an agent answer).
-        agLinks = stack.Add(new LinkLabel { Text = "⬇ Excel (CSV)   ·   💬 Continue in Nova Chat   ·   ⭐ Save as prompt", AutoSize = true, LinkColor = Th.AccentText, ActiveLinkColor = Th.Accent, Font = Th.F(9), Margin = new Padding(0, 0, 0, 2), Visible = false });
+        agLinks = stack.Add(new LinkLabel { Text = "⬇ Excel (with email links)   ·   💬 Continue in Nova Chat   ·   ⭐ Save as prompt", AutoSize = true, LinkColor = Th.AccentText, ActiveLinkColor = Th.Accent, Font = Th.F(9), Margin = new Padding(0, 0, 0, 2), Visible = false });
         agLinks.Links.Clear();
         foreach (var (part, key) in new[] { ("⬇ Excel (with email links)", "csv"), ("💬 Continue in Nova Chat", "chat"), ("⭐ Save as prompt", "prompt") })
             agLinks.Links.Add(agLinks.Text.IndexOf(part, StringComparison.Ordinal), part.Length, key);
