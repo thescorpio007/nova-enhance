@@ -56,6 +56,7 @@ static class ClaudeOutlook
         ["ol.thread"] = "every email of the same conversation: id",
         ["ol.folders"] = "every mailbox / archive with its mail folders and counts, vs Nova's index",
         ["ol.compare"] = "like ol.search, and says for each email whether Nova's index has it (missing ones first)",
+        ["nova.followup"] = "Nova's own 📨 follow-up tool on its index (what the agent uses): to (name / address / domain), project, after, before, from — every request and the reply per document",
         ["fix.reindex"] = "Nova re-reads a folder completely (fills gaps): folder (part of the path) or id (its folder)",
         ["fix.project"] = "puts emails into a project in Nova: ids (list), project (code) — ↩ undo in Activity / Email projects",
         ["fix.status"] = "Claude's connection: allowed until when",
@@ -81,6 +82,7 @@ static class ClaudeOutlook
             "ol.read" => await Task.Run(() => Read(a)),
             "ol.thread" => await Task.Run(() => Thread(a)),
             "ol.folders" => await Task.Run(Folders),
+            "nova.followup" => await Followup(a),
             "fix.reindex" => await Task.Run(() => Reindex(a)),
             "fix.project" => await Task.Run(() => Project(a)),
             "fix.status" => $"{ClaudeAccess.Line} · Nova {Program.Shown}",
@@ -88,6 +90,13 @@ static class ClaudeOutlook
         };
         act.Result = "ok";
         return r;
+    }
+
+    /// <summary>📨 The agent's follow-up tool exactly as Nova runs it (to test it against Outlook) — 🔒 private lines left out.</summary>
+    static async Task<string> Followup(JsonObject a)
+    {
+        var t = await Agent.Tool("followup", a, new Agent.Session(), _ => { }, CancellationToken.None);
+        return string.Join("\n", t.Split('\n').Where(l => !Private(l)));
     }
 
     /// <summary>Every mail folder of every store (not public folders, not Deleted / Junk / Sync Issues).</summary>

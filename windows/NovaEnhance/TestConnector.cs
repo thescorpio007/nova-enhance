@@ -285,7 +285,8 @@ static class TestConnector
                 q.Words = Regex.Split(text, @"[\s_]+").Where(w => w.Length > 0).Select(w => w.Trim('"')).ToList();
                 var hits = await Task.Run(() => MailIndex.Search(q));
                 var hide = new Activity.Hider();
-                sb.AppendLine($"Index lookup “{text}” (all words, every folder, sent and received, all projects): {hits.Count} emails");
+                var total = await Task.Run(() => MailIndex.CountIds(q, 100000));
+                sb.AppendLine($"Index lookup “{text}” (all words, every folder, sent and received, all projects): {total} emails in the index" + (total > hits.Count ? $" · showing the {hits.Count} newest (ask with after / before or a higher limit for older ones)" : ""));
                 foreach (var h in hits) sb.Append(Line(h, hide));
                 break;
             }

@@ -87,7 +87,7 @@ static class Relay
                 Status = $"⏳ answering {tool}…";
                 if (tool == "phone")
                     answer = "NES:" + await PhoneLink.PhoneRequest(req["enc"]?.ToString() ?? "");   // 📱 the paired phone (encrypted both ways)
-                else if (tool.StartsWith("ol.") || tool.StartsWith("fix."))
+                else if (tool.StartsWith("ol.") || tool.StartsWith("fix.") || tool.StartsWith("nova."))
                 {
                     // 🔗 Claude ↔ your Outlook: only while you allow it, and only encrypted for Claude's session key (never readable on GitHub)
                     var pub = req["pub"]?.ToString() ?? "";

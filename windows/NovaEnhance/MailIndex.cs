@@ -322,6 +322,12 @@ class MailQuery
     public bool? HasAttach, Unread;
     public bool Unanswered, FollowUp;
     public int Limit = 50;
+    /// <summary>🧭 Highest Limit allowed (the agent's follow-up reads every email of 2–3 years: up to 20 000).</summary>
+    public int Cap = 500;
+    /// <summary>Only the first N characters of each body (0 = all) — for big lists.</summary>
+    public int BodyChars = 0;
+    /// <summary>🧭 Sent by me OR from any of these (names / addresses / domains) — e.g. my colleagues.</summary>
+    public List<string> FromOrSent = new();
     /// <summary>📁 Project: "" = all, "?" = unsorted, else the project code (emails not sorted yet are kept while Nova sorts).</summary>
     public string Project = "";
     /// <summary>Only the emails of one mailbox / archive (e.g. "pst:…" for an archive read directly).</summary>
@@ -1317,6 +1323,7 @@ static class MailIndex
         }
 
         if (NameClause(q.From, "m.from_name", "m.from_addr") is { } f) where.Add(f);
+        if (q.FromOrSent.Count > 0 && NameClause(q.FromOrSent, "m.from_name", "m.from_addr") is { } fs) where.Add($"(m.sent=1 OR {fs})");
         if (NameClause(q.To, "m.to_list", "m.to_addr") is { } t) where.Add(t);
         if (NameClause(q.Cc, "m.cc_list", "m.cc_addr") is { } cc) where.Add(cc);
         if (q.ToOrCc.Count > 0 && NameClause(q.ToOrCc, "m.to_list", "m.to_addr") is { } toa && NameClause(q.ToOrCc, "m.cc_list", "m.cc_addr") is { } cca) where.Add($"({toa} OR {cca})");
@@ -1478,9 +1485,10 @@ static class MailIndex
     public static List<MailHit> Search(MailQuery q)
     {
         var (where, ps) = Build(q);
-        var sql = "SELECT m.id,m.entry,m.store,m.conv,m.folder,m.sent,m.date,m.from_name,m.from_addr,m.to_list,m.cc_list,m.to_addr,m.cc_addr,m.subject,m.body,m.att_names,m.unread,m.importance FROM mail m"
+        var body = q.BodyChars > 0 ? $"substr(m.body,1,{q.BodyChars})" : "m.body";
+        var sql = $"SELECT m.id,m.entry,m.store,m.conv,m.folder,m.sent,m.date,m.from_name,m.from_addr,m.to_list,m.cc_list,m.to_addr,m.cc_addr,m.subject,{body},m.att_names,m.unread,m.importance FROM mail m"
                   + (where.Count > 0 ? " WHERE " + string.Join(" AND ", where) : "")
-                  + $" ORDER BY m.date DESC LIMIT {Math.Clamp(q.Limit, 1, 500)}";
+                  + $" ORDER BY m.date DESC LIMIT {Math.Clamp(q.Limit, 1, Math.Clamp(q.Cap, 1, 20000))}";
         var list = new List<MailHit>();
         using var c = Open();
         using var cmd = c.CreateCommand();
