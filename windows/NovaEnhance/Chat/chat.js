@@ -100,7 +100,10 @@
     btn("📌 Save as task", function () { post({ t: "saveTask", id: cur.id, idx: idx }); });
     if (m.agResult) {
       // 🧭 the agent's answer: CSV, the same conversation in the 📋 log
-      if ((m.agResult.rows || []).length) btn("⬇ Excel (CSV)", function () { post({ t: "agCsv", id: cur.id, idx: idx }); });
+      if ((m.agResult.rows || []).length) {
+        btn("⬇ Excel (with email links)", function () { post({ t: "agCsv", id: cur.id, idx: idx }); });
+        btn("⇩ Word (with email links)", function () { post({ t: "agWord", id: cur.id, idx: idx }); });
+      }
       btn("📋 Show in the log", function () { post({ t: "ag.toLog", id: cur.id }); });
     } else if (!m.detailed) btn("More detail", function () { send(m.question || "", true); });
     d.appendChild(acts);
@@ -123,10 +126,32 @@
         var tr = el("tr");
         var note = r[r.length - 1] || "";
         if (ri > 0 && note.indexOf("⚠") >= 0) tr.className = "diff"; else if (ri > 0 && note.indexOf("✓") >= 0) tr.className = "best";
-        for (var i = 0; i < rows[0].length; i++) tr.appendChild(el(ri === 0 ? "th" : "td", null, r[i] || ""));
+        for (var i = 0; i < rows[0].length; i++) {
+          var cell = el(ri === 0 ? "th" : "td");
+          if (ri > 0) inline(cell, r[i] || ""); else cell.textContent = r[i] || "";
+          tr.appendChild(cell);
+        }
         t.appendChild(tr);
       });
       wrap.appendChild(t); box.appendChild(wrap);
+    }
+    // **bold** and [n] links: click = the email in Nova's view · Ctrl+click = in Outlook (also inside tables)
+    function inline(into, line) {
+      var parts = line.split(/(\*\*[^*]+\*\*|\[\d+(?:\s*[,;]\s*\d+)*\])/);
+      parts.forEach(function (p) {
+        if (/^\*\*[^*]+\*\*$/.test(p)) into.appendChild(el("b", null, p.slice(2, -2)));
+        else if (/^\[\d/.test(p)) {
+          p.slice(1, -1).split(/[,;]/).forEach(function (n, k) {
+            var i = parseInt(n, 10) - 1;
+            var c = el("span", "cite", (k ? "" : "[") + (i + 1) + (k < p.slice(1, -1).split(/[,;]/).length - 1 ? "," : "]"));
+            if (sources[i]) {
+              c.title = sources[i].label + (sources[i].kind === "email" ? "\nclick: open in Nova · Ctrl+click: open in Outlook" : "");
+              c.onclick = function (e) { post({ t: "openSource", src: sources[i], ctrl: !!(e && e.ctrlKey) }); };
+            }
+            into.appendChild(c);
+          });
+        } else into.appendChild(document.createTextNode(p));
+      });
     }
     lines.forEach(function (line, li) {
       if (/^\s*\|.*\|/.test(line)) { (tbl = tbl || []).push(line); return; }
@@ -134,18 +159,7 @@
       var bullet = /^\s*[-*•]\s+/.test(line);
       if (bullet) line = "• " + line.replace(/^\s*[-*•]\s+/, "");
       line = line.replace(/^#{1,4}\s+/, "");
-      var parts = line.split(/(\*\*[^*]+\*\*|\[\d+(?:\s*[,;]\s*\d+)*\])/);
-      parts.forEach(function (p) {
-        if (/^\*\*[^*]+\*\*$/.test(p)) box.appendChild(el("b", null, p.slice(2, -2)));
-        else if (/^\[\d/.test(p)) {
-          p.slice(1, -1).split(/[,;]/).forEach(function (n, k) {
-            var i = parseInt(n, 10) - 1;
-            var c = el("span", "cite", (k ? "" : "[") + (i + 1) + (k < p.slice(1, -1).split(/[,;]/).length - 1 ? "," : "]"));
-            if (sources[i]) { c.title = sources[i].label; c.onclick = function () { post({ t: "openSource", src: sources[i] }); }; }
-            box.appendChild(c);
-          });
-        } else box.appendChild(document.createTextNode(p));
-      });
+      inline(box, line);
       if (li < lines.length - 1) box.appendChild(document.createTextNode("\n"));
     });
     flushTable();

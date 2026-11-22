@@ -48,6 +48,9 @@ static class Agent
         public Result Last;
         public bool Confirmed;
         public string ChatId = "";
+        /// <summary>📨 The last follow-up check, row by row — Nova builds the table from it when the AI's answer cannot be read.</summary>
+        public List<(long Id, string[] Cells)> Follow;
+        public string FollowHead = "";
     }
 
     // ------------------------------------------------------------------ one conversation everywhere (the log ⇄ Nova Chat)
@@ -143,7 +146,7 @@ TOOLS
 - emails: search the email index. args: words (all must appear), any_words (at least one), from (names / addresses / domains, any), to_or_cc (any of them in To or Cc), to, cc, project (code), after, before (yyyy-mm-dd), folder (any|sent|received), limit (≤150). Use domains for people's companies (e.g. the client's domain), words for document codes and topics. The user is in copy of colleagues' emails: use folder ""any"".
 - thread: every email of a conversation, oldest first, with From / To / Cc domains. args: id (an email #id) or doc (a document number such as RS5-C7-ACC-AR-SSM-00038). Use it to see who sent what to whom and whether someone replied after.
 - log: the 📋 Submittal log (submissions, their {Tracker.UsShort} code / reply, status). args: types (WIR, MAR, SDS, SSM, PQS, RFI, MIR, MSS, TSR, LTR, EI, MOM…), projects (codes), from, to (yyyy-mm-dd), status (Open|Overdue|Closed|Code3/4).
-- followup: THE tool for “what did we send to X, and did X reply?” (a client, consultant, contractor). It finds every email sent by the user's colleagues (or args.from) with X in To or Cc, groups them per document number / thread, and checks each thread for a later email FROM X. args: to (X's names / addresses / company domain — use the CLIENT domain from the project list), from (optional; default = the user's colleagues), project (code), words / any_words (optional, e.g. submittal type codes), after, before (yyyy-mm-dd; default: the last 3 years). Only emails with X in TO count as requests (cc: true adds the Cc ones). It reads EVERY email (no newest-N cut) and also X's addresses found from X's own emails. Returns a count line, then one line per document: first sent (date, by whom, To or Cc), how many times, and X's reply (date, #id) matched by document number in any folder, or NO REPLY, or REPLIED … then ASKED AGAIN — NO REPLY since (count that as still waiting). Give ALL its lines in the answer table, not a sample.
+- followup: THE tool for “what did we send to X, and did X reply?” (a client, consultant, contractor). It finds every email sent by the user's colleagues (or args.from) with X in To or Cc, groups them per document number / thread, and checks each thread for a later email FROM X. args: to (X's names / addresses / company domain — use the CLIENT domain from the project list), from (optional; default = the user's colleagues), project (code), words / any_words (optional, e.g. submittal type codes), after, before (yyyy-mm-dd; default: the last 3 years). Only emails with X in TO count as requests (cc: true adds the Cc ones). Daily site reports (DSR) and minutes of meetings (MOM) are left out unless the user asks for them. It reads EVERY email (no newest-N cut) and also X's addresses found from X's own emails. Returns a count line, then one line per document: first sent (date, by whom, To or Cc), how many times, and X's reply (date, #id) matched by document number in any folder, or NO REPLY, or REPLIED … then ASKED AGAIN — NO REPLY since (count that as still waiting). Give ALL its lines in the answer table, not a sample.
 - confirm: show the user 3 to 5 example emails (#ids) that you think match, with a question, and get ✓ / ✗ back. args: ids, question. You MUST call confirm once before the final answer, with the best examples you found.
 - draft: prepare an Outlook draft (never sent; the user checks and sends). args: to, cc, subject, body. Only when the user asked for a draft / reminder / email.
 - answer: the final result. args: text (short summary: what you searched and how you decided), columns (list of column names), rows (list of {{""id"": email #id or 0, ""cells"": [...]}}). Use a table whenever there is more than one item; one row per document / thread, newest first, with a status column such as ""✅ replied 18 Nov"" / ""⏳ no reply (3 days)"".
@@ -206,6 +209,10 @@ RULES
     static string BaseNo(string doc) => Regex.Replace(doc, @"[-_ ]?R(ev)?\d{1,2}$", "", RegexOptions.IgnoreCase).ToUpperInvariant();
     static bool Has(string a, string b) => !string.IsNullOrEmpty(a) && a.Contains(b, StringComparison.OrdinalIgnoreCase);
 
+    static readonly Regex InfoMail = new(@"-(DSR|MOM)-|\b(DSR|MOM|minutes of (?:the )?meeting|daily site report|progress meeting|meeting postpone\w*)\b", RegexOptions.IgnoreCase);
+    static readonly Regex InfoAsk = new(@"\b(DSRs?|MOMs?|minutes|daily (?:site )?reports?|meetings?)\b", RegexOptions.IgnoreCase);
+    static string Strip(string subj) => Regex.Replace(subj ?? "", @"^\s*((re|fw|fwd|aw|tr|reminder)\s*[:\-]\s*)+", "", RegexOptions.IgnoreCase);
+
     static readonly Regex AskAgain = new(@"\b(remind(er)?|gentle reminder|kindly (?:review|advise|confirm|provide|share)|for your (?:kind )?(?:review|approval|comments?|feedback)|awaiting|still waiting|appreciate your (?:feedback|comments?|response|reply)|follow[- ]?up|your (?:response|reply|feedback))\b", RegexOptions.IgnoreCase);
 
     /// <summary>The person's names AND addresses: “Charbel” → also c.abirached@gefinorproperties.com (read from the emails he sent),
@@ -245,7 +252,13 @@ RULES
             .Where(h => withCc || to.Any(t => Has(h.To, t) || Has(h.ToAddr, t))).ToList();
         if (hits.Count == 0) return $"0 emails from {(from.Count == 0 ? Tracker.UsShort : string.Join(", ", from))} with {string.Join(", ", to)} in To/Cc since {q.After:yyyy-MM-dd}.";
         bool Doc(MailHit h, out string key) { var m = DocRx.Match(h.Subject ?? ""); key = m.Success ? BaseNo(m.Value) : "thread:" + h.Conv; return m.Success; }
-        var groups = hits.GroupBy(h => { Doc(h, out var k); return k; }).OrderByDescending(g => g.Max(h => h.Date)).ToList();
+        // Daily site reports and minutes of meetings are information, not review requests: left out unless asked for.
+        var asked = (s.Said.LastOrDefault(x => x.Role == "user").Text ?? "") + " " + (a["include"]?.ToString() ?? "");
+        bool keepInfo = InfoAsk.IsMatch(asked);
+        var groups = hits.Where(h => keepInfo || !InfoMail.IsMatch(h.Subject ?? ""))
+            .GroupBy(h => { Doc(h, out var k); return k; }).OrderByDescending(g => g.Max(h => h.Date)).ToList();
+        if (groups.Count == 0) return $"{hits.Count} email(s) sent to {string.Join(", ", to0)}, all daily site reports / minutes of meetings (left out — ask for them to include them).";
+        var rowsOut = new List<(long Id, string[] Cells)>();
         // ⚡ ONE search for everything X sent since the first request, matched below by document number or by thread.
         detail($"reading everything {string.Join(", ", to0)} sent since {hits.Min(h => h.Date):dd MMM yyyy}…");
         var fromX = MailIndex.Search(new MailQuery { From = to, After = hits.Min(h => h.Date).AddDays(-1), Limit = 20000, Cap = 20000, BodyChars = 300, Folder = "any" })
@@ -279,6 +292,11 @@ RULES
                           (sent.Count > 1 ? $" (last {sent[^1].Date:yyyy-MM-dd})" : "");
             if (reply == null && !g.Key.StartsWith("thread:")) waiting.Add((g.Key, first.Date, lines.Count, headTxt));
             lines.Add(headTxt + " · " + status);
+            var shortSt = reply == null ? $"⏳ no reply ({(DateTime.Now - sent[^1].Date).Days} days)"
+                : askedAfter != null ? $"⏳ replied {reply.Date:dd MMM}, asked again {askedAfter.Date:dd MMM} — no reply since"
+                : $"✅ replied {reply.Date:dd MMM yyyy}";
+            rowsOut.Add((first.Id, new[] { g.Key.StartsWith("thread:") ? "—" : g.Key, Short(DocRx.Replace(Strip(first.Subject), "").Trim(' ', '-', '_', ':'), 90),
+                first.Date.ToString("dd MMM yyyy"), first.Sent ? $"me ({Tracker.UsShort})" : first.FromName ?? "", sent.Count.ToString(), shortSt }));
         }
         // 🔎 Before Nova says “no reply”: Outlook is asked live for anything they sent with that document number (an email the index
         // does not have yet — just arrived, in a folder not read yet). Found → the row says so, and Sync + repair brings it in.
@@ -292,6 +310,8 @@ RULES
                     var hit = liveMails.Where(x => x.Date > w.First && DocRx.Match(x.Subject ?? "") is { Success: true } m && BaseNo(m.Value) == w.Key).OrderBy(x => x.Date).FirstOrDefault();
                     if (hit.Entry == null) continue;
                     lines[w.Line] = w.Head + $" · REPLY from {hit.From} {hit.Date:yyyy-MM-dd HH:mm} — found LIVE in Outlook (not in Nova's index yet; Nova is adding it): {Short(hit.Subject, 70)}";
+                    var ri = rowsOut.FindIndex(x => x.Cells[0] == w.Key);
+                    if (ri >= 0) rowsOut[ri].Cells[5] = $"✅ replied {hit.Date:dd MMM yyyy} (found live in Outlook)";
                     open--; answered++; live++;
                 }
                 if (live > 0) MailIndex.SyncNow();
@@ -300,6 +320,9 @@ RULES
         var head = (waiting.Count > 0 ? $"🔎 every “no reply” was re-checked in Outlook live{(live > 0 ? $" — {live} reply(ies) found there that the index did not have yet" : " — confirmed")}.\n" : "") +
                    $"{hits.Count} email(s) sent to {string.Join(", ", to0)}{(to.Count > to0.Count ? " (also as " + string.Join(", ", to.Except(to0)) + ")" : "")} since {q.After:yyyy-MM-dd} · " +
                    $"{groups.Count} document(s) / thread(s): {answered} replied · {open} NO REPLY · {again} replied then asked again · {fromX.Count} email(s) from them read. Newest first:\n";
+        s.Follow = rowsOut;
+        s.FollowHead = $"{groups.Count} document(s) sent to {string.Join(", ", to0)} since {q.After:dd MMM yyyy}: {answered} replied · {open} with no reply · {again} replied, then asked again with no reply since" +
+                       (keepInfo ? "" : " (daily site reports and minutes of meetings left out)") + (live > 0 ? $" · {live} reply(ies) found live in Outlook" : "") + ".";
         return head + string.Join("\n", lines.Take(400)) + (lines.Count > 400 ? $"\n… {lines.Count - 400} older not shown" : "") + "\n";
     }
 
@@ -380,7 +403,11 @@ RULES
             else raw = await Ai.Chat(sys, user, false, true, null, ct);
             res.By = Ai.LastBy; if (Ai.LastNote.Length > 0) res.Note = Ai.LastNote;
             JsonObject j;
-            try { j = Ai.ParseJson(raw) ?? new JsonObject(); } catch { j = new JsonObject { ["tool"] = "answer", ["args"] = new JsonObject { ["text"] = raw } }; }
+            try { j = Ai.ParseJson(raw) ?? new JsonObject(); } catch { j = new JsonObject(); }
+            // An answer cut off in the middle (a long table): the complete rows are kept.
+            if (j.Count == 0 && (raw ?? "").Contains('{')) j = Repair(raw) ?? new JsonObject { ["tool"] = "answer", ["args"] = new JsonObject { ["text"] = raw } };
+            // The table sent without the {"tool":"answer","args":…} around it.
+            if (j["tool"] == null && j["args"] == null && (j["rows"] != null || j["columns"] != null)) j = new JsonObject { ["tool"] = "answer", ["args"] = j.DeepClone() };
             var tool = j["tool"]?.ToString() ?? "answer";
             var args = j["args"] as JsonObject ?? new JsonObject();
             var say = j["say"]?.ToString() ?? "";
@@ -451,6 +478,19 @@ RULES
                             transcript.Append("TOOL RESULT (answer): REJECTED — the user asked for a list and your answer has no rows. Give the full table now in args.rows (id + cells), from what the tools returned; if a tool is still needed (e.g. followup), call it first.\n");
                             continue;
                         }
+                        // 🛡 Never raw JSON on screen; when the AI's table is missing or unreadable, Nova's own follow-up rows are the table.
+                        bool rawJson = Regex.IsMatch(ansText ?? "", @"^\s*[\{\[]");
+                        if ((rows.Count == 0 || rawJson) && s.Follow is { Count: > 0 })
+                        {
+                            res.Text = (rawJson || string.IsNullOrWhiteSpace(ansText) ? "" : ansText.Trim() + "\n\n") + s.FollowHead + (rawJson ? " (Nova's own result — the AI's answer could not be read.)" : "");
+                            res.Columns = new() { "Document", "Subject", "First sent", "By", "Times sent", "Status" };
+                            foreach (var (fid0, cells) in s.Follow)
+                                res.Rows.Add(new Row { Id = fid0, Cells = cells.ToList(), Mail = s.Seen.TryGetValue(fid0, out var fm) ? fm : null });
+                            s.Last = res;
+                            s.Said.Add(("nova", res.Text + $" ({res.Rows.Count} rows)"));
+                            return res;
+                        }
+                        if (rawJson) ansText = "The AI's answer could not be read — please ask again (or ask for a shorter list).";
                         res.Text = ansText;
                         res.Columns = L(args["columns"]);
                         foreach (var r in rows)
@@ -473,6 +513,30 @@ RULES
         }
         res.Text = "I could not finish in 12 steps — try a narrower request (one project, one type, a period).";
         return res;
+    }
+
+    /// <summary>A JSON answer cut off in the middle: cut back to the last complete value and close what is open.</summary>
+    static JsonObject Repair(string raw)
+    {
+        int a = raw.IndexOf('{');
+        if (a < 0) return null;
+        var t = raw[a..];
+        for (int end = t.Length, tries = 0; end > 1 && tries < 400; tries++)
+        {
+            int cut = t.LastIndexOfAny(new[] { '}', ']', '"' }, end - 1);
+            if (cut < 0) break;
+            var part = t[..(cut + 1)];
+            var stack = new Stack<char>(); bool str = false, esc = false;
+            foreach (var ch in part)
+            {
+                if (str) { if (esc) esc = false; else if (ch == '\\') esc = true; else if (ch == '"') str = false; continue; }
+                if (ch == '"') str = true; else if (ch == '{') stack.Push('}'); else if (ch == '[') stack.Push(']'); else if ((ch == '}' || ch == ']') && stack.Count > 0) stack.Pop();
+            }
+            if (!str)
+                try { var o = JsonNode.Parse(part.TrimEnd(',', ' ', '\n') + string.Concat(stack))?.AsObject(); if (o != null && (o["rows"] != null || o["args"] != null)) return o; } catch { }
+            end = cut;
+        }
+        return null;
     }
 
     /// <summary>One of the agent's data tools, for the 🧠 Brain trainer (emails · thread · followup · log).</summary>
@@ -566,22 +630,8 @@ RULES
         ["cc"] = Short(h.Cc, 70), ["subject"] = h.Subject ?? "", ["lines"] = h.FirstLines(160), ["entry"] = h.Entry ?? "", ["store"] = h.StoreId ?? ""
     }).ToArray());
 
-    /// <summary>⬇ The table as a CSV file (Excel opens it), in Documents\Nova Enhance\Exports.</summary>
-    public static string Csv(Result r, string title)
-    {
-        var dir = Path.Combine(Paths.Root, "Exports");
-        Directory.CreateDirectory(dir);
-        var name = Regex.Replace(title, @"[^\p{L}\p{N} _-]", "").Trim();
-        if (name.Length > 60) name = name[..60];
-        var path = Path.Combine(dir, $"{(name.Length > 0 ? name : "Nova agent")} {DateTime.Now:yyyy-MM-dd HHmm}.csv");
-        string Q(string v) => "\"" + (v ?? "").Replace("\"", "\"\"") + "\"";
-        var sb = new StringBuilder();
-        sb.AppendLine(string.Join(",", r.Columns.Select(Q)));
-        foreach (var row in r.Rows) sb.AppendLine(string.Join(",", row.Cells.Select(Q)));
-        sb.AppendLine().AppendLine(Q("Made by Nova Enhance · 🧭 agent · Designed by A.HAMROUNI"));
-        File.WriteAllText(path, sb.ToString(), new UTF8Encoding(true));
-        return path;
-    }
+    /// <summary>⬇ The table as Excel (.xlsx) with ✉ Open and 📎 Email file links per row (was a CSV file).</summary>
+    public static string Csv(Result r, string title) => Export.AgentExcel(r, title);
 
     /// <summary>The table in Markdown (Nova Chat shows it as a real table; the [n] open the emails).</summary>
     public static string Markdown(Result r, List<MailHit> cite)

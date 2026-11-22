@@ -85,7 +85,7 @@
     if (r.by) n.appendChild(el("div", "muted small", "by " + r.by));
     var acts = el("div", "acts");
     function b(t, f, p) { var x = el("button", p ? "primary" : null, t); x.onclick = f; acts.appendChild(x); }
-    if ((r.rows || []).length) b("⬇ Excel (CSV)", function () { post({ t: "ag.csv" }); }, true);
+    if ((r.rows || []).length) b("⬇ Excel (with email links)", function () { post({ t: "ag.csv" }); }, true);
     b("💬 Continue in Nova Chat", function () { post({ t: "ag.chat" }); });
     b("⭐ Save as prompt", function () { post({ t: "ag.prompt" }); });
     n.appendChild(acts);

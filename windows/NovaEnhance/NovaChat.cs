@@ -150,9 +150,17 @@ class NovaChat
                     }
                     break;
                 }
+                case "agWord":
+                {
+                    var (_, a, q) = Pick(m["id"]?.ToString(), m["idx"]?.GetValue<int>() ?? -1);
+                    if (a?["agResult"] is JsonObject ar)
+                        try { Shell.Open(Export.AgentWord(Agent.FromJson(ar), q ?? "Nova agent")); }
+                        catch (Exception e) { Post(new JsonObject { ["t"] = "error", ["text"] = e.Message }); }
+                    break;
+                }
                 case "ag.toLog": Screens.SubmittalChat(m["id"]?.ToString() ?? ""); break;
                 case "think.ask": Post(new JsonObject { ["t"] = "think.wait", ["text"] = Busy.Line() }); break;
-                case "openSource": OpenSource(m["src"] as JsonObject); break;
+                case "openSource": OpenSource(m["src"] as JsonObject, m["ctrl"]?.ToString() is "true" or "True"); break;
                 case "copy": Clipboard.SetText(m["text"]?.ToString() ?? " "); break;
                 case "saveWord": SaveWord(m["id"]?.ToString(), m["idx"]?.GetValue<int>() ?? -1); break;
                 case "draftReply": DraftReply(m["id"]?.ToString(), m["idx"]?.GetValue<int>() ?? -1); break;
@@ -587,10 +595,18 @@ class NovaChat
 
     // ================================================================ actions on an answer
 
-    public static void OpenSource(JsonObject s)
+    /// <summary>An email source: Nova's view (with “Open in Outlook”); Ctrl+click = straight in Outlook.</summary>
+    public static void OpenSource(JsonObject s, bool outlook = false)
     {
         if (s == null) return;
-        if (s["kind"]?.ToString() == "email") { Outlook.Open(s["entry"]?.ToString(), s["store"]?.ToString()); return; }
+        if (s["kind"]?.ToString() == "email")
+        {
+            var entry = s["entry"]?.ToString();
+            MailHit h = null;
+            if (!outlook) try { h = MailIndex.ByEntry(entry); } catch { }
+            if (h != null) Screens.MailAsk(h); else Outlook.Open(entry, s["store"]?.ToString());
+            return;
+        }
         var path = s["path"]?.ToString();
         if (string.IsNullOrEmpty(path)) return;
         Opener.Open(new FileHit { Path = path, Remote = s["remote"]?.ToString() }, new PieceHit { Loc = s["loc"]?.ToString() ?? "", Goto = s["goto"]?.ToString() ?? "", Text = "", Matches = new() }, "");

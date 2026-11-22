@@ -581,14 +581,18 @@ static class SubmittalLog
 
     public static string Excel(Result r, string title)
     {
-        var dir = Prompts.Folder;
-        Directory.CreateDirectory(dir);
-        var safe = Regex.Replace(title, @"[\\/:*?""<>|]+", " ").Trim();
-        var path = Path.Combine(dir, $"{safe} — {DateTime.Now:dd MMM yyyy HHmm}.xlsx");
-        string[] head = { "Project", "Via", "Type", "Document no.", "Rev", "Disc.", "Title", "Tower", "Zone", "Level", "Apt / TH", "Submitted", "Deadline", Tracker.UsShort + " reply", "Replied by", "Code", "Days", "Status", "Why" };
-        int[] widths = { 8, 12, 7, 26, 7, 7, 60, 9, 8, 11, 14, 17, 12, 17, 22, 9, 6, 11, 70 };
+        // 🔗 Each export in its own folder: the Excel, its Emails folder (the waiting items' emails as .msg files) and a zip beside it.
+        Export.Notice();
+        var (dir, name) = Export.Folder(Prompts.Folder, title);
+        var path = Path.Combine(dir, name + ".xlsx");
+        var forFiles = (r.Items.Count <= 150 ? r.Items : r.Items.Where(i => i.Status is "Open" or "Overdue" or "Reviewing" or "Replied" or "Draft")).Where(i => i.Sub != null).ToList();
+        var files = Export.SaveEmails(dir, forFiles.Select(i => i.Sub), 150);
+        string[] head = { "Project", "Via", "Type", "Document no.", "Rev", "Disc.", "Title", "Tower", "Zone", "Level", "Apt / TH", "Submitted", "Deadline", Tracker.UsShort + " reply", "Replied by", "Code", "Days", "Status", "Why", "✉ Open (my PC)", "📎 Email file (anyone)" };
+        int[] widths = { 8, 12, 7, 26, 7, 7, 60, 9, 8, 11, 14, 17, 12, 17, 22, 9, 6, 11, 70, 12, 36 };
         string[] Row(Item i) => new[] { i.Project, i.Via, i.Type, i.No, i.Rev, i.Disc, i.Title, i.Tower, i.Zone, i.Level, i.Apt, i.Submitted?.ToString("dd MMM yyyy HH:mm") ?? "",
-            i.Deadline?.ToString("dd MMM yyyy") ?? "", i.Reply?.ToString("dd MMM yyyy HH:mm") ?? "", i.By, i.Code, i.Submitted != null ? i.Days.ToString() : "", i.Status, i.Why };
+            i.Deadline?.ToString("dd MMM yyyy") ?? "", i.Reply?.ToString("dd MMM yyyy HH:mm") ?? "", i.By, i.Code, i.Submitted != null ? i.Days.ToString() : "", i.Status, i.Why,
+            i.Sub != null ? Export.Link(Export.NovaUrl(i.Sub.Id), "✉ Open") : "",
+            i.Sub != null && files.TryGetValue(i.Sub.Id, out var f) ? Export.Link(f, "📎 " + Path.GetFileNameWithoutExtension(f)) : "" };
         var o = r.Opt;
         var choices = $"Projects {(o.Projects.Count > 0 ? string.Join(" + ", o.Projects) : "all")} · {(o.Types.Count > 0 ? string.Join(", ", o.Types) : "all types")} · {o.From:dd MMM yyyy} – {o.To:dd MMM yyyy}"
                       + (o.Tower.Length > 0 ? " · " + o.Tower : "") + (o.Zone.Length > 0 ? " · " + o.Zone : "") + (o.Discipline.Length > 0 ? " · " + o.Discipline : "") + (o.Status.Length > 0 ? " · " + o.Status : "");
@@ -625,16 +629,20 @@ static class SubmittalLog
         foreach (var (s, rule) in Brain.Rules(Brain.Snapshot()).Where(x => x.Section["id"]?.ToString() is "submittal" or "location"))
             about.Add(new[] { rule["id"]?.ToString() ?? "", rule["text"]?.ToString() ?? "" });
         sheets.Add(new("About", "ℹ About this log", "", null, new[] { 22, 140 }, about, -1));
+        about.Add(new[] { "✉ Open", "opens the submission email in Nova on the PC that made this file" });
+        about.Add(new[] { "📎 Email file", $"{files.Count} email(s) saved in the Emails folder ({(r.Items.Count <= 150 ? "every item" : "the items still waiting, newest 150")}) — they open in anyone's Outlook; send the .zip to keep the links working" });
         WriteBook(path, sheets);
+        Export.Readme(dir);
+        Export.Zip(dir);
         return path;
     }
 
-    record XSheet(string Name, string Title, string Sub, string[] Head, int[] Widths, List<string[]> Rows, int StatusCol);
+    internal record XSheet(string Name, string Title, string Sub, string[] Head, int[] Widths, List<string[]> Rows, int StatusCol);
 
     static string X(string s) => System.Security.SecurityElement.Escape(Regex.Replace(s ?? "", @"[\x00-\x08\x0B\x0C\x0E-\x1F]", "")) ?? "";
     static string Col(int i) { var s = ""; i++; while (i > 0) { var m = (i - 1) % 26; s = (char)('A' + m) + s; i = (i - 1) / 26; } return s; }
 
-    static void WriteBook(string path, List<XSheet> sheets)
+    internal static void WriteBook(string path, List<XSheet> sheets)
     {
         using var fs = File.Create(path);
         using var z = new ZipArchive(fs, ZipArchiveMode.Create);
@@ -659,12 +667,12 @@ static class SubmittalLog
         W("xl/workbook.xml", wb.Append("</sheets>").Append(names.Length > 0 ? "<definedNames>" + names + "</definedNames>" : "").Append("</workbook>").ToString());
         // Styles: 0 normal · 1 header · 2 title · 3 note · 4 Closed · 5 Open · 6 Overdue · 7 Superseded · 8 bold · 9 Reviewing
         W("xl/styles.xml", H + "<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">" +
-          "<fonts count=\"9\"><font><sz val=\"10\"/><name val=\"Calibri\"/></font><font><b/><sz val=\"10\"/><color rgb=\"FFFFFFFF\"/><name val=\"Calibri\"/></font><font><b/><sz val=\"14\"/><color rgb=\"FF2B2F3A\"/><name val=\"Calibri\"/></font><font><i/><sz val=\"9\"/><color rgb=\"FF6B7385\"/><name val=\"Calibri\"/></font>" +
-          "<font><b/><sz val=\"10\"/><color rgb=\"FF137A44\"/><name val=\"Calibri\"/></font><font><b/><sz val=\"10\"/><color rgb=\"FF8A5A00\"/><name val=\"Calibri\"/></font><font><b/><sz val=\"10\"/><color rgb=\"FFB42318\"/><name val=\"Calibri\"/></font><font><b/><sz val=\"10\"/><color rgb=\"FF666666\"/><name val=\"Calibri\"/></font><font><b/><sz val=\"10\"/><name val=\"Calibri\"/></font></fonts>" +
+          "<fonts count=\"10\"><font><sz val=\"10\"/><name val=\"Calibri\"/></font><font><b/><sz val=\"10\"/><color rgb=\"FFFFFFFF\"/><name val=\"Calibri\"/></font><font><b/><sz val=\"14\"/><color rgb=\"FF2B2F3A\"/><name val=\"Calibri\"/></font><font><i/><sz val=\"9\"/><color rgb=\"FF6B7385\"/><name val=\"Calibri\"/></font>" +
+          "<font><b/><sz val=\"10\"/><color rgb=\"FF137A44\"/><name val=\"Calibri\"/></font><font><b/><sz val=\"10\"/><color rgb=\"FF8A5A00\"/><name val=\"Calibri\"/></font><font><b/><sz val=\"10\"/><color rgb=\"FFB42318\"/><name val=\"Calibri\"/></font><font><b/><sz val=\"10\"/><color rgb=\"FF666666\"/><name val=\"Calibri\"/></font><font><b/><sz val=\"10\"/><name val=\"Calibri\"/></font><font><u/><sz val=\"10\"/><color rgb=\"FF0563C1\"/><name val=\"Calibri\"/></font></fonts>" +
           "<fills count=\"8\"><fill><patternFill patternType=\"none\"/></fill><fill><patternFill patternType=\"gray125\"/></fill><fill><patternFill patternType=\"solid\"><fgColor rgb=\"FF2B2F3A\"/></patternFill></fill><fill><patternFill patternType=\"solid\"><fgColor rgb=\"FFE3F6EC\"/></patternFill></fill><fill><patternFill patternType=\"solid\"><fgColor rgb=\"FFFFF4DD\"/></patternFill></fill><fill><patternFill patternType=\"solid\"><fgColor rgb=\"FFFDE4E4\"/></patternFill></fill><fill><patternFill patternType=\"solid\"><fgColor rgb=\"FFEEEEEE\"/></patternFill></fill><fill><patternFill patternType=\"solid\"><fgColor rgb=\"FFE8E5FF\"/></patternFill></fill></fills>" +
           "<borders count=\"2\"><border/><border><bottom style=\"thin\"><color rgb=\"FFD5D8DE\"/></bottom></border></borders><cellStyleXfs count=\"1\"><xf/></cellStyleXfs>" +
-          "<cellXfs count=\"10\"><xf borderId=\"1\" applyBorder=\"1\"/><xf fontId=\"1\" fillId=\"2\" applyFont=\"1\" applyFill=\"1\"/><xf fontId=\"2\" applyFont=\"1\"/><xf fontId=\"3\" applyFont=\"1\"/>" +
-          "<xf fontId=\"4\" fillId=\"3\" borderId=\"1\" applyFont=\"1\" applyFill=\"1\" applyBorder=\"1\"/><xf fontId=\"5\" fillId=\"4\" borderId=\"1\" applyFont=\"1\" applyFill=\"1\" applyBorder=\"1\"/><xf fontId=\"6\" fillId=\"5\" borderId=\"1\" applyFont=\"1\" applyFill=\"1\" applyBorder=\"1\"/><xf fontId=\"7\" fillId=\"6\" borderId=\"1\" applyFont=\"1\" applyFill=\"1\" applyBorder=\"1\"/><xf fontId=\"8\" applyFont=\"1\"/><xf fontId=\"5\" fillId=\"7\" borderId=\"1\" applyFont=\"1\" applyFill=\"1\" applyBorder=\"1\"/></cellXfs></styleSheet>");
+          "<cellXfs count=\"11\"><xf borderId=\"1\" applyBorder=\"1\"/><xf fontId=\"1\" fillId=\"2\" applyFont=\"1\" applyFill=\"1\"/><xf fontId=\"2\" applyFont=\"1\"/><xf fontId=\"3\" applyFont=\"1\"/>" +
+          "<xf fontId=\"4\" fillId=\"3\" borderId=\"1\" applyFont=\"1\" applyFill=\"1\" applyBorder=\"1\"/><xf fontId=\"5\" fillId=\"4\" borderId=\"1\" applyFont=\"1\" applyFill=\"1\" applyBorder=\"1\"/><xf fontId=\"6\" fillId=\"5\" borderId=\"1\" applyFont=\"1\" applyFill=\"1\" applyBorder=\"1\"/><xf fontId=\"7\" fillId=\"6\" borderId=\"1\" applyFont=\"1\" applyFill=\"1\" applyBorder=\"1\"/><xf fontId=\"8\" applyFont=\"1\"/><xf fontId=\"5\" fillId=\"7\" borderId=\"1\" applyFont=\"1\" applyFill=\"1\" applyBorder=\"1\"/><xf fontId=\"9\" borderId=\"1\" applyFont=\"1\" applyBorder=\"1\"/></cellXfs></styleSheet>");
         for (int si = 0; si < sheets.Count; si++)
         {
             var sh = sheets[si];
@@ -681,6 +689,13 @@ static class SubmittalLog
                 {
                     var st = style(c, v);
                     var refc = Col(c++) + r;
+                    // 🔗 a link cell (Export.Link): =HYPERLINK("url","text") — opens the email (nova:) or the saved email file
+                    if (v.Length > 0 && v[0] == Export.L1 && v.IndexOf(Export.L2) is var k2 and > 0)
+                    {
+                        string url = v[1..k2], txt = v[(k2 + 1)..];
+                        sb.Append($"<c r=\"{refc}\" s=\"10\" t=\"str\"><f>{X($"HYPERLINK(\"{url.Replace("\"", "\"\"")}\",\"{txt.Replace("\"", "\"\"")}\")")}</f><v>{X(txt)}</v></c>");
+                        continue;
+                    }
                     if (st == 0 && v.Length is > 0 and < 9 && int.TryParse(v, out var n)) sb.Append($"<c r=\"{refc}\" s=\"0\"><v>{n}</v></c>");
                     else sb.Append($"<c r=\"{refc}\" t=\"inlineStr\" s=\"{st}\"><is><t xml:space=\"preserve\">{X(v)}</t></is></c>");
                 }

@@ -31,7 +31,7 @@ static class Program
         return true;
     }
     public static NotifyIcon Tray;
-    public static string StartSearch, StartOffice;
+    public static string StartSearch, StartOffice, StartOpen;
 
     [STAThread]
     static int Main(string[] args)
@@ -52,13 +52,20 @@ static class Program
         // ✦ Nova tab in Office: NovaEnhance.exe --office <action> (the add-in starts Nova with it when Nova was closed).
         var officeIdx = Array.IndexOf(args, "--office");
         var officeAct = officeIdx >= 0 && officeIdx + 1 < args.Length ? args[officeIdx + 1] : null;
+        // 🔗 nova:mail/123 — a ✉ Open link clicked in an Excel / Word export.
+        var openLink = args.FirstOrDefault(x => x.StartsWith("nova:", StringComparison.OrdinalIgnoreCase));
 
         using var mutex = new Mutex(true, "NovaEnhanceWindows-single", out bool first);
         if (!first)
         {
             try
             {
-                if (officeAct != null)
+                if (openLink != null)
+                {
+                    File.WriteAllText(Path.Combine(Paths.Cache, "open-request.txt"), openLink);
+                    EventWaitHandle.OpenExisting("NovaEnhanceWindows-open").Set();
+                }
+                else if (officeAct != null)
                     EventWaitHandle.OpenExisting("NovaEnhanceWindows-office-" + officeAct.Replace("mode:", "mode_")).Set();
                 else if (searchPath != null)
                 {
@@ -72,6 +79,7 @@ static class Program
         }
         StartSearch = searchPath;
         StartOffice = officeAct;
+        StartOpen = openLink;
 
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         Application.EnableVisualStyles();
@@ -82,7 +90,7 @@ static class Program
         Microsoft.Win32.SystemEvents.SessionEnding += (_, _) => Guard.CleanExit();
         TaskScheduler.UnobservedTaskException += (_, e) => { Log.Error("task", e.Exception); e.SetObserved(); };
 
-        Application.Run(new NovaContext(args.Contains("--tray") || StartSearch != null || StartOffice != null));
+        Application.Run(new NovaContext(args.Contains("--tray") || StartSearch != null || StartOffice != null || StartOpen != null));
         return 0;
     }
 
@@ -101,7 +109,7 @@ class NovaContext : ApplicationContext
     readonly NotifyIcon tray;
     readonly HotkeyWindow hot;
     readonly System.Windows.Forms.Timer timer;
-    readonly EventWaitHandle showEvt, searchEvt;
+    readonly EventWaitHandle showEvt, searchEvt, openEvt;
     readonly List<EventWaitHandle> officeEvts = new();
     int ticks;
 
@@ -230,6 +238,14 @@ class NovaContext : ApplicationContext
             try { var f = Path.Combine(Paths.Cache, "search-request.txt"); p = File.ReadAllText(f); File.Delete(f); } catch { }
             Program.UiContext.Post(_ => Screens.FolderSearch(p), null);
         }, null, -1, false);
+        openEvt = new EventWaitHandle(false, EventResetMode.AutoReset, "NovaEnhanceWindows-open");
+        ThreadPool.RegisterWaitForSingleObject(openEvt, (_, _) =>
+        {
+            string p = null;
+            try { var f = Path.Combine(Paths.Cache, "open-request.txt"); p = File.ReadAllText(f); File.Delete(f); } catch { }
+            if (p != null) Program.UiContext.Post(_ => Export.OpenLink(p), null);
+        }, null, -1, false);
+        Export.RegisterLinks();
         // ✦ A button of the Nova tab in Word, Excel, PowerPoint, Outlook, Visio, Project, Access or Publisher.
         // 🛡 Check before sending: listens to Outlook's Send (again every minute — Outlook may open later or restart).
         try { SendCheck.Ensure(); } catch (Exception e) { Log.Warn("check before sending", e.Message); }
@@ -258,6 +274,7 @@ class NovaContext : ApplicationContext
         {
             if (Program.StartSearch != null) Screens.FolderSearch(Program.StartSearch);
             if (Program.StartOffice != null) Screens.Office(Program.StartOffice);
+            if (Program.StartOpen != null) Export.OpenLink(Program.StartOpen);
             // 🛡 Restarted by the Guardian: say so, keep the report, reopen the window you had.
             if (Program.Restored)
             {
