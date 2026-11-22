@@ -1696,6 +1696,12 @@ class MyPcActivity : BaseActivity() {
             else googleSignIn()
         }, Ui.lp(top = Ui.dp(c, 8)))
         body.addView(Ui.text(c, "On this phone: ${mb(PcLink.sizeOnPhone(c))} · %,d emails · %,d files".format(PcLink.count(c, "mail"), PcLink.count(c, "files")), 13f, Ui.TEXT), Ui.lp(top = Ui.dp(c, 8)))
+        // 🔗 Claude ↔ your Outlook on the PC: you decide when (it switches itself off)
+        body.addView(Ui.text(c, "🔗 Claude reads your Outlook (encrypted · read-only · private words never sent)", 14f, Ui.TEXT, true), Ui.lp(top = Ui.dp(c, 16)))
+        val (csv, crow) = Ui.chipRow(c)
+        for ((label, h) in listOf("2 hours" to 2.0, "8 hours" to 8.0, "until tonight" to 24.0, "■ Stop" to 0.0))
+            crow.addView(Ui.chip(c, label, false) { pcDo("claude", JSONObject().put("hours", h), if (h > 0) "🔗 Claude can read Outlook ($label)" else "🔗 Claude's access stopped") }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
+        body.addView(csv, Ui.lp(top = Ui.dp(c, 6)))
         body.addView(Ui.button(c, "📷 Pair again (scan the QR code)") { scan() }, Ui.lp(top = Ui.dp(c, 14)))
         body.addView(Ui.button(c, "Unpair and delete the copy") {
             android.app.AlertDialog.Builder(c).setMessage("Delete everything from your PC on this phone and unpair?")

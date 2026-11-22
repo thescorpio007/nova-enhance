@@ -87,6 +87,16 @@ static class Relay
                 Status = $"⏳ answering {tool}…";
                 if (tool == "phone")
                     answer = "NES:" + await PhoneLink.PhoneRequest(req["enc"]?.ToString() ?? "");   // 📱 the paired phone (encrypted both ways)
+                else if (tool.StartsWith("ol.") || tool.StartsWith("fix."))
+                {
+                    // 🔗 Claude ↔ your Outlook: only while you allow it, and only encrypted for Claude's session key (never readable on GitHub)
+                    var pub = req["pub"]?.ToString() ?? "";
+                    if (pub.Length < 100) throw new Exception("🔗 Outlook tools need Claude's session key (pub) — refused");
+                    string inner;
+                    try { inner = await ClaudeOutlook.Run(tool, (JsonObject)args.DeepClone()); }
+                    catch (Exception e) { inner = "⚠ " + e.Message; }
+                    answer = $"# {id} · {tool} · answered {DateTime.Now:yyyy-MM-dd HH:mm:ss} · {Program.Shown}\n\n" + ClaudeOutlook.Seal(inner, pub);
+                }
                 else
                 {
                     answer = await TestConnector.RunTool("GitHub relay", tool, (JsonObject)args.DeepClone());

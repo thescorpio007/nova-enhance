@@ -995,6 +995,21 @@ static class MailIndex
         Exec(c, "UPDATE mail SET fid=$fid WHERE fid IS NULL AND store=$s AND folder=$f", ("$fid", id), ("$s", storeId), ("$f", name));
         Exec(c, "INSERT INTO folders(fid,store,store_name,path,total,seen) VALUES($fid,$s,$sn,$p,$t,$o) ON CONFLICT(fid) DO UPDATE SET store_name=$sn, path=$p, total=$t, seen=$o",
             ("$fid", id), ("$s", storeId), ("$sn", storeName), ("$p", path), ("$t", total), ("$o", folderOrder++));
+        // 🔧 Gaps: emails that arrive in Outlook INSIDE the dates already indexed (e.g. Outlook downloading older mail after
+        // “Download email for the past: All”) were skipped by the date marks. When Outlook holds clearly more than Nova has
+        // for this folder, the folder is read completely again (once a day at most) — only the missing ones are added.
+        try
+        {
+            var have = Convert.ToInt64(Scalar(c, "SELECT COUNT(*) FROM mail WHERE fid=$f", ("$f", id)) ?? 0L);
+            var last = GetL(c, "gap:" + id, 0);
+            if (GetL(c, "hi:" + id, 0) != 0 && total - have > Math.Max(20, total / 200) && DateTimeOffset.Now.ToUnixTimeMilliseconds() - last > 86_400_000 && !Gentle.HoldBacklog(DateTime.Now.AddDays(-60)))
+            {
+                Exec(c, "DELETE FROM state WHERE k=$a OR k=$b", ("$a", "hi:" + id), ("$b", "lo:" + id));
+                Put(c, "gap:" + id, DateTimeOffset.Now.ToUnixTimeMilliseconds().ToString());
+                Log.Warn("Mail index", $"“{path}” ({storeName}): {total:N0} in Outlook, {have:N0} in Nova — reading it completely again");
+            }
+        }
+        catch { }
         if (LeftOut().Contains(id)) return;
         bool sent = id.Equals(sentId, StringComparison.OrdinalIgnoreCase) || name.Contains("Sent", StringComparison.OrdinalIgnoreCase);
         IndexFolder(c, (object)folder, id, name, storeId, sent, cutoff);
@@ -1512,6 +1527,57 @@ static class MailIndex
     }
 
     /// <summary>Emails by their index id (meaning search results).</summary>
+    /// <summary>Which of these Outlook EntryIDs Nova's index has.</summary>
+    public static HashSet<string> KnownEntries(List<string> entries)
+    {
+        var res = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (entries.Count == 0) return res;
+        try
+        {
+            using var c = Open();
+            foreach (var chunk in entries.Chunk(200))
+            {
+                using var cmd = c.CreateCommand();
+                var ps = chunk.Select((e, i) => { cmd.Parameters.AddWithValue("$e" + i, e); return "$e" + i; });
+                cmd.CommandText = $"SELECT entry FROM mail WHERE entry IN ({string.Join(",", ps)})";
+                using var r = cmd.ExecuteReader();
+                while (r.Read()) res.Add(r.GetString(0));
+            }
+        }
+        catch (Exception e) { Log.Warn("Mail index", "known: " + e.Message); }
+        return res;
+    }
+
+    public static List<MailHit> ByEntries(List<string> entries)
+    {
+        var ids = new List<long>();
+        try
+        {
+            using var c = Open();
+            foreach (var e in entries) if (Scalar(c, "SELECT id FROM mail WHERE entry=$e", ("$e", e)) is { } v) ids.Add(Convert.ToInt64(v));
+        }
+        catch (Exception e) { Log.Warn("Mail index", "by entries: " + e.Message); }
+        return ByIds(ids, 500, 2000);
+    }
+
+    /// <summary>🔧 The folder is read completely again on the next pass (only missing emails are added; nothing is deleted).</summary>
+    public static int ForgetWatermarks(string pathLike)
+    {
+        int n = 0;
+        using var c = Open();
+        var fids = new List<string>();
+        using (var cmd = c.CreateCommand())
+        {
+            cmd.CommandText = "SELECT fid FROM folders WHERE path LIKE $p OR store_name LIKE $p";
+            cmd.Parameters.AddWithValue("$p", "%" + pathLike + "%");
+            using var r = cmd.ExecuteReader();
+            while (r.Read()) fids.Add(r.GetString(0));
+        }
+        foreach (var f in fids) { Exec(c, "DELETE FROM state WHERE k=$a OR k=$b", ("$a", "hi:" + f), ("$b", "lo:" + f)); n++; }
+        Store.SetBool("win_mail_complete", false);
+        return n;
+    }
+
     public static List<MailHit> ByIds(IEnumerable<long> ids, int max = 500, int bodyChars = 0)
     {
         var list = ids.Distinct().Take(max).ToList();

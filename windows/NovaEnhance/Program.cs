@@ -193,6 +193,15 @@ class NovaContext : ApplicationContext
         m.Items.Add("📁  Open the Nova Enhance folder", null, (_, _) => Shell.Open(Paths.Root));
         m.Items.Add("⬆  Check for updates", null, (_, _) => Screens.Settings("Updates"));
         m.Items.Add(new ToolStripSeparator());
+        // 🔗 Claude ↔ Outlook: you decide when, it switches itself off
+        var claude = new ToolStripMenuItem("🔗  Allow Claude to read Outlook");
+        claude.DropDownItems.Add("for 2 hours", null, (_, _) => ClaudeAccess.Allow(2));
+        claude.DropDownItems.Add("for 8 hours", null, (_, _) => ClaudeAccess.Allow(8));
+        claude.DropDownItems.Add("until tonight", null, (_, _) => ClaudeAccess.Allow(24));
+        var claudeStop = new ToolStripMenuItem("■ Stop now", null, (_, _) => ClaudeAccess.Allow(0));
+        claude.DropDownItems.Add(claudeStop);
+        m.Items.Add(claude);
+        m.Opening += (_, _) => { claude.Text = ClaudeAccess.On ? $"🔗  Claude can read Outlook until {ClaudeAccess.Until:HH:mm}" : "🔗  Allow Claude to read Outlook"; claudeStop.Enabled = ClaudeAccess.On; claude.Visible = Relay.On; };
         var lockItem = new ToolStripMenuItem("🔐  Lock Nova now", null, (_, _) => AdminLock.Lock("🔐 Lock now"));
         m.Items.Add(lockItem);
         m.Opening += (_, _) => { lockItem.Visible = AdminLock.Enabled; lockItem.Text = AdminLock.Locked ? "🔓  Unlock Nova…" : "🔐  Lock Nova now"; };

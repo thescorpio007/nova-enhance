@@ -761,6 +761,13 @@ static class PhoneLink
                 break;
             }
             case "agent": res = await PhoneAgent.Handle(a); break;   // 🧭
+            case "claude":
+            {
+                // 🔗 Allow Claude to read Outlook (from the phone): hours 0 = stop
+                if (a["hours"] != null) ClaudeAccess.Allow(a["hours"]!.GetValue<double>());
+                res = new JsonObject { ["on"] = ClaudeAccess.On, ["until"] = ClaudeAccess.On ? ClaudeAccess.Until.ToString("dd MMM HH:mm") : "" };
+                break;
+            }
             case "brainteach":
             {
                 // 🎓 Teach the Brain from the phone: these emails are examples (✓ like this / ✗ not like this)
