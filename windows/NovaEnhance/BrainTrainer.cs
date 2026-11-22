@@ -660,10 +660,10 @@ THE BRAIN NOW:{BrainText(b)}";
                 {
                     step("Double-checking each contradiction (can both rules be followed?)");
                     Brain.Quiet.Value = true;
-                    var list = string.Join("\n", kept.Select((c, i) => $"{i}. {string.Join(" ↔ ", (c["ids"] as JsonArray)!.Select(x => x?.ToString()))}: “{c["quote_a"]}” vs “{c["quote_b"]}” — {c["why"]}"));
+                    var possible = string.Join("\n", kept.Select((c, i) => $"{i}. {string.Join(" ↔ ", (c["ids"] as JsonArray)!.Select(x => x?.ToString()))}: “{c["quote_a"]}” vs “{c["quote_b"]}” — {c["why"]}"));
                     var v = Ai.ParseJson(await Ai.Chat("You judge possible contradictions in a rule book. For each numbered item, answer whether it is a REAL contradiction: following one rule makes it impossible to follow the other. " +
                         "Same meaning, one rule referring to the other, or one being more detailed is NOT real. Reply with JSON only: {\"real\":[0,2]} — the numbers of the real ones.",
-                        "THE RULES:" + BrainText(b, false) + "\n\nPOSSIBLE CONTRADICTIONS:\n" + list, false, true, null, ct)) ?? new JsonObject();
+                        "THE RULES:" + BrainText(b, false) + "\n\nPOSSIBLE CONTRADICTIONS:\n" + possible, false, true, null, ct)) ?? new JsonObject();
                     if (v["real"] is JsonArray real)
                     {
                         var keep = real.Select(x => int.TryParse(x?.ToString(), out var k) ? k : -1).ToHashSet();
