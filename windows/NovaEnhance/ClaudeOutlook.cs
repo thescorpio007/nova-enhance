@@ -140,7 +140,7 @@ static class ClaudeOutlook
         var hits = new List<(DateTime D, string Line, string Entry)>();
         int folders = 0, scanned = 0;
         var started = DateTime.Now;
-        foreach (var (f, path, sn, sid) in MailFolders(ns, a["store"]?.ToString() ?? "", a["folder"]?.ToString() ?? ""))
+        foreach (var (f, path, sn, sid) in MailFolders((object)ns, a["store"]?.ToString() ?? "", a["folder"]?.ToString() ?? ""))
         {
             if ((DateTime.Now - started).TotalSeconds > 90) break;
             folders++;
@@ -210,7 +210,7 @@ static class ClaudeOutlook
         var a2 = new JsonObject { ["limit"] = 80 };
         var filter = $"@SQL=\"urn:schemas:httpmail:thread-topic\" = '{Q(topic)}'";
         var lines = new List<(DateTime, string)>();
-        foreach (var (f, path, sn, sid) in MailFolders(ns, "", ""))
+        foreach (var (f, path, sn, sid) in MailFolders((object)ns, "", ""))
             try
             {
                 dynamic items = f.Items.Restrict(filter);
