@@ -109,6 +109,7 @@ THE BRAIN NOW:{BrainText(b)}";
         Brain.Quiet.Value = true;   // the trainer gets the whole brain itself
         try
         {
+            bool pushedBack = false;
             for (int i = 1; i <= 8; i++)
             {
                 ct.ThrowIfCancellationRequested();
@@ -148,6 +149,13 @@ THE BRAIN NOW:{BrainText(b)}";
                     default:
                     {
                         var reply = a["reply"]?.ToString() ?? a["text"]?.ToString() ?? say;
+                        // “Updating PR-04…” with no change: the trainer must propose it (once)
+                        if (!pushedBack && a["changes"] is not JsonArray { Count: > 0 } && Regex.IsMatch(reply + " " + say, @"\b(updat|chang|add(ed|ing)?|merg|fix|correct|improv|rewrit|propos)\w*\b.{0,40}\b([A-Z]{2}-\d{2}|rule)", RegexOptions.IgnoreCase))
+                        {
+                            pushedBack = true;
+                            t.Append("TOOL RESULT (answer): REJECTED — you describe a change but gave none. Use the tool propose with the exact changes (op, section, id, title, text).\n");
+                            continue;
+                        }
                         // An “answer” that still carries changes is a proposal.
                         if (a["changes"] is JsonArray { Count: > 0 }) return Proposal(b, a, steps);
                         Chat.Add(new JsonObject { ["role"] = "trainer", ["text"] = reply });
@@ -240,7 +248,7 @@ THE BRAIN NOW:{BrainText(b)}";
                 if (sim >= 0.5) dups.Add(new JsonObject { ["id"] = id, ["with"] = r["id"]?.ToString(), ["why"] = $"{(int)(sim * 100)}% the same words as {r["id"]} “{Agent.Clip(r["title"]?.ToString(), 40)}” ({s["name"]})" });
             }
             foreach (var w in Vague.Matches(text).Select(m => m.Value.ToLowerInvariant()).Distinct()) vague.Add($"{id}: “{w}” is vague — say exactly which / when");
-            if (Regex.IsMatch(text, @"\[[^\]=]*\]") || Regex.Matches(text, @"\[").Count != Regex.Matches(text, @"\]").Count) syntax.Add($"{id}: a [setting] must be written [name = value]");
+            if (BadSetting(text)) syntax.Add($"{id}: a [setting] must be written [name = value]");
             // 👤 people's names: the rule would miss the same email from another colleague
             var people = Names().Where(n => text.Contains(n, StringComparison.OrdinalIgnoreCase) && !Regex.IsMatch(text, @"e\.g\.[^.;]{0,80}" + Regex.Escape(n), RegexOptions.IgnoreCase)).Take(4).ToList();
             if (people.Count > 0) vague.Add($"{id}: names people ({string.Join(", ", people)}) — say the role and company instead (e.g. “an MZA colleague (mz-architects.com)”, “the client (domain)”), names only as “e.g.”");
@@ -544,7 +552,12 @@ THE BRAIN NOW:{BrainText(b)}";
 
     // ------------------------------------------------------------------ 🩺 health check
 
-    static readonly Regex TermRx = new(@"\b[\w.-]+\.(?:com|ae|net|org|co|io)\b|\b[A-Z]{2,5}-\d{2,6}\b|“([^”]{3,40})”|""([^""]{3,40})""", RegexOptions.IgnoreCase);
+    // “Is the rule alive?” looks only for company domains — quoted examples, templates (<number>_RevNN) and typo examples (“FSLV”) are not real words to find
+    static readonly Regex TermRx = new(@"\b[\w-]+(?:\.[\w-]+)*\.(?:com|ae|net|org|co|io)\b", RegexOptions.IgnoreCase);
+
+    /// <summary>A [setting] is [name.part = value]; “[n]”, “[1]” or “[see …]” are not settings.</summary>
+    static bool BadSetting(string text) =>
+        Regex.IsMatch(text, @"\[\s*[a-z][a-z0-9_]*\.[a-z0-9_.]+\s*(?:[^=\]]*)\]", RegexOptions.IgnoreCase) && Regex.Matches(text, @"\[\s*[a-z][a-z0-9_]*\.[a-z0-9_.]+\s*=", RegexOptions.IgnoreCase).Count < Regex.Matches(text, @"\[\s*[a-z][a-z0-9_]*\.[a-z0-9_.]+", RegexOptions.IgnoreCase).Count;
 
     public static async Task<JsonObject> Health(Action<string> step, CancellationToken ct)
     {
@@ -572,7 +585,7 @@ THE BRAIN NOW:{BrainText(b)}";
         {
             var id = r["id"]!.ToString(); var text = r["text"]?.ToString() ?? "";
             foreach (var w in Vague.Matches(text).Select(m => m.Value.ToLowerInvariant()).Distinct()) { Notes(id).Add($"⚠ “{w}” is vague"); rows[id]["bad"] = Math.Max(rows[id]["bad"]!.GetValue<int>(), 1); }
-            if (Regex.IsMatch(text, @"\[[^\]=]*\]")) { Notes(id).Add("⛔ a [setting] without “= value”"); rows[id]["bad"] = 2; }
+            if (BadSetting(text)) { Notes(id).Add("⛔ a [setting] without “= value”"); rows[id]["bad"] = 2; }
         }
         step("Is each rule still alive? (its names and codes in the last 30 days of email)");
         var hidden = LogPrefs.HiddenProjects;
@@ -583,7 +596,7 @@ THE BRAIN NOW:{BrainText(b)}";
             var id = r["id"]!.ToString(); var text = r["text"]?.ToString() ?? "";
             var pj = codes.Where(c => Regex.IsMatch(text, @"\b" + Regex.Escape(c) + @"\b", RegexOptions.IgnoreCase)).ToList();
             if (pj.Count > 0 && pj.All(hidden.Contains)) { Notes(id).Add($"⚠ only about {string.Join(", ", pj)}, hidden in your log (finished?)"); rows[id]["bad"] = Math.Max(rows[id]["bad"]!.GetValue<int>(), 1); }
-            var terms = TermRx.Matches(text).Select(m => m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Success ? m.Groups[2].Value : m.Value).Distinct().Take(4).ToList();
+            var terms = TermRx.Matches(text).Select(m => m.Value).Where(d => !Tracker.Us.Contains(d, StringComparison.OrdinalIgnoreCase)).Distinct().Take(4).ToList();
             if (terms.Count == 0) continue;
             var n = await Task.Run(() => MailIndex.Search(new MailQuery { AnyWords = terms, After = DateTime.Today.AddDays(-30), Limit = 1, Folder = "any" }).Count, ct);
             if (n == 0) { Notes(id).Add($"💤 nothing with {string.Join(", ", terms.Select(x => "“" + x + "”"))} in the last 30 days"); rows[id]["bad"] = Math.Max(rows[id]["bad"]!.GetValue<int>(), 1); }
@@ -606,7 +619,7 @@ THE BRAIN NOW:{BrainText(b)}";
                 if (ids.Count > 0) contra.Add(c.DeepClone());
             }
             foreach (var v in (j["vague"] as JsonArray ?? new()).OfType<JsonObject>())
-                if (v["id"]?.ToString() is { } id && rows.ContainsKey(id)) { Notes(id).Add("⚠ " + v["why"]); rows[id]["bad"] = Math.Max(rows[id]["bad"]!.GetValue<int>(), 1); }
+                if (v["id"]?.ToString() is { } id && rows.ContainsKey(id)) Notes(id).Add("💡 " + v["why"]);   // a suggestion, not a fault
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception e) { contra.Add(new JsonObject { ["ids"] = new JsonArray(), ["why"] = "(the AI check did not answer: " + e.Message + ")", ["fix"] = "" }); }
