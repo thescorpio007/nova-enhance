@@ -260,7 +260,7 @@
     (ck.duplicates || []).forEach(function (x) { a.appendChild(el("div", "bad small", "⛔ " + x.why)); });
     (ck.vague || []).concat(ck.syntax || []).forEach(function (x) { a.appendChild(el("div", "chg small", "⚠ " + x)); });
     var bar = el("div", "row"); bar.style.marginTop = "6px"; bar.style.flexWrap = "wrap"; c.bar = bar;
-    c.testBtn = btn("🧪 TEST", false, function () { runTest(id); }); c.testBtn.className = "testb";
+    c.testBtn = btn("🧪 TEST", false, function () { runTest(id, "quick"); }); c.testBtn.className = "testb"; c.testBtn.title = "⚡ quick test (about 30 s): your 📎 examples + the 20 most similar emails";
     c.apply = btn("✓ Apply", true, function () { if (c.apply.disabled) return; post({ t: "apply", changes: m.changes, test: c.test, summary: "" }); bar.remove(); c.res.textContent = "✓ applied (a version is saved with its test)"; });
     c.apply.disabled = true; c.apply.title = "🔒 opens after a passed 🧪 TEST";
     bar.appendChild(c.testBtn); bar.appendChild(c.apply);
@@ -278,13 +278,13 @@
     c.m.changes.forEach(function (ch) { var tx = el("textarea"); tx.value = ch.text || ""; tx.oninput = function () { ch.text = tx.value; lockApply(c, "✎ edited — 🧪 test again"); }; ed.appendChild(el("div", "id", (ch.op || "") + " " + (ch.id || "") + " · " + (ch.section || ""))); if (ch.op !== "remove") ed.appendChild(tx); });
     c.a.insertBefore(ed, c.bar);
   }
-  function runTest(id) {
-    var c = cards[id]; lockApply(c, "🧪 testing… 0:00");
+  function runTest(id, mode) {
+    var c = cards[id]; mode = mode || "quick"; lockApply(c, "🧪 testing… 0:00");
     // ⏱ live timer on the card while the test runs
     clearInterval(c.iv); c.t0 = Date.now();
     c.iv = setInterval(function () { c.res.textContent = "🧪 testing… " + Thinking.mmss(Math.round((Date.now() - c.t0) / 1000)) + (wkSteps ? " · step " + wkSteps : ""); }, 1000);
     pendingCard = id;
-    post({ t: "test", changes: c.m.changes, question: c.tq, kind: c.m.kindOf || "", card: id, mustFind: c.m.mustFind || [], mustNotFind: c.m.mustNotFind || [] });
+    post({ t: "test", changes: c.m.changes, question: c.tq, kind: c.m.kindOf || "", card: id, mustFind: c.m.mustFind || [], mustNotFind: c.m.mustNotFind || [], mode: mode });
   }
   var pendingCard = null;
   function drawTest(m) {
@@ -292,11 +292,19 @@
     clearInterval(c.iv); c.secs = c.t0 ? Math.round((Date.now() - c.t0) / 1000) : 0;
     if (c.tbox) c.tbox.remove();
     var b = c.tbox = el("div", "tbox");
-    b.appendChild(el("b", null, "🧪 Test · " + (m.kind === "writing" ? "a sample text" : m.kind === "log" ? "the 📋 log + a search" : "a search")));
+    var quick = m.mode === "quick";
+    b.appendChild(el("b", null, "🧪 " + (quick ? "⚡ Quick test · your examples + similar emails" : "🔬 Full test · " + (m.kind === "writing" ? "a sample text" : m.kind === "log" ? "the 📋 log + a search" : "a search, now vs with the new rule"))));
     var qr = el("div", "row"); var q = el("textarea", "tq"); q.value = m.question; q.rows = 2; q.oninput = function () { c.tq = q.value; };
-    qr.appendChild(q); b.appendChild(el("div", "muted small", "test question (change it and 🧪 test again):")); b.appendChild(qr);
+    if (!quick) { qr.appendChild(q); b.appendChild(el("div", "muted small", "test question (change it and 🔬 test again):")); b.appendChild(qr); }
+    if (quick) {
+      // ⚡ one list: each email and what Nova says with the new rule
+      var t = el("table"); var hr = el("tr"); ((m.after && m.after.columns) || ["Email", "With the new rule", "Why"]).forEach(function (x) { hr.appendChild(el("th", null, x)); }); t.appendChild(hr);
+      ((m.after && m.after.rows) || []).forEach(function (r) { var tr = el("tr"); (r.cells || []).forEach(function (x, i) { var td = el("td", i === 1 ? (/✓ fits/.test(x) ? "ok" : "muted") : "small", x); tr.appendChild(td); }); if (r.mark === "minus") tr.style.background = "#2A1416"; t.appendChild(tr); });
+      var tw = el("div"); tw.style.cssText = "max-height:300px;overflow:auto;margin:8px 0"; tw.appendChild(t); b.appendChild(tw);
+      b.appendChild(el("div", "muted small", (m.after && m.after.text || "") + " · ⟳ = Nova would treat it differently without the new rule (" + (m.plus || 0) + ")"));
+    }
     // before | after
-    var ba = el("div", "ba");
+    var ba = el("div", "ba"); if (quick) ba.style.display = "none";
     function side(title, x) {
       var col = el("div", "side"); col.appendChild(el("b", null, title));
       if (m.kind === "writing") col.appendChild(el("div", "txt", (x && x.text) || ""));
@@ -351,7 +359,8 @@
       if (c.ed) { c.ed.remove(); c.ed = null; } lockApply(c, "✎ new wording — 🧪 test again");
     }));
     (ck.duplicates || []).forEach(function (x) { if (x.with) vb.appendChild(btn("⇢ Merge into " + x.with, false, function () { say("Merge this proposal into " + x.with + " instead of adding a new rule: change " + x.with + " so it covers both, then propose it."); })); });
-    vb.appendChild(btn("🧪 Test again", false, function () { runTest(m.card); }));
+    vb.appendChild(btn("⚡ Quick test again", false, function () { runTest(m.card, "quick"); }));
+    vb.appendChild(btn("🔬 Full test", false, function () { runTest(m.card, "full"); })).title = "the test question run with your brain now and with the new rule (slower)";
     b.appendChild(vb);
     c.vline = el("div", "verdict"); b.appendChild(c.vline);
     c.test = m.id; c.apply.disabled = true;

@@ -40,7 +40,7 @@ class BrainForm : WebPage
                 break;
             case "stop": cts?.Cancel(); break;
             case "open": NovaChat.OpenSource(new JsonObject { ["kind"] = "email", ["entry"] = S("entry"), ["store"] = S("store") }); break;
-            case "chatClear": BrainTrainer.Chat.Clear(); break;
+            case "chatClear": BrainTrainer.Chat.Clear(); lock (BrainTrainer.LastExamples) BrainTrainer.LastExamples.Clear(); break;
             case "health": Run("🩺 Health check of every rule", (st, de, ct) => BrainTrainer.Health(st, ct)); break;
             case "create": Work("Making your brain…", () => { Brain.Create(S("pw")); Brain.BackupNow("manual"); return State(); }); break;
             case "unlock": Work("Opening…", () => { Brain.Unlock(S("pw")); return State(); }); break;
@@ -79,7 +79,8 @@ class BrainForm : WebPage
             {
                 var ch = m["changes"] as JsonArray ?? new JsonArray(); var q = S("question"); var kind = S("kind"); var card = S("card");
                 var mf = (m["mustFind"] as JsonArray)?.DeepClone().AsArray(); var mn = (m["mustNotFind"] as JsonArray)?.DeepClone().AsArray();
-                Run("🧪 Testing on your real data (nothing is saved)", async (st, de, ct) => { var r = await BrainTrainer.Test(ch, q, kind, st, de, ct, mf, mn); r["card"] = card; return r; });
+                var quick = S("mode") != "full";   // ⚡ quick by default · 🔬 full on demand
+                Run("🧪 Testing on your real data (nothing is saved)", async (st, de, ct) => { var r = await BrainTrainer.Test(ch, q, kind, st, de, ct, mf, mn, quick); r["card"] = card; return r; });
                 break;
             }
             case "verdict": { var r = BrainTrainer.Verdict(S("id"), m["yes"]?.GetValue<int>() ?? 0, m["no"]?.GetValue<int>() ?? 0, m["secs"]?.GetValue<int>() ?? 0); r["card"] = S("card"); Post(r); break; }
@@ -185,9 +186,15 @@ class BrainForm : WebPage
         _ = Task.Run(async () =>
         {
             using var busy = Busy.Begin(title);
+            // ⏱ every step with its time in Activity (so a slow step can be seen afterwards)
+            using var act = Activity.Begin("🧠 brain · " + title, "");
+            var stepAt = DateTime.Now; string stepName = "";
+            void Step(string s) { if (stepName.Length > 0) act.Mark(stepName, $"{(DateTime.Now - stepAt).TotalSeconds:0.0} s"); stepName = s; stepAt = DateTime.Now; Post(new JsonObject { ["t"] = "wstep", ["text"] = s, ["step"] = true }); }
             try
             {
-                var r = await f(s => Post(new JsonObject { ["t"] = "wstep", ["text"] = s, ["step"] = true }), s => Post(new JsonObject { ["t"] = "wstep", ["text"] = s }), ct);
+                var r = await f(Step, s => Post(new JsonObject { ["t"] = "wstep", ["text"] = s }), ct);
+                if (stepName.Length > 0) act.Mark(stepName, $"{(DateTime.Now - stepAt).TotalSeconds:0.0} s");
+                act.Result = r["verdict"]?.ToString() ?? r["kind"]?.ToString() ?? "done";
                 Post(new JsonObject { ["t"] = "wdone" });
                 Post(r);
             }

@@ -16,6 +16,8 @@ static class BrainTrainer
     // ------------------------------------------------------------------ the conversation (kept while Nova runs)
 
     public static readonly JsonArray Chat = new();
+    /// <summary>The 📎 example files of the last message (the ⚡ quick test checks the rule on them).</summary>
+    public static readonly List<(string Name, bool Good, string Text)> LastExamples = new();
     static readonly Agent.Session Data = new();
 
     static readonly Regex Vague = new(@"\b(relevant|some|usually|normally|maybe|appropriate|etc|various|certain|properly|as needed|if needed|important ones?)\b", RegexOptions.IgnoreCase);
@@ -68,6 +70,9 @@ TRAINER RULES
 - Ask when unclear: scope (which project, which types), what counts (reply with comments? a code? a forward?), and exceptions. One question at a time, with options. Do not ask what the data or the brain already answers.
 - Prefer changing an existing rule over adding a near-duplicate. Never propose two rules with the same meaning; if one exists, propose a change of it (its id).
 - Every rule names its scope (project code, document types, company domain, section) and has no vague words (relevant, some, usually, appropriate, as needed…).
+- Write rules by ROLE and COMPANY DOMAIN (“an MZA colleague (mz-architects.com)”, “the client (gefinorproperties.com)”, “the contractor (accsal.com)”), never by a person's name — a name only as “e.g.”, or when the user asks about that one person.
+- “Did X answer / reply / approve?”: an answer is ANY later email FROM X's company domain with the same document number (same thread or a new email, any revision; with or without “Re:”). Never “only on the same thread”. X only in Cc, or replies from others, are not X's answer.
+- Respect the existing rules SE-01 / SE-02 (document number = the key, with and without the revision): complete them, never contradict them.
 - Settings are written [name = value] (e.g. [overdue.WIR = 2], [mza.match = …], [log.types = …]) — keep that syntax exactly.
 - If the instruction contradicts a rule, say which and propose replacing or changing it — never leave two rules that disagree.
 - Never invent facts, emails or numbers: only what the tools returned. At most 7 steps, then propose / ask / answer.
@@ -88,6 +93,7 @@ THE BRAIN NOW:{BrainText(b)}";
         // 🎓 What you rejected in the agent's examples (✗), for lessons.
         foreach (var p in Agent.Feedback.Patterns().Take(3)) t.Append("NOTE (agent feedback): ").Append(p.Teach).Append('\n');
         // 📎 Example files: the pattern to learn (✓ like this / ✗ not like this).
+        if (examples is { Count: > 0 }) lock (LastExamples) { LastExamples.Clear(); LastExamples.AddRange(examples); }
         if (examples is { Count: > 0 })
         {
             t.Append("EXAMPLE FILES FROM THE USER (learn the pattern):\n");
@@ -96,6 +102,7 @@ THE BRAIN NOW:{BrainText(b)}";
                 t.Append($"=== Example {++n} · {(good ? "✓ LIKE THIS" : "✗ NOT LIKE THIS")} · {name} ===\n").Append(body.Length > 9000 ? body[..9000] + "\n…(cut)" : body).Append('\n');
         }
         t.Append("USER: ").Append(text.Length > 0 ? text : "Learn from these examples and propose the rule.").Append('\n');
+        if (examples == null || examples.Count == 0) lock (LastExamples) if (Chat.Count == 0) LastExamples.Clear();
         Chat.Add(new JsonObject { ["role"] = "user", ["text"] = (examples is { Count: > 0 } ? "📎 " + string.Join(", ", examples.Select(e => (e.Good ? "✓ " : "✗ ") + e.Name)) + "\n" : "") + text });
         var steps = new JsonArray();
         using var aiFor = Ai.For("brain");
@@ -196,6 +203,24 @@ THE BRAIN NOW:{BrainText(b)}";
         };
     }
 
+    static List<string> names; static DateTime namesAt;
+    /// <summary>The people who wrote to you in the last 120 days (full names of 2+ words) — to spot rules written for one person.</summary>
+    static List<string> Names()
+    {
+        if (names != null && DateTime.Now - namesAt < TimeSpan.FromHours(6)) return names;
+        try
+        {
+            names = MailIndex.Search(new MailQuery { After = DateTime.Today.AddDays(-120), Limit = 3000, Folder = "any" })
+                .SelectMany(h => new[] { h.FromName ?? "" }.Concat((h.To ?? "").Split(';')))
+                .Select(n => Regex.Replace(n.Trim(), @"\s+", " ")).Where(n => n.Length >= 7 && n.Length < 40 && n.Contains(' ') && !n.Contains('@') && Regex.IsMatch(n, @"^[\p{L}][\p{L} .'-]+$"))
+                .Where(n => n != n.ToUpperInvariant() && !Projects.All().Any(p => string.Equals(p.Name, n, StringComparison.OrdinalIgnoreCase)))
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        }
+        catch { names = new(); }
+        namesAt = DateTime.Now;
+        return names;
+    }
+
     static HashSet<string> Bag(string s) => Words.Matches((s ?? "").ToLowerInvariant()).Select(m => m.Value).Where(w => w.Length > 3).ToHashSet();
 
     static double Jaccard(HashSet<string> a, HashSet<string> b) => a.Count == 0 || b.Count == 0 ? 0 : (double)a.Intersect(b).Count() / a.Union(b).Count();
@@ -216,6 +241,9 @@ THE BRAIN NOW:{BrainText(b)}";
             }
             foreach (var w in Vague.Matches(text).Select(m => m.Value.ToLowerInvariant()).Distinct()) vague.Add($"{id}: “{w}” is vague — say exactly which / when");
             if (Regex.IsMatch(text, @"\[[^\]=]*\]") || Regex.Matches(text, @"\[").Count != Regex.Matches(text, @"\]").Count) syntax.Add($"{id}: a [setting] must be written [name = value]");
+            // 👤 people's names: the rule would miss the same email from another colleague
+            var people = Names().Where(n => text.Contains(n, StringComparison.OrdinalIgnoreCase) && !Regex.IsMatch(text, @"e\.g\.[^.;]{0,80}" + Regex.Escape(n), RegexOptions.IgnoreCase)).Take(4).ToList();
+            if (people.Count > 0) vague.Add($"{id}: names people ({string.Join(", ", people)}) — say the role and company instead (e.g. “an MZA colleague (mz-architects.com)”, “the client (domain)”), names only as “e.g.”");
         }
         return new JsonObject { ["duplicates"] = dups, ["vague"] = vague, ["syntax"] = syntax };
     }
@@ -233,7 +261,9 @@ THE BRAIN NOW:{BrainText(b)}";
             if (Regex.IsMatch(sn, "submittal|tower|zone|level", RegexOptions.IgnoreCase)) tags.Add("submittal");
         }
         if (tags.Contains("writing") && !tags.Contains("search") && !tags.Contains("submittal")) return "writing";
-        if (tags.Contains("submittal")) return "log";
+        // ⚡ the 📋 log is re-read only when the rule changes how the log works (a [setting] like overdue / closed / log / mza / tower…)
+        var txt = string.Join(" ", changes.OfType<JsonObject>().Select(c => c["text"]?.ToString() ?? ""));
+        if (tags.Contains("submittal") && Regex.IsMatch(txt, @"\[\s*(overdue|closed|log|mza|tower|zone|level|type|code|places)", RegexOptions.IgnoreCase)) return "log";
         return "search";
     }
 
@@ -250,12 +280,13 @@ THE BRAIN NOW:{BrainText(b)}";
     }
 
     static readonly Dictionary<string, TestRun> tests = new();
+    static readonly HashSet<string> QuickTypes = new(StringComparer.OrdinalIgnoreCase) { "WIR", "MIR", "MAR", "MSS", "SDS", "SSM", "PQS", "RFI", "TSR", "LTR", "MOM", "RPT", "HSE", "NCR", "SOR", "EI" };
     static readonly Dictionary<string, (string, Agent.Result)> beforeCache = new();
 
     static string Key(JsonArray changes) => Regex.Replace(changes?.ToJsonString() ?? "", @"\s+", "");
 
     /// <summary>Runs the test question with the current brain and with the proposal (nothing saved): ➕ / ➖, examples, checks.</summary>
-    public static async Task<JsonObject> Test(JsonArray changes, string question, string kind, Action<string> step, Action<string> detail, CancellationToken ct, JsonArray mustFind = null, JsonArray mustNotFind = null)
+    public static async Task<JsonObject> Test(JsonArray changes, string question, string kind, Action<string> step, Action<string> detail, CancellationToken ct, JsonArray mustFind = null, JsonArray mustNotFind = null, bool quickMode = false)
     {
         var now = Brain.Snapshot();
         var (after, _) = Brain.Apply(now, changes, "test");
@@ -285,9 +316,81 @@ THE BRAIN NOW:{BrainText(b)}";
             catch (OperationCanceledException) { throw; }
             catch (Exception e) { return new JsonObject { ["contradictions"] = new JsonArray(), ["duplicates"] = new JsonArray(), ["weak"] = new JsonArray($"(the AI check did not answer: {e.Message})"), ["better"] = "" }; }
         }, ct);
-        Task<JsonObject> logTask = kind == "log" ? Task.Run(() => LogDiff(now, after, 30), ct) : Task.FromResult<JsonObject>(null);
+        Task<JsonObject> logTask = kind == "log" && !quickMode ? Task.Run(() => LogDiff(now, after, 30), ct) : Task.FromResult<JsonObject>(null);
+        res["mode"] = quickMode && kind != "writing" ? "quick" : "full";
 
-        if (kind == "writing")
+        if (quickMode && kind != "writing")
+        {
+            // ⚡ QUICK TEST: the rule applied to your 📎 examples and to the 20 most similar real emails, in one AI reading.
+            step("Picking your examples and the 20 most similar emails");
+            var ruleText = string.Join(" ", diff.OfType<JsonObject>().Select(d => d["text"]?.ToString() ?? ""));
+            var doms = Regex.Matches(ruleText, @"\b[\w-]+(?:\.[\w-]+)*\.(?:com|ae|net|org|co|io)\b", RegexOptions.IgnoreCase).Select(m => m.Value.ToLowerInvariant()).Distinct().Where(d => !Tracker.Us.Contains(d, StringComparison.OrdinalIgnoreCase)).Take(4).ToList();
+            var pj = Projects.All().Select(p => p.Code).Where(c => c.Length > 1 && Regex.IsMatch(ruleText, @"\b" + Regex.Escape(c) + @"\b", RegexOptions.IgnoreCase)).ToList();
+            var sample = await Task.Run(() =>
+            {
+                var l = new List<MailHit>();
+                if (doms.Count > 0)
+                {
+                    l.AddRange(MailIndex.Search(new MailQuery { ToOrCc = doms, After = DateTime.Today.AddDays(-150), Limit = 12, Folder = "any", Project = pj.Count == 1 ? pj[0] : "" }));
+                    l.AddRange(MailIndex.Search(new MailQuery { From = doms, After = DateTime.Today.AddDays(-150), Limit = 8, Folder = "any", Project = pj.Count == 1 ? pj[0] : "" }));
+                }
+                if (l.Count < 10)
+                {
+                    var words = Regex.Matches(ruleText, @"\b[A-Z]{3,4}\b").Select(m => m.Value).Where(w => QuickTypes.Contains(w)).Distinct().Take(5).ToList();
+                    l.AddRange(MailIndex.Search(new MailQuery { AnyWords = words.Concat(pj).Distinct().ToList(), After = DateTime.Today.AddDays(-90), Limit = 20 - l.Count, Folder = "any" }));
+                }
+                return l.GroupBy(h => h.Id).Select(g => g.First()).Where(h => !Projects.Private.IsMatch($"{h.Subject} {h.Folder} {h.AttNames}")).OrderByDescending(h => h.Date).Take(20).ToList();
+            }, ct);
+            List<(string Name, bool Good, string Text)> files; lock (LastExamples) files = LastExamples.ToList();
+            step($"Reading {files.Count + sample.Count} email(s) with the new rule (one AI call)");
+            var sb = new StringBuilder();
+            int k = 0;
+            foreach (var f in files) sb.Append($"\n[{++k}] 📎 EXAMPLE FILE “{f.Name}”:\n{Agent.Clip(f.Text, 2500)}\n");
+            foreach (var h in sample) sb.Append($"\n[{++k}] From: {h.FromName} <{h.FromAddr}> · To: {Agent.Clip(h.To + " [" + h.ToAddr + "]", 200)} · Cc: {Agent.Clip(h.Cc + " [" + h.CcAddr + "]", 160)} · {h.Date:yyyy-MM-dd HH:mm}\nSubject: {h.Subject}\n{Agent.Clip(h.Body, 600)}\n");
+            var sys = "You apply the user's NEW RULE (with the rest of their rule book) to each numbered email. Reply with JSON only: " +
+                      "{\"items\":[{\"n\":1,\"fits\":true,\"label\":\"what Nova says under the new rule, 2-6 words (e.g. Request to the client · Answered by the client · not concerned)\",\"why\":\"one short reason\",\"changed\":true}]} — " +
+                      "fits = the email is one the new rule is about; changed = Nova would treat it differently WITHOUT the new rule. Every email gets one item.";
+            var user = "THE NEW RULE:\n" + string.Join("\n", diff.OfType<JsonObject>().Select(d => $"{d["op"]} {d["id"]}: {d["text"]}")) + "\n\nTHE OTHER RULES (short):" + Agent.Clip(BrainText(now, false), 20000) + "\n\nTHE EMAILS:" + sb;
+            JsonObject j;
+            using (Ai.For("brain"))
+            {
+                using var one = CancellationTokenSource.CreateLinkedTokenSource(ct); one.CancelAfter(TimeSpan.FromSeconds(90));
+                Brain.Quiet.Value = true;
+                try { j = Ai.ParseJson(await Ai.Chat(sys, user, false, true, null, one.Token)) ?? new JsonObject(); }
+                finally { Brain.Quiet.Value = false; }
+            }
+            var items = (j["items"] as JsonArray ?? new()).OfType<JsonObject>().ToDictionary(x => x["n"]?.GetValue<int>() ?? 0, x => x);
+            var rows = new JsonArray(); k = 0; int changedN = 0;
+            var missed0 = new List<string>();
+            foreach (var f in files)
+            {
+                items.TryGetValue(++k, out var it);
+                var fits = it?["fits"]?.GetValue<bool>() == true;
+                if (fits != f.Good) missed0.Add($"{(f.Good ? "✓" : "✗")} {f.Name} → Nova says “{it?["label"]}”");
+                rows.Add(new JsonObject { ["key"] = f.Name, ["cells"] = new JsonArray("📎 " + f.Name, $"{(fits ? "✓ fits" : "— not concerned")} · {it?["label"]}", it?["why"]?.ToString() ?? ""), ["mark"] = fits == f.Good ? "plus" : "minus" });
+                examples.Add(new JsonObject { ["id"] = -k, ["subject"] = "📎 " + f.Name + (f.Good ? " (your ✓ example)" : " (your ✗ example)"), ["lines"] = $"Nova says: {it?["label"]} — {it?["why"]}", ["date"] = "", ["from"] = "", ["to"] = "" });
+            }
+            var exMails = new List<MailHit>();
+            foreach (var h in sample)
+            {
+                items.TryGetValue(++k, out var it);
+                var ch = it?["changed"]?.GetValue<bool>() == true; if (ch) changedN++;
+                rows.Add(new JsonObject { ["key"] = h.Subject, ["cells"] = new JsonArray(Agent.Clip(h.Subject, 90), $"{(it?["fits"]?.GetValue<bool>() == true ? "✓ fits" : "— not concerned")} · {it?["label"]}", (ch ? "⟳ changes · " : "") + (it?["why"]?.ToString() ?? "")), ["mark"] = ch ? "plus" : "" });
+                if (it?["fits"]?.GetValue<bool>() == true && exMails.Count < 5) exMails.Add(h);
+            }
+            foreach (var o in Agent.Examples(exMails).OfType<JsonObject>())
+            {
+                var idx = sample.FindIndex(h => h.Id == (o["id"]?.GetValue<long>() ?? 0));
+                if (idx >= 0 && items.TryGetValue(files.Count + idx + 1, out var it)) o["lines"] = $"Nova says: {it["label"]} — {it["why"]}";
+                examples.Add(o.DeepClone());
+            }
+            res["after"] = new JsonObject { ["text"] = $"{files.Count} example file(s) · {sample.Count} similar email(s)", ["columns"] = new JsonArray("Email", "With the new rule", "Why"), ["rows"] = rows };
+            res["before"] = new JsonObject { ["text"] = "", ["rows"] = new JsonArray() };
+            run.Plus = changedN;
+            if (missed0.Count > 0) { run.MissedExample = true; res["quickMissed"] = new JsonArray(missed0.Select(x => (JsonNode)x).ToArray()); }
+            if (examples.Count == 0) examples.Add(new JsonObject { ["id"] = 1, ["subject"] = "The results with the new rule", ["lines"] = "no similar email found", ["date"] = "", ["from"] = "", ["to"] = "" });
+        }
+        else if (kind == "writing")
         {
             const string sys = "You improve the text: fix grammar, spelling and wording, keep the meaning, the language and the format. Reply with the improved text only.";
             async Task<string> Write(JsonObject brain)
@@ -310,8 +413,10 @@ THE BRAIN NOW:{BrainText(b)}";
         }
         else
         {
-            var hostB = new Agent.Host { Progress = x => detail("now · " + x), Detail = _ => { }, Confirm = null };
-            var hostA = new Agent.Host { Progress = x => detail("new rule · " + x), Detail = _ => { }, Confirm = null };
+            // ⚡ the same email searches are done once for both runs (the data is the same; only the rule differs)
+            var shared = new System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<Task<(string, List<MailHit>)>>>();
+            var hostB = new Agent.Host { Progress = x => detail("now · " + x), Detail = _ => { }, Confirm = null, Cache = shared };
+            var hostA = new Agent.Host { Progress = x => detail("new rule · " + x), Detail = _ => { }, Confirm = null, Cache = shared };
             async Task<Agent.Result> Search(JsonObject brain, Agent.Host h)
             {
                 Brain.Override.Value = brain;   // this task only (AsyncLocal)
@@ -359,6 +464,8 @@ THE BRAIN NOW:{BrainText(b)}";
             var found = new JsonArray(); var missed = new JsonArray();
             foreach (var d in (mustFind ?? new()).Select(x => x?.ToString() ?? "").Where(x => x.Length > 3)) (all.Contains(Base(d)) ? found : missed).Add(d);
             foreach (var d in (mustNotFind ?? new()).Select(x => x?.ToString() ?? "").Where(x => x.Length > 3)) if (all.Contains(Base(d))) missed.Add("✗ " + d + " (should NOT be found)");
+            if (res["quickMissed"] is JsonArray qm) foreach (var x in qm) missed.Add(x?.DeepClone());
+            if (res["mode"]?.ToString() == "quick") { found.Clear(); foreach (var r in (res["after"]?["rows"] as JsonArray ?? new()).OfType<JsonObject>().Where(r => (r["key"]?.ToString() ?? "").Length > 0 && r["mark"]?.ToString() == "plus" && (r["cells"]?[0]?.ToString() ?? "").StartsWith("📎"))) found.Add(r["key"]!.ToString()); }
             res["examplesFound"] = found; res["examplesMissed"] = missed;
             if (missed.Count > 0) { run.MissedExample = true; weak.Add("Your example is not handled right: " + string.Join(", ", missed.Select(x => x?.ToString())) + " — sharpen the rule (✎ / suggested wording) and test again."); }
         }

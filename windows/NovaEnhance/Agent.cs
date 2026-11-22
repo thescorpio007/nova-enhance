@@ -32,6 +32,8 @@ static class Agent
     public class Host
     {
         public Action<string> Progress = _ => { };
+        /// <summary>🧪 Tests: the two runs (current brain · new rule) share the same email searches — done once.</summary>
+        public System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<Task<(string, List<MailHit>)>>> Cache;
         /// <summary>What is happening inside the step (“312 emails checked”, “thread 4 of 12”).</summary>
         public Action<string> Detail = _ => { };
         /// <summary>(question, examples) → (ids you ticked ✓, ids you marked ✗, your note); null = you stopped.</summary>
@@ -215,7 +217,13 @@ RULES
         var hits = MailIndex.Search(q).Where(h => from.Count == 0 ? IsUs(h) : from.Any(f => Has(h.FromName, f) || Has(h.FromAddr, f) || (h.Sent && f is "me" or "I"))).ToList();
         if (hits.Count == 0) return $"0 emails from {(from.Count == 0 ? Tracker.UsShort : string.Join(", ", from))} with {string.Join(", ", to)} in To/Cc since {q.After:yyyy-MM-dd}.";
         var groups = hits.GroupBy(h => DocRx.Match(h.Subject ?? "") is { Success: true } m ? BaseNo(m.Value) : "thread:" + h.Conv)
-            .OrderByDescending(g => g.Max(h => h.Date)).Take(70).ToList();
+            .OrderByDescending(g => g.Max(h => h.Date)).Take(60).ToList();
+        // ⚡ ONE search for everything X sent since the first request (was one slow search per document): matched below by
+        // document number (same thread or a new email, any revision) or by thread.
+        detail($"reading everything {string.Join(", ", to)} sent since {hits.Min(h => h.Date):dd MMM}…");
+        var fromX = MailIndex.Search(new MailQuery { From = to, After = hits.Min(h => h.Date).AddDays(-1), Limit = 1500, Folder = "any" })
+            .Where(h => !h.Sent && !IsUs(h)).ToList();
+        foreach (var h in fromX) s.Seen[h.Id] = h;
         var sb = new StringBuilder($"{hits.Count} email(s) sent to {string.Join(", ", to)} · {groups.Count} document(s) / thread(s), newest first:\n");
         int n = 0;
         foreach (var g in groups)
@@ -224,10 +232,8 @@ RULES
             detail($"thread {++n} of {groups.Count} · {(g.Key.StartsWith("thread:") ? Short(g.First().Subject, 50) : g.Key)}");
             var sent = g.OrderBy(h => h.Date).ToList();
             var first = sent[0];
-            var thread = new List<MailHit>(MailIndex.ByConv(first.Conv, 80));
-            if (!g.Key.StartsWith("thread:"))
-                thread.AddRange(MailIndex.SubmittalsLike(new[] { "%" + g.Key + "%" }, Array.Empty<string>(), first.Date.AddDays(-1), DateTime.Now.AddDays(1), 150, 600));
-            foreach (var h in sent.Concat(thread)) s.Seen[h.Id] = h;
+            var thread = fromX.Where(h => h.Conv == first.Conv || (!g.Key.StartsWith("thread:") && (h.Subject ?? "").Contains(g.Key, StringComparison.OrdinalIgnoreCase))).ToList();
+            foreach (var h in sent) s.Seen[h.Id] = h;
             var reply = thread.Where(h => h.Date > first.Date && !h.Sent && !IsUs(h) && to.Any(t => Has(h.FromAddr, t) || Has(h.FromName, t)))
                 .GroupBy(h => h.Id).Select(x => x.First()).OrderBy(h => h.Date).FirstOrDefault();
             var line = to.Any(t => Has(first.ToAddr, t) || Has(first.To, t)) ? "To" : "Cc";
@@ -327,6 +333,21 @@ RULES
             {
                 switch (tool)
                 {
+                    case "emails" or "thread" or "followup" when host.Cache != null:
+                    {
+                        // the same search with the same words: done once for both runs of a 🧪 test
+                        var t0 = tool; var a0 = args;
+                        var lz = host.Cache.GetOrAdd(tool + "|" + args.ToJsonString(), _ => new Lazy<Task<(string, List<MailHit>)>>(() => Task.Run(() =>
+                        {
+                            var tmp = new Session();
+                            var g = t0 == "emails" ? ToolEmails(a0, tmp) : t0 == "thread" ? ToolThread(a0, tmp) : ToolFollowup(a0, tmp, host.Detail, ct);
+                            return (g, tmp.Seen.Values.ToList());
+                        }, ct)));
+                        var (g1, seen1) = await lz.Value;
+                        foreach (var h in seen1) s.Seen[h.Id] = h;
+                        got = g1;
+                        break;
+                    }
                     case "emails": got = await Task.Run(() => ToolEmails(args, s), ct); break;
                     case "thread": got = await Task.Run(() => ToolThread(args, s), ct); break;
                     case "log": got = await Task.Run(() => ToolLog(args, s, ct), ct); break;
@@ -432,9 +453,12 @@ RULES
                 var since = DateTime.Now.AddDays(-30);
                 var rows = File.ReadAllLines(FilePath).Select(l => { try { return JsonNode.Parse(l)?.AsObject(); } catch { return null; } })
                     .Where(o => o != null && DateTime.TryParse(o["at"]?.ToString(), out var d) && d > since).ToList();
-                foreach (var g in rows.GroupBy(o => o!["type"]?.ToString() ?? "").Where(g => g.Key.Length > 0 && g.Count() >= 3))
+                // only when it happened in 2 different questions or more (one question's ✗ is about that question)
+                bool Wide(IEnumerable<JsonObject> g) => g.Select(o => o["q"]?.ToString() ?? "").Distinct().Count() >= 2;
+                var us = Tracker.Us.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim().ToLowerInvariant()).Where(x => x.Length > 2).ToList();
+                foreach (var g in rows.GroupBy(o => o!["type"]?.ToString() ?? "").Where(g => g.Key.Length > 0 && g.Count() >= 3 && Wide(g!)))
                     res.Add(($"{g.Key} items", g.Count(), $"In the agent's examples I rejected {g.Key} items {g.Count()} times (e.g. “{g.First()!["subject"]}”). Teach Nova to leave {g.Key} out of these searches unless I ask for them."));
-                foreach (var g in rows.GroupBy(o => o!["dom"]?.ToString() ?? "").Where(g => g.Key.Length > 3 && g.Count() >= 3))
+                foreach (var g in rows.GroupBy(o => o!["dom"]?.ToString() ?? "").Where(g => g.Key.Length > 3 && g.Count() >= 3 && Wide(g!) && !us.Any(u => g.Key.Contains(u) || u.Contains(g.Key))))
                     res.Add(($"emails from {g.Key}", g.Count(), $"In the agent's examples I rejected emails from {g.Key} {g.Count()} times (e.g. “{g.First()!["subject"]}”). Teach Nova how to treat {g.Key} in these searches."));
             }
             catch { }
