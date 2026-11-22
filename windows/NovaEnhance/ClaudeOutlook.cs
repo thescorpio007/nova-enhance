@@ -59,6 +59,7 @@ static class ClaudeOutlook
         ["nova.followup"] = "Nova's own 📨 follow-up tool on its index (what the agent uses): to (name / address / domain), project, after, before, from — every request and the reply per document",
         ["fix.reindex"] = "Nova re-reads a folder completely (fills gaps): folder (part of the path) or id (its folder)",
         ["fix.project"] = "puts emails into a project in Nova: ids (list), project (code) — ↩ undo in Activity / Email projects",
+        ["fix.brain"] = "applies 🧠 Brain changes directly (summary, changes [op add|change|remove, section, id, title, text]) — only while you allow Claude; a version is saved first (↩ undo in Brain → Versions & backups); a broken [setting] is refused",
         ["fix.status"] = "Claude's connection: allowed until when",
     };
 
@@ -85,11 +86,43 @@ static class ClaudeOutlook
             "nova.followup" => await Followup(a),
             "fix.reindex" => await Task.Run(() => Reindex(a)),
             "fix.project" => await Task.Run(() => Project(a)),
+            "fix.brain" => OnUi(() => FixBrain(a)),
             "fix.status" => $"{ClaudeAccess.Line} · Nova {Program.Shown}",
             _ => throw new Exception("unknown tool " + tool + " · tools: " + string.Join(", ", Help.Keys))
         };
         act.Result = "ok";
         return r;
+    }
+
+    /// <summary>🧠 You asked Claude to apply Brain changes itself (while its access is on): the change is checked for broken [settings],
+    /// saved as a new version (↩ undo in Versions & backups), shown in the trainer and as a tray note, and logged in Activity.</summary>
+    static string OnUi(Func<string> f)
+    {
+        if (Program.UiContext == null) return f();
+        string r = null; Exception err = null;
+        Program.UiContext.Send(_ => { try { r = f(); } catch (Exception e) { err = e; } }, null);
+        if (err != null) throw err;
+        return r;
+    }
+
+    static string FixBrain(JsonObject a)
+    {
+        if (!Brain.Unlocked) throw new Exception("the 🧠 Nova Brain is locked on the PC — open it first");
+        var ch = (a["changes"] as JsonArray)?.DeepClone().AsArray() ?? throw new Exception("changes is missing");
+        var summary = a["summary"]?.ToString() ?? "";
+        var before = Brain.Snapshot();
+        var (after, said) = Brain.Apply(before, ch, "Claude · connector");
+        var diff = Brain.Diff(before, after);
+        if (diff.Count == 0) return "No rule would change.";
+        var chk = BrainTrainer.Checks(before, diff);
+        var syntax = (chk["syntax"] as JsonArray ?? new()).Select(x => x?.ToString()).ToList();
+        if (syntax.Count > 0) throw new Exception("not applied — " + string.Join("; ", syntax));
+        var v = Brain.Commit(after, "Claude · connector (applied directly while you allowed Claude)", (summary.Length > 0 ? summary + " · " : "") + said);
+        BrainTrainer.Chat.Add(new JsonObject { ["role"] = "trainer", ["text"] = $"🔗 Claude applied version {v}: {said} — ↩ undo in Versions & backups" });
+        Program.Balloon("🧠 Nova Brain · version " + v, "Claude applied: " + Agent.Clip(summary.Length > 0 ? summary : said, 150) + " (↩ undo in Versions & backups)");
+        try { Screens.BrainNudge(); } catch { }
+        var notes = (chk["duplicates"] as JsonArray ?? new()).Select(x => x?["why"]?.ToString()).Concat((chk["vague"] as JsonArray ?? new()).Select(x => x?.ToString())).Where(x => !string.IsNullOrEmpty(x)).ToList();
+        return $"✓ Applied as version {v}: {said}" + (notes.Count > 0 ? "\nNotes: " + string.Join("; ", notes) : "");
     }
 
     /// <summary>📨 The agent's follow-up tool exactly as Nova runs it (to test it against Outlook) — 🔒 private lines left out.</summary>
