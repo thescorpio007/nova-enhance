@@ -493,8 +493,11 @@ RULES
                         if (rawJson) ansText = "The AI's answer could not be read — please ask again (or ask for a shorter list).";
                         res.Text = ansText;
                         res.Columns = L(args["columns"]);
+                        // Daily site reports and minutes of meetings stay out of the table unless you asked for them.
+                        bool infoOk = InfoAsk.IsMatch(question);
                         foreach (var r in rows)
                         {
+                            if (!infoOk && InfoMail.IsMatch(string.Join(" ", L(r["cells"])) + " " + (long.TryParse(r["id"]?.ToString()?.TrimStart('#'), out var iv) && s.Seen.TryGetValue(iv, out var im) ? im.Subject : ""))) continue;
                             var row = new Row { Cells = L(r["cells"]) };
                             if (long.TryParse(r["id"]?.ToString()?.TrimStart('#'), out var v) && s.Seen.TryGetValue(v, out var mh)) { row.Id = v; row.Mail = mh; }
                             res.Rows.Add(row);

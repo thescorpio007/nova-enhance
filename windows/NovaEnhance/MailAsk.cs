@@ -80,6 +80,19 @@ class MailAskForm : NovaForm
         hr.Controls.Add(SideButton());
         hr.Controls.Add(Th.B("🧹 Clear", () => { NewChat(); status.Text = "🧹 Cleared — this email stays the reference."; }));
         hr.Controls.Add(Th.B("⇩ Word", SaveWord));
+        // ✉ The email itself in Outlook (an archive Nova closed is opened again; a moved email is followed).
+        hr.Controls.Add(Th.B("✉ Open in Outlook", () =>
+        {
+            if (anchor == null || string.IsNullOrEmpty(anchor.Entry)) { status.Text = "No email to open."; return; }
+            try
+            {
+                var (e, st) = (anchor.Entry, anchor.StoreId);
+                var mv = MailIndex.MovedTo(e);
+                if (!string.IsNullOrEmpty(mv.Entry)) (e, st) = mv;
+                Outlook.Open(e, st);
+            }
+            catch (Exception x) { status.Text = "⚠ Outlook could not open it: " + x.Message; Log.Warn("open in Outlook", x.Message); }
+        }));
         head = top.Add(Th.Wrap("", 11, Th.Text), true);
         head.Font = Th.F(11, true);
         meta = top.Add(Th.Wrap("", 9, Th.Muted), true);
