@@ -12,7 +12,7 @@ class SettingsForm : NovaForm
     readonly Panel host;
     Stack page;
     readonly System.Windows.Forms.Timer live;
-    Label liveIndex, liveUpdate;
+    Label liveIndex, liveUpdate, syncNote;
 
     public SettingsForm()
     {
@@ -49,6 +49,7 @@ class SettingsForm : NovaForm
         {
             if (liveIndex != null && !liveIndex.IsDisposed) liveIndex.Text = MailIndex.Status;
             if (liveUpdate != null && !liveUpdate.IsDisposed) liveUpdate.Text = UpdateText();
+            if (syncNote != null && !syncNote.IsDisposed && MailIndex.LastSync.Length > 0 && !MailIndex.Status.StartsWith("↻")) syncNote.Text = "Last check with Outlook: " + MailIndex.LastSync;
         };
         live.Start();
         FormClosing += (_, e) => { if (e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Hide(); } };
@@ -72,7 +73,7 @@ class SettingsForm : NovaForm
         page = new Stack { Padding = new Padding(24, 14, 24, 12) };
         host.Controls.Add(page);
         page.Add(Th.L(section, 15, Th.Text, true));
-        liveIndex = null; liveUpdate = null;
+        liveIndex = null; liveUpdate = null; syncNote = null;
         Store.Set("win_set_drawing", section);
         UiWatch.Step("Settings · " + section);
         using var act = Activity.Begin("settings page", section);
@@ -510,12 +511,13 @@ class SettingsForm : NovaForm
         Note("The index holds copies of your email text, encrypted and locked to your Windows account.");
         var ir = page.Add(Th.Row(false));
         ir.Controls.Add(Th.B("⚡ Index now", () => IndexProgress.Ask(this), true));
-        ir.Controls.Add(Th.B("↻ Update now", MailIndex.Now));
+        ir.Controls.Add(Th.B("↻ Update + repair", () => { MailIndex.SyncNow(); if (syncNote != null) syncNote.Text = "↻ Sync + repair started — every folder is compared with Outlook (moved, deleted and missing emails are put right)…"; }));
         ir.Controls.Add(Th.B("Rebuild index", () =>
         {
             if (MessageBox.Show("Delete the email index and build it again from Outlook?", "Nova Enhance", MessageBoxButtons.YesNo) == DialogResult.Yes) MailIndex.Rebuild();
         }));
         ir.Controls.Add(Th.B("📁 Index folder", () => Shell.Open(Store.IndexLocal ? Paths.MailIndexLocal : Paths.MailIndexDocs)));
+        syncNote = Note(MailIndex.LastSync.Length > 0 ? "Last check with Outlook: " + MailIndex.LastSync : "↻ Update + repair compares every folder with Outlook: adds missing emails, follows the ones you moved (archive ⇄ mailbox), removes the ones you deleted. It also runs by itself every night.", Th.Muted);
 
         page.Add(Th.Section("Gentle indexing"));
         Note("Outlook stays smooth: in working hours only new mail (and the last 14 days) is indexed, gently; the big first index and \"Rebuild index\" run outside working hours — full speed when the PC is idle, slower while you work, slowest on battery. Nova pauses whenever Outlook is busy.");

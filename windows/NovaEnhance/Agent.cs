@@ -143,7 +143,7 @@ TOOLS
 - emails: search the email index. args: words (all must appear), any_words (at least one), from (names / addresses / domains, any), to_or_cc (any of them in To or Cc), to, cc, project (code), after, before (yyyy-mm-dd), folder (any|sent|received), limit (≤150). Use domains for people's companies (e.g. the client's domain), words for document codes and topics. The user is in copy of colleagues' emails: use folder ""any"".
 - thread: every email of a conversation, oldest first, with From / To / Cc domains. args: id (an email #id) or doc (a document number such as RS5-C7-ACC-AR-SSM-00038). Use it to see who sent what to whom and whether someone replied after.
 - log: the 📋 Submittal log (submissions, their {Tracker.UsShort} code / reply, status). args: types (WIR, MAR, SDS, SSM, PQS, RFI, MIR, MSS, TSR, LTR, EI, MOM…), projects (codes), from, to (yyyy-mm-dd), status (Open|Overdue|Closed|Code3/4).
-- followup: THE tool for “what did we send to X, and did X reply?” (a client, consultant, contractor). It finds every email sent by the user's colleagues (or args.from) with X in To or Cc, groups them per document number / thread, and checks each thread for a later email FROM X. args: to (X's names / addresses / company domain — use the CLIENT domain from the project list), from (optional; default = the user's colleagues), project (code), words / any_words (optional, e.g. submittal type codes), after, before (yyyy-mm-dd; default: the last 3 years). It reads EVERY email (no newest-N cut) and also X's addresses found from X's own emails. Returns a count line, then one line per document: first sent (date, by whom, To or Cc), how many times, and X's reply (date, #id) matched by document number in any folder, or NO REPLY, or REPLIED … then ASKED AGAIN — NO REPLY since (count that as still waiting). Give ALL its lines in the answer table, not a sample.
+- followup: THE tool for “what did we send to X, and did X reply?” (a client, consultant, contractor). It finds every email sent by the user's colleagues (or args.from) with X in To or Cc, groups them per document number / thread, and checks each thread for a later email FROM X. args: to (X's names / addresses / company domain — use the CLIENT domain from the project list), from (optional; default = the user's colleagues), project (code), words / any_words (optional, e.g. submittal type codes), after, before (yyyy-mm-dd; default: the last 3 years). Only emails with X in TO count as requests (cc: true adds the Cc ones). It reads EVERY email (no newest-N cut) and also X's addresses found from X's own emails. Returns a count line, then one line per document: first sent (date, by whom, To or Cc), how many times, and X's reply (date, #id) matched by document number in any folder, or NO REPLY, or REPLIED … then ASKED AGAIN — NO REPLY since (count that as still waiting). Give ALL its lines in the answer table, not a sample.
 - confirm: show the user 3 to 5 example emails (#ids) that you think match, with a question, and get ✓ / ✗ back. args: ids, question. You MUST call confirm once before the final answer, with the best examples you found.
 - draft: prepare an Outlook draft (never sent; the user checks and sends). args: to, cc, subject, body. Only when the user asked for a draft / reminder / email.
 - answer: the final result. args: text (short summary: what you searched and how you decided), columns (list of column names), rows (list of {{""id"": email #id or 0, ""cells"": [...]}}). Use a table whenever there is more than one item; one row per document / thread, newest first, with a status column such as ""✅ replied 18 Nov"" / ""⏳ no reply (3 days)"".
@@ -206,7 +206,7 @@ RULES
     static string BaseNo(string doc) => Regex.Replace(doc, @"[-_ ]?R(ev)?\d{1,2}$", "", RegexOptions.IgnoreCase).ToUpperInvariant();
     static bool Has(string a, string b) => !string.IsNullOrEmpty(a) && a.Contains(b, StringComparison.OrdinalIgnoreCase);
 
-    static readonly Regex AskAgain = new(@"\b(remind(er)?|review|comments?|feedback|approv\w*|kindly|appreciate|awaiting|pending|still waiting|follow[- ]?up|your (?:response|reply))\b", RegexOptions.IgnoreCase);
+    static readonly Regex AskAgain = new(@"\b(remind(er)?|gentle reminder|kindly (?:review|advise|confirm|provide|share)|for your (?:kind )?(?:review|approval|comments?|feedback)|awaiting|still waiting|appreciate your (?:feedback|comments?|response|reply)|follow[- ]?up|your (?:response|reply|feedback))\b", RegexOptions.IgnoreCase);
 
     /// <summary>The person's names AND addresses: “Charbel” → also c.abirached@gefinorproperties.com (read from the emails he sent),
     /// so a contractor email that shows only his address is found too.</summary>
@@ -238,7 +238,11 @@ RULES
         var pj = a["project"]?.ToString() ?? "";
         if (pj.Length > 0) q.Project = Projects.Canon(pj) is { Length: > 0 } c ? c : pj;
         detail($"reading every email sent to {string.Join(", ", to0)} since {q.After:dd MMM yyyy}…");
-        var hits = MailIndex.Search(q).Where(h => from.Count == 0 ? IsUs(h) : from.Any(f => Has(h.FromName, f) || Has(h.FromAddr, f) || (h.Sent && f is "me" or "I"))).ToList();
+        // A request = X in To (an email only copied to X is information — MZA's reply to the contractor, a forward for record);
+        // args.cc = true also counts the Cc ones.
+        bool withCc = a["cc"]?.ToString() is "true" or "True" or "yes";
+        var hits = MailIndex.Search(q).Where(h => from.Count == 0 ? IsUs(h) : from.Any(f => Has(h.FromName, f) || Has(h.FromAddr, f) || (h.Sent && f is "me" or "I")))
+            .Where(h => withCc || to.Any(t => Has(h.To, t) || Has(h.ToAddr, t))).ToList();
         if (hits.Count == 0) return $"0 emails from {(from.Count == 0 ? Tracker.UsShort : string.Join(", ", from))} with {string.Join(", ", to)} in To/Cc since {q.After:yyyy-MM-dd}.";
         bool Doc(MailHit h, out string key) { var m = DocRx.Match(h.Subject ?? ""); key = m.Success ? BaseNo(m.Value) : "thread:" + h.Conv; return m.Success; }
         var groups = hits.GroupBy(h => { Doc(h, out var k); return k; }).OrderByDescending(g => g.Max(h => h.Date)).ToList();
@@ -249,8 +253,9 @@ RULES
         foreach (var h in fromX) s.Seen[h.Id] = h;
         var byDoc = fromX.Select(h => (h, k: DocRx.Match(h.Subject ?? "") is { Success: true } m ? BaseNo(m.Value) : "")).Where(x => x.k.Length > 0).ToLookup(x => x.k, x => x.h);
         var byConv = fromX.Where(h => !string.IsNullOrEmpty(h.Conv)).ToLookup(h => h.Conv);
-        int answered = 0, open = 0, again = 0, n = 0;
+        int answered = 0, open = 0, again = 0, live = 0, n = 0;
         var lines = new List<string>();
+        var waiting = new List<(string Key, DateTime First, int Line, string Head)>();
         foreach (var g in groups)
         {
             ct.ThrowIfCancellationRequested();
@@ -270,10 +275,30 @@ RULES
             if (reply == null) { open++; status = $"NO REPLY ({(DateTime.Now - sent[^1].Date).Days} days since the last)"; }
             else if (askedAfter != null) { again++; status = $"REPLIED {reply.Date:yyyy-MM-dd} by {reply.FromName} #{reply.Id}, then ASKED AGAIN {askedAfter.Date:yyyy-MM-dd} — NO REPLY since"; }
             else { answered++; status = $"REPLY from {reply.FromName} <{Dom(reply.FromAddr)}> {reply.Date:yyyy-MM-dd HH:mm} #{reply.Id}: {Short(reply.Subject, 70)}" + (replies.Count > 1 ? $" (+{replies.Count - 1} more)" : ""); }
-            lines.Add($"#{first.Id} · {(g.Key.StartsWith("thread:") ? "(no doc no.)" : g.Key)} · {Short(first.Subject, 120)} · first sent {first.Date:yyyy-MM-dd HH:mm} by {by} ({line}) · sent {sent.Count}×" +
-                      (sent.Count > 1 ? $" (last {sent[^1].Date:yyyy-MM-dd})" : "") + " · " + status);
+            var headTxt = $"#{first.Id} · {(g.Key.StartsWith("thread:") ? "(no doc no.)" : g.Key)} · {Short(first.Subject, 120)} · first sent {first.Date:yyyy-MM-dd HH:mm} by {by} ({line}) · sent {sent.Count}×" +
+                          (sent.Count > 1 ? $" (last {sent[^1].Date:yyyy-MM-dd})" : "");
+            if (reply == null && !g.Key.StartsWith("thread:")) waiting.Add((g.Key, first.Date, lines.Count, headTxt));
+            lines.Add(headTxt + " · " + status);
         }
-        var head = $"{hits.Count} email(s) sent to {string.Join(", ", to0)}{(to.Count > to0.Count ? " (also as " + string.Join(", ", to.Except(to0)) + ")" : "")} since {q.After:yyyy-MM-dd} · " +
+        // 🔎 Before Nova says “no reply”: Outlook is asked live for anything they sent with that document number (an email the index
+        // does not have yet — just arrived, in a folder not read yet). Found → the row says so, and Sync + repair brings it in.
+        if (waiting.Count > 0)
+            try
+            {
+                detail($"re-checking {waiting.Count} “no reply” in Outlook live…");
+                var liveMails = ClaudeOutlook.LiveFrom(to, waiting.Min(w => w.First), 60);
+                foreach (var w in waiting)
+                {
+                    var hit = liveMails.Where(x => x.Date > w.First && DocRx.Match(x.Subject ?? "") is { Success: true } m && BaseNo(m.Value) == w.Key).OrderBy(x => x.Date).FirstOrDefault();
+                    if (hit.Entry == null) continue;
+                    lines[w.Line] = w.Head + $" · REPLY from {hit.From} {hit.Date:yyyy-MM-dd HH:mm} — found LIVE in Outlook (not in Nova's index yet; Nova is adding it): {Short(hit.Subject, 70)}";
+                    open--; answered++; live++;
+                }
+                if (live > 0) MailIndex.SyncNow();
+            }
+            catch (Exception e) { Log.Warn("follow-up live check", e.Message); }
+        var head = (waiting.Count > 0 ? $"🔎 every “no reply” was re-checked in Outlook live{(live > 0 ? $" — {live} reply(ies) found there that the index did not have yet" : " — confirmed")}.\n" : "") +
+                   $"{hits.Count} email(s) sent to {string.Join(", ", to0)}{(to.Count > to0.Count ? " (also as " + string.Join(", ", to.Except(to0)) + ")" : "")} since {q.After:yyyy-MM-dd} · " +
                    $"{groups.Count} document(s) / thread(s): {answered} replied · {open} NO REPLY · {again} replied then asked again · {fromX.Count} email(s) from them read. Newest first:\n";
         return head + string.Join("\n", lines.Take(400)) + (lines.Count > 400 ? $"\n… {lines.Count - 400} older not shown" : "") + "\n";
     }

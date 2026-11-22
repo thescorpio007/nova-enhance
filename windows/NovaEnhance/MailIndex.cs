@@ -701,6 +701,7 @@ static class MailIndex
                 try { skip.Add(Outlook.S(() => ns.GetDefaultFolder(id).EntryID)); } catch { }
             string sentId = "";
             try { sentId = Outlook.S(() => ns.GetDefaultFolder(5).EntryID); } catch { }
+            skipIds = skip;
             var cutoff = Store.CutOff;
             Status = "Preparing the index — checking your mailboxes and archives…";
             // Emails from me filed in other folders count as sent (fixes rows indexed before build 19).
@@ -708,6 +709,13 @@ static class MailIndex
             if (Me.Name.Length > 0) Exec(c, "UPDATE mail SET sent=1 WHERE sent=0 AND from_name=$n COLLATE NOCASE", ("$n", Me.Name));
             doneThisPass = new(StringComparer.OrdinalIgnoreCase);
             Deferred = false;
+            // 🔧 Sync + repair: “Update now”, and once a night outside working hours (the self-check against Outlook).
+            var today = DateTime.Today.ToString("yyyy-MM-dd");
+            bool nightly = !Gentle.WorkingNow && Store.Str("win_sync_day", "") != today;
+            syncForced = syncAsked; syncThisPass = syncAsked || nightly; syncAsked = false;
+            pendingGone = new(); sAdded = sMoved = sRemoved = sFolders = sHeld = 0;
+            openStores = new(StringComparer.OrdinalIgnoreCase);
+            if (syncThisPass) Status = "↻ Sync + repair — comparing every folder with Outlook…";
             folderOrder = 0;
             // Every store except public folders: your mailbox first, then shared mailboxes / Online Archive / Groups, then .pst archives.
             // ExchangeStoreType: 0 primary · 1 delegate/shared · 2 public folders · 3 not Exchange (.pst) · 4 additional mailbox
@@ -731,6 +739,7 @@ static class MailIndex
                 {
                     string storeId = Outlook.S(() => st.StoreID);
                     storeName = Outlook.S(() => st.DisplayName);
+                    openStores.Add(storeId);
                     // Inbox and Sent Items first, so new mail and your replies are known early.
                     foreach (var which in new[] { 6, 5 })
                     {
@@ -751,6 +760,7 @@ static class MailIndex
                 finally { Outlook.Release(st); }
             }
             Outlook.Release(stores);
+            if (!stop) FinishSync(c, (object)ns, nightly, today);
             Archives.CloseAfterIndex(ns, addedPst, !stop && !Deferred);
             if (!stop)
             {
@@ -997,28 +1007,224 @@ static class MailIndex
         Status = $"Checking {storeName} › {path}…";
         int total = 0;
         try { total = (int)folder.Items.Count; } catch { }
+        // The % counts emails only (Outlook's count also holds meeting requests, read receipts, delivery reports…).
+        long cnt = GetL(c, "cnt:" + id, -1), mc = GetL(c, "mc:" + id, -1);
+        int itemsCount = total;
+        if (cnt == total && mc >= 0) total = (int)mc;
         // Older rows (before build 19) get their folder id now; no rebuild needed.
         Exec(c, "UPDATE mail SET fid=$fid WHERE fid IS NULL AND store=$s AND folder=$f", ("$fid", id), ("$s", storeId), ("$f", name));
         Exec(c, "INSERT INTO folders(fid,store,store_name,path,total,seen) VALUES($fid,$s,$sn,$p,$t,$o) ON CONFLICT(fid) DO UPDATE SET store_name=$sn, path=$p, total=$t, seen=$o",
             ("$fid", id), ("$s", storeId), ("$sn", storeName), ("$p", path), ("$t", total), ("$o", folderOrder++));
-        // 🔧 Gaps: emails that arrive in Outlook INSIDE the dates already indexed (e.g. Outlook downloading older mail after
-        // “Download email for the past: All”) were skipped by the date marks. When Outlook holds clearly more than Nova has
-        // for this folder, the folder is read completely again (once a day at most) — only the missing ones are added.
-        try
-        {
-            var have = Convert.ToInt64(Scalar(c, "SELECT COUNT(*) FROM mail WHERE fid=$f", ("$f", id)) ?? 0L);
-            var last = GetL(c, "gap:" + id, 0);
-            if (GetL(c, "hi:" + id, 0) != 0 && total - have > Math.Max(20, total / 200) && DateTimeOffset.Now.ToUnixTimeMilliseconds() - last > 86_400_000 && !Gentle.HoldBacklog(DateTime.Now.AddDays(-60)))
-            {
-                Exec(c, "DELETE FROM state WHERE k=$a OR k=$b", ("$a", "hi:" + id), ("$b", "lo:" + id));
-                Put(c, "gap:" + id, DateTimeOffset.Now.ToUnixTimeMilliseconds().ToString());
-                Log.Warn("Mail index", $"“{path}” ({storeName}): {total:N0} in Outlook, {have:N0} in Nova — reading it completely again");
-            }
-        }
-        catch { }
         if (LeftOut().Contains(id)) return;
         bool sent = id.Equals(sentId, StringComparison.OrdinalIgnoreCase) || name.Contains("Sent", StringComparison.OrdinalIgnoreCase);
+        // ⚡ Nothing changed in this folder since the last check (same count, completely read): skipped in a blink — the old
+        // archives are no longer walked email by email every 10 minutes (that was the “Checking archive1 › Inbox…” wait).
+        bool done = GetL(c, "end:" + id, 0) == 1 && GetL(c, "hi:" + id, 0) != 0;
+        if (done && cnt == itemsCount && !syncThisPass) return;
         IndexFolder(c, (object)folder, id, name, storeId, sent, cutoff);
+        if (stop || GetL(c, "end:" + id, 0) != 1) return;
+        Status = $"↻ Comparing {storeName} › {path} with Outlook…";
+        (int Mail, int Held)? r = SyncFolder(c, (object)folder, id, name, storeId, sent, cutoff);
+        if (r is { } x)
+        {
+            sFolders++;
+            if (x.Held == 0) { Put(c, "cnt:" + id, itemsCount.ToString()); Put(c, "mc:" + id, x.Mail.ToString()); }
+            Exec(c, "UPDATE folders SET total=$t WHERE fid=$f", ("$t", x.Mail), ("$f", id));
+        }
+    }
+
+    // ================================================================== 🔧 Sync + repair (Outlook ⇄ Nova, per folder)
+
+    static volatile bool syncAsked;
+    static bool syncThisPass, syncForced;
+    static List<(long Id, string Entry)> pendingGone = new();
+    static HashSet<string> openStores = new(StringComparer.OrdinalIgnoreCase), skipIds = new(StringComparer.OrdinalIgnoreCase);
+    static int sAdded, sMoved, sRemoved, sFolders, sHeld;
+
+    /// <summary>↻ Update + repair: the next pass compares every folder with Outlook — adds what is missing, follows emails you moved
+    /// (archive ⇄ mailbox, folder to folder), removes what you deleted.</summary>
+    /// <summary>You asked for it (↻ Update + repair): older mail is not held back for the evening during this pass.</summary>
+    public static bool SyncForcedNow => syncForced;
+
+    public static void SyncNow() { syncAsked = true; Status = "↻ Sync + repair asked — starting…"; wake.Set(); }
+
+    /// <summary>The last sync + repair, for Settings (“✓ 22 Nov 18:40 · 3 added · 1 moved · 1 removed”).</summary>
+    public static string LastSync => Store.Str("win_sync_last", "");
+
+    static bool Exists(dynamic ns, string entry, string store)
+    {
+        if (string.IsNullOrEmpty(entry)) return false;
+        foreach (var st in new[] { store, MovedStore(store ?? "") }.Where(x => !string.IsNullOrEmpty(x)).Distinct())
+        {
+            dynamic it = null;
+            try { it = ns.GetItemFromID(entry, st); return true; }
+            catch (Exception e) when (Outlook.Gone(e) || Outlook.Busy(e)) { throw new OutlookPause(Outlook.Gone(e), e); }
+            catch { }
+            finally { Outlook.Release(it); }
+        }
+        return false;
+    }
+
+    /// <summary>One folder: Outlook's list of emails (one fast table read) against Nova's rows. Missing → added (or re-linked when it is an
+    /// email you moved from another mailbox / archive: it keeps its project); a row whose email left the folder → moved to its new folder,
+    /// or removed at the end of the pass when Outlook has it nowhere. null = could not compare (nothing changed).</summary>
+    static (int Mail, int Held)? SyncFolder(SqliteConnection c, dynamic folder, string fid, string fname, string storeId, bool sent, DateTime cutoff)
+    {
+        var ol = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        dynamic t = null;
+        try
+        {
+            t = folder.GetTable();
+            dynamic cols = t.Columns;
+            cols.RemoveAll(); cols.Add("EntryID"); cols.Add("MessageClass"); cols.Add(sent ? "SentOn" : "ReceivedTime");
+            Outlook.Release(cols);
+            while (!(bool)t.EndOfTable)
+            {
+                if (stop) return null;
+                var arr = (object[,])t.GetArray(5000);
+                int r0 = arr.GetLowerBound(0), r1 = arr.GetUpperBound(0), k = arr.GetLowerBound(1);
+                for (int r = r0; r <= r1; r++)
+                {
+                    var e = arr[r, k] as string; var cls = arr[r, k + 1] as string ?? "";
+                    if (string.IsNullOrEmpty(e) || !cls.StartsWith("IPM.Note", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (arr[r, k + 2] is DateTime d && d >= cutoff) ol[e] = Ms(d);
+                }
+            }
+        }
+        catch (Exception e) when (Outlook.Gone(e) || Outlook.Busy(e)) { throw new OutlookPause(Outlook.Gone(e), e); }
+        catch (Exception e) { Log.Warn("Sync + repair", $"“{fname}” ({storeName}): Outlook's list could not be read — {e.Message}"); return null; }
+        finally { Outlook.Release(t); }
+
+        var nova = new Dictionary<string, (long Id, long Date)>(StringComparer.OrdinalIgnoreCase);
+        using (var cmd = c.CreateCommand())
+        {
+            cmd.CommandText = "SELECT id, entry, date FROM mail WHERE fid=$f";
+            cmd.Parameters.AddWithValue("$f", fid);
+            using var rd = cmd.ExecuteReader();
+            while (rd.Read()) if (!rd.IsDBNull(1)) nova[rd.GetString(1)] = (rd.GetInt64(0), rd.IsDBNull(2) ? 0 : rd.GetInt64(2));
+        }
+        // Safety: Outlook's ids and Nova's do not match at all (another id format) → compare nothing rather than re-index everything.
+        if (nova.Count >= 20 && ol.Count >= 20 && !nova.Keys.Any(ol.ContainsKey))
+        {
+            Log.Warn("Sync + repair", $"“{fname}” ({storeName}): Outlook's ids do not match Nova's — folder left as it is");
+            return null;
+        }
+        dynamic ns = folder.Session;
+        int held = 0, n = 0;
+        try
+        {
+            // ➕ in Outlook, not in Nova (newest first)
+            foreach (var (e, ms) in ol.Where(x => !nova.ContainsKey(x.Key)).OrderByDescending(x => x.Value).ToList())
+            {
+                if (stop) break;
+                if (!syncForced && Gentle.HoldBacklog(DateTimeOffset.FromUnixTimeMilliseconds(ms).LocalDateTime)) { held++; continue; }
+                if (++n % 25 == 0) { Gentle.Pause(); Status = $"↻ {storeName} › {fname}: {n} to bring in…"; }
+                // moved inside the same file: same id, another folder
+                if (Scalar(c, "SELECT id FROM mail WHERE entry=$e", ("$e", e)) is { } same)
+                {
+                    Exec(c, "UPDATE mail SET fid=$f, folder=$fn, store=$s WHERE id=$id", ("$f", fid), ("$fn", fname), ("$s", storeId), ("$id", same));
+                    sMoved++; continue;
+                }
+                dynamic it = null;
+                try
+                {
+                    it = ns.GetItemFromID(e, storeId);
+                    string subj = Outlook.S(() => it.Subject);
+                    // moved from another mailbox / archive: its old row (same date and subject) points to an email Outlook no longer has
+                    long relink = 0;
+                    var cands = new List<(long Id, string Entry, string Store)>();
+                    using (var cmd = c.CreateCommand())
+                    {
+                        cmd.CommandText = "SELECT id, entry, store FROM mail WHERE date BETWEEN $a AND $b AND subject=$s AND entry<>$e AND entry NOT LIKE 'pst:%' LIMIT 5";
+                        cmd.Parameters.AddWithValue("$a", ms - 2000); cmd.Parameters.AddWithValue("$b", ms + 2000);
+                        cmd.Parameters.AddWithValue("$s", subj); cmd.Parameters.AddWithValue("$e", e);
+                        using var rd = cmd.ExecuteReader();
+                        while (rd.Read()) cands.Add((rd.GetInt64(0), rd.GetString(1), rd.IsDBNull(2) ? "" : rd.GetString(2)));
+                    }
+                    foreach (var (oid, oe, os) in cands)
+                        if (openStores.Contains(os) && !Exists(ns, oe, os)) { relink = oid; break; }
+                    if (relink > 0)
+                    {
+                        Exec(c, "UPDATE mail SET entry=$e, store=$s, fid=$f, folder=$fn WHERE id=$id", ("$e", e), ("$s", storeId), ("$f", fid), ("$fn", fname), ("$id", relink));
+                        sMoved++;
+                    }
+                    else { Insert(c, (object)it, e, storeId, fname, sent, ms, fid); sAdded++; }
+                }
+                catch (OutlookPause) { throw; }
+                catch (Exception x) when (Outlook.Gone(x) || Outlook.Busy(x)) { throw new OutlookPause(Outlook.Gone(x), x); }
+                catch (Exception x) { Log.Warn("Sync + repair", "one email could not be added: " + x.Message); }
+                finally { Outlook.Release(it); }
+            }
+            // ➖ in Nova, not in this folder any more: moved elsewhere (follow it) or gone (removed at the end of the pass)
+            var cutMs = Ms(cutoff);
+            int checkedN = 0;
+            foreach (var (e, (id, d)) in nova.Where(x => !ol.ContainsKey(x.Key) && x.Value.Date >= cutMs).ToList())
+            {
+                if (stop || ++checkedN > 3000) break;
+                if (checkedN % 25 == 0) Gentle.Pause();
+                dynamic it = null;
+                try
+                {
+                    it = ns.GetItemFromID(e, storeId);
+                    dynamic par = it.Parent;
+                    string pid = Outlook.S(() => par.EntryID), pname = Outlook.S(() => par.Name);
+                    Outlook.Release(par);
+                    // deleted (in Deleted Items / Junk) = gone for Nova; moved to another folder = follow it
+                    if (skipIds.Contains(pid) || SkipNames.Any(x => pname.StartsWith(x, StringComparison.OrdinalIgnoreCase))) { lock (pendingGone) pendingGone.Add((id, e)); }
+                    else if (!pid.Equals(fid, StringComparison.OrdinalIgnoreCase)) { Exec(c, "UPDATE mail SET fid=$f, folder=$fn WHERE id=$id", ("$f", pid), ("$fn", pname), ("$id", id)); sMoved++; }
+                }
+                catch (Exception x) when (Outlook.Gone(x) || Outlook.Busy(x)) { throw new OutlookPause(Outlook.Gone(x), x); }
+                catch { lock (pendingGone) pendingGone.Add((id, e)); }
+                finally { Outlook.Release(it); }
+            }
+        }
+        finally { Outlook.Release(ns); }
+        sHeld += held;
+        return (ol.Count, held);
+    }
+
+    /// <summary>One email out of the index (and out of the word search).</summary>
+    static void Remove(SqliteConnection c, long id)
+    {
+        if (Fts)
+            try
+            {
+                Exec(c, "INSERT INTO mail_fts(mail_fts,rowid,subject,body,from_name,to_list,cc_list,att_names,att_text) SELECT 'delete',id,subject,body,from_name,to_list,cc_list,att_names,att_text FROM mail WHERE id=$id", ("$id", id));
+            }
+            catch { }
+        Exec(c, "DELETE FROM mail WHERE id=$id", ("$id", id));
+    }
+
+    /// <summary>End of a pass: rows whose email Outlook has nowhere (and that no other folder took over) are removed; once a night,
+    /// 50 random emails are confirmed in Outlook too. The result goes to Activity and to Settings.</summary>
+    static void FinishSync(SqliteConnection c, dynamic ns, bool nightly, string today)
+    {
+        foreach (var (id, e) in pendingGone)
+            if (Scalar(c, "SELECT entry FROM mail WHERE id=$id", ("$id", id)) is string now && now.Equals(e, StringComparison.OrdinalIgnoreCase)) { Remove(c, id); sRemoved++; }
+        string sample = "";
+        if (syncThisPass)
+        {
+            int ok = 0, gone = 0;
+            var rows = new List<(long Id, string Entry, string Store)>();
+            using (var cmd = c.CreateCommand())
+            {
+                cmd.CommandText = "SELECT id, entry, store FROM mail WHERE entry NOT LIKE 'pst:%' ORDER BY random() LIMIT 200";
+                using var rd = cmd.ExecuteReader();
+                while (rd.Read()) rows.Add((rd.GetInt64(0), rd.GetString(1), rd.IsDBNull(2) ? "" : rd.GetString(2)));
+            }
+            foreach (var (id, e, st) in rows.Where(r => openStores.Contains(r.Store)).Take(50))
+                if (Exists(ns, e, st)) ok++; else { gone++; Remove(c, id); sRemoved++; }
+            sample = $" · {ok + gone} random emails checked in Outlook: {ok} found" + (gone > 0 ? $", {gone} gone (removed)" : "");
+        }
+        if (syncThisPass || sAdded + sMoved + sRemoved > 0)
+        {
+            var line = $"✓ {DateTime.Now:dd MMM HH:mm} · {sFolders} folders compared with Outlook · {sAdded} added · {sMoved} moved · {sRemoved} removed" +
+                       (sHeld > 0 ? $" · {sHeld} older ones after working hours" : "") + sample;
+            Store.Set("win_sync_last", line);
+            using var act = Activity.Begin(nightly && !syncForced ? "🔧 nightly check with Outlook" : "↻ sync + repair", "every folder vs Outlook");
+            act.Result = line;
+        }
+        if (nightly && sHeld == 0) Store.Set("win_sync_day", today);
     }
 
     static void Walk(SqliteConnection c, dynamic folder, string storeId, string sentId, HashSet<string> skip, DateTime cutoff, int depth, string path = "")
@@ -1065,9 +1271,11 @@ static class MailIndex
         dynamic items = folder.Items;
         try
         {
-            if ((int)items.Count == 0) return;
+            if ((int)items.Count == 0) { Put(c, "end:" + fid, "1"); if (GetL(c, "hi:" + fid, 0) == 0) Put(c, "hi:" + fid, "1"); return; }
             items.Sort(sent ? "[SentOn]" : "[ReceivedTime]", true);
             long hi = GetL(c, "hi:" + fid, 0), lo = GetL(c, "lo:" + fid, long.MaxValue);
+            // Read to the end once already: new mail is on top, gaps further down are found by Sync + repair — stop at the known span.
+            bool endDone = GetL(c, "end:" + fid, 0) == 1, held = false;
             bool fresh = hi == 0;
             long oldHi = hi, newHi = hi;
             bool segDone = fresh;
@@ -1086,11 +1294,11 @@ static class MailIndex
                         if (d < cutoff) { Outlook.Release(it); it = null; break; }
                         long ms = Ms(d);
                         // Gentle indexing: in working hours only new mail (and the last 14 days); older mail waits for the evening.
-                        if (ms <= oldHi && Gentle.HoldBacklog(d)) { Deferred = true; Outlook.Release(it); it = null; break; }
+                        if (ms <= oldHi && Gentle.HoldBacklog(d)) { Deferred = true; held = true; Outlook.Release(it); it = null; break; }
                         bool doIt;
                         if (fresh) { doIt = true; if (hi == 0) hi = ms; lo = ms; }
                         else if (ms > oldHi) { doIt = true; newHi = Math.Max(newHi, ms); }
-                        else if (ms >= lo) { doIt = false; if (!segDone) { hi = newHi; segDone = true; } }
+                        else if (ms >= lo) { doIt = false; if (!segDone) { hi = newHi; segDone = true; } if (endDone) { Outlook.Release(it); it = null; break; } }
                         else { doIt = true; if (!segDone) { hi = newHi; segDone = true; } lo = ms; }
                         if (doIt)
                         {
@@ -1117,6 +1325,7 @@ static class MailIndex
                 it = stop ? null : items.GetNext();
             }
             if (!stop && !segDone) hi = newHi;
+            if (!stop && !held && errors < 50) Put(c, "end:" + fid, "1");
             Put(c, "hi:" + fid, hi.ToString());
             if (lo != long.MaxValue) Put(c, "lo:" + fid, lo.ToString());
             tx.Commit(); tx.Dispose();
