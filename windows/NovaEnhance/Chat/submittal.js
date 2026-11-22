@@ -255,6 +255,7 @@
         tr.appendChild(td);
       });
       tr.onclick = function () { if (i.entry) post({ t: "open", entry: i.entry, store: i.store }); };
+      if (i.subEntry || i.entry) { tr.setAttribute("data-entry", i.subEntry || i.entry); tr.setAttribute("data-store", i.subEntry ? i.subStore : i.store); }
       t.appendChild(tr);
     });
     box.appendChild(t);

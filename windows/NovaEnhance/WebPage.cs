@@ -43,6 +43,7 @@ abstract class WebPage : NovaForm
                 if (m["t"]?.ToString() == "init") Ready = true;
                 // ● ● ● a “thinking” card asks what Nova is waiting for (after 12 quiet seconds)
                 if (m["t"]?.ToString() == "think.ask") { Post(new JsonObject { ["t"] = "think.wait", ["text"] = Busy.Line() }); return; }
+                if (m["t"]?.ToString() == "rowmenu") { RowMenu(m, this); return; }
                 try { OnMessage(m); } catch (Exception ex) { Log.Error(title, ex); Post(new JsonObject { ["t"] = "error", ["text"] = ex.Message }); }
             };
             core.Navigate("https://nova.chat/" + page);
@@ -50,6 +51,21 @@ abstract class WebPage : NovaForm
     }
 
     protected abstract void OnMessage(JsonObject m);
+
+    /// <summary>🖱 Right-click on an email row of a Nova page: Nova's full email menu at the mouse.</summary>
+    public static void RowMenu(JsonObject m, Control owner)
+    {
+        try
+        {
+            MailHit h = null;
+            if (long.TryParse(m["id"]?.ToString(), out var id) && id > 0) h = MailIndex.ByIds(new[] { id }, 1, 0).FirstOrDefault();
+            var entry = m["entry"]?.ToString() ?? "";
+            if (h == null && entry.Length > 0) h = MailIndex.ByEntry(entry) ?? new MailHit { Entry = entry, StoreId = m["store"]?.ToString() ?? "", Subject = "" };
+            if (h == null) return;
+            EmailMenu.Show(h, owner, Cursor.Position, rowText: m["row"]?.ToString());
+        }
+        catch (Exception e) { Log.Warn("row menu", e.Message); }
+    }
 
     public void Post(JsonObject o)
     {

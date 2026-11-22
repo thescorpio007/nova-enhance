@@ -575,12 +575,25 @@ static class Screens
             case var m when m.StartsWith("mode:"): _ = EnhanceWith(m[5..]); break;
             case "enhance": Enhance(); break;
             case "mailask": MailAsk(null); break;
+            case "related" or "related_c": global::NovaEnhance.Related.FromOutlook(false); break;
+            case "relatedol" or "relatedol_c": global::NovaEnhance.Related.FromOutlook(true); break;
             case "search": Ask(); break;
             case "hub": HubSelection(); break;
             case "brief": Brief(); break;
             case "files": FindFile(""); break;
             default: Settings(); break;
         }
+    }
+
+    static RelatedForm related;
+
+    /// <summary>🔗 Find related → In Nova: the timeline of one document (all revisions).</summary>
+    public static void Timeline(string baseNo, string subjectHint = "")
+    {
+        if (Program.OffUi(() => Timeline(baseNo, subjectHint))) return;
+        if (related == null || related.IsDisposed) related = new RelatedForm(baseNo, subjectHint);
+        else related.Load2(baseNo, subjectHint);
+        Show(related);
     }
 
     static MailAskForm mailAsk;

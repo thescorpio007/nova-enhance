@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Find related</title>
+<link rel="stylesheet" href="chat.css">
+<style>
+body{overflow:auto}
+#wrap{padding:14px 20px}
+h2{margin:0;font-size:19px}.muted{color:#9AA3B5;font-size:12.5px}
+.bar{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 14px}
+.rev{background:#161A22;border:1px solid #2A3040;border-radius:12px;padding:10px 16px;margin-bottom:12px}
+.rev.old{opacity:.8}
+.rev h4{margin:0 0 6px;display:flex;gap:10px;align-items:center;font-size:15px;cursor:pointer}
+.pill{border-radius:20px;padding:2px 10px;font-size:12px;font-weight:700}
+.ok{background:#12301F;color:#4ADE80}.bad{background:#3A1E1E;color:#FF8A8A}.op{background:#3A3016;color:#FFD27A}.gr{background:#2A2E38;color:#9AA3B5}
+.ev{display:grid;grid-template-columns:140px 24px 190px 1fr 170px;gap:8px;padding:6px 4px;border-top:1px solid #222838;align-items:center;font-size:13px;border-radius:6px}
+.ev:hover{background:#1C2130;cursor:pointer}
+.ev .s{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#C9CED8}.ev .who{color:#9AA3B5;font-size:12px}
+.ev .lk{color:#B9B0FF;font-weight:600;white-space:nowrap}.ev .lk span:hover{text-decoration:underline}
+.rev.shut .ev{display:none}
+#busy{color:#B9B0FF;font-size:12.5px;margin:6px 0}
+#toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#2A2550;border:1px solid #4A42A0;border-radius:10px;padding:8px 14px;display:none}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <h2 id="ttl">🔗 Find related</h2>
+  <div class="muted" id="sub">Reading Nova's index…</div>
+  <div class="bar">
+    <button class="primary" id="bX">⬇ Excel (with email links)</button>
+    <button id="bO">🔎 Same search in Outlook</button>
+    <button id="bA">💬 Ask Nova about it</button>
+    <button id="bC">⧉ Copy timeline</button>
+  </div>
+  <div id="busy"></div>
+  <div id="revs"></div>
+  <div class="muted" style="margin-top:10px">click a line = open it in Nova · Ctrl+click = in Outlook · right-click = every option · Designed by A.HAMROUNI</div>
+</div>
+<div id="toast"></div>
+<script src="copyplain.js"></script>
+<script src="thinking.js"></script>
+<script src="rowmenu.js"></script>
+<script>
+(function () {
+  var W = window.chrome && window.chrome.webview;
+  function post(o) { if (W) W.postMessage(o); }
+  function $(i) { return document.getElementById(i); }
+  function el(t, c, x) { var e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; }
+  var thk = null;
+  $("bX").onclick = function () { post({ t: "excel" }); };
+  $("bO").onclick = function () { post({ t: "outlook" }); };
+  $("bA").onclick = function () { post({ t: "ask" }); };
+  $("bC").onclick = function () { post({ t: "copy" }); };
+  function draw(m) {
+    $("ttl").textContent = "🔗 " + m.key + (m.title ? " · " + m.title : "");
+    $("sub").textContent = m.revs.length + " revision(s) · " + m.count + " email(s) · every folder and archive · from Nova's index in " + m.secs + " s";
+    var box = $("revs"); box.innerHTML = "";
+    if (!m.count) { box.appendChild(el("div", "muted", "No email with this number in Nova's index — try 🔎 Same search in Outlook.")); return; }
+    m.revs.forEach(function (r, i) {
+      var c = el("div", "rev" + (r.superseded ? " old shut" : ""));
+      var h = el("h4"); h.appendChild(el("span", null, r.rev));
+      var cls = /Code [34]/.test(r.status) ? "bad" : r.code ? "ok" : r.superseded ? "gr" : "op";
+      h.appendChild(el("span", "pill " + cls, r.status));
+      h.appendChild(el("span", "muted", r.events.length + " email(s)" + (r.superseded ? " · click to show" : "")));
+      h.onclick = function () { c.classList.toggle("shut"); };
+      c.appendChild(h);
+      r.events.forEach(function (e) {
+        var row = el("div", "ev"); row.setAttribute("data-mid", e.id);
+        row.setAttribute("data-row", r.rev + "\t" + r.status + "\t" + e.date + "\t" + e.what + "\t" + e.who + "\t" + e.subject);
+        row.appendChild(el("span", null, e.date));
+        row.appendChild(el("span", null, e.icon));
+        row.appendChild(el("span", null, e.what));
+        var s = el("span", "s"); s.appendChild(document.createTextNode(e.subject)); s.appendChild(el("span", "who", "  · " + e.who + (e.folder ? " › " + e.folder : ""))); s.title = e.subject; row.appendChild(s);
+        var lk = el("span", "lk"); var o = el("span", null, "✉ Open"); lk.appendChild(o);
+        if (e.atts) { lk.appendChild(document.createTextNode("  ")); var a = el("span", null, "📎 " + e.atts.split(";").length); a.title = e.atts; lk.appendChild(a); }
+        row.appendChild(lk);
+        row.onclick = function (ev) { post({ t: "open", id: e.id, outlook: !!ev.ctrlKey }); };
+        c.appendChild(row);
+      });
+      box.appendChild(c);
+    });
+  }
+  if (W) W.addEventListener("message", function (ev) {
+    var m = ev.data;
+    if (m.t === "busy") { $("busy").textContent = ""; thk = window.Thinking ? Thinking.start($("busy"), m.text) : null; }
+    else if (m.t === "timeline") { if (thk) thk.done(); thk = null; $("busy").innerHTML = ""; draw(m); }
+    else if (m.t === "error") { if (thk) thk.fail(m.text); thk = null; }
+    else if (m.t === "toast") { var t = $("toast"); t.textContent = m.text; t.style.display = "block"; setTimeout(function () { t.style.display = "none"; }, 3500); }
+  });
+  post({ t: "init" });
+})();
+</script>
+</body>
+</html>

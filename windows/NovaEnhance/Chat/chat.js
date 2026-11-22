@@ -131,6 +131,8 @@
           if (ri > 0) inline(cell, r[i] || ""); else cell.textContent = r[i] || "";
           tr.appendChild(cell);
         }
+        var em = ri > 0 && tr.querySelector(".cite[data-entry]");
+        if (em) { tr.setAttribute("data-entry", em.getAttribute("data-entry")); tr.setAttribute("data-store", em.getAttribute("data-store")); tr.title = "right-click: every option for this email"; }
         t.appendChild(tr);
       });
       wrap.appendChild(t); box.appendChild(wrap);
@@ -147,6 +149,7 @@
             if (sources[i]) {
               c.title = sources[i].label + (sources[i].kind === "email" ? "\nclick: open in Nova · Ctrl+click: open in Outlook" : "");
               c.onclick = function (e) { post({ t: "openSource", src: sources[i], ctrl: !!(e && e.ctrlKey) }); };
+              if (sources[i].kind === "email" && sources[i].entry) { c.setAttribute("data-entry", sources[i].entry); c.setAttribute("data-store", sources[i].store || ""); }
             }
             into.appendChild(c);
           });

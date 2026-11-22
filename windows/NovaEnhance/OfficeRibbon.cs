@@ -20,7 +20,7 @@ static class OfficeRibbon
 
     /// <summary>The ✦ Nova tab's buttons (ids in NovaRibbon.cpp); each one is a named event Nova listens to.</summary>
     public static readonly string[] Buttons =
-        { "mode_grammar", "mode_shorten", "mode_professional", "mode_informal", "mode_expand", "mode_translate", "enhance", "mailask", "search", "hub", "brief", "files", "settings" };
+        { "mode_grammar", "mode_shorten", "mode_professional", "mode_informal", "mode_expand", "mode_translate", "enhance", "mailask", "related", "relatedol", "related_c", "relatedol_c", "search", "hub", "brief", "files", "settings" };
 
     /// <summary>The files that come with Nova (next to NovaEnhance.exe).</summary>
     static string Src => AppContext.BaseDirectory;

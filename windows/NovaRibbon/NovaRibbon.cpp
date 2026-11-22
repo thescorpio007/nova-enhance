@@ -55,7 +55,7 @@ static std::wstring Button(const wchar_t* id, const wchar_t* label, const wchar_
     return s;
 }
 
-static std::wstring Xml(bool outlook)
+static std::wstring Xml(bool outlook, bool explorer)
 {
     std::wstring x = L"<customUI xmlns=\"http://schemas.microsoft.com/office/2009/07/customui\"><ribbon><tabs>"
                      L"<tab id=\"NovaTab\" label=\"\x2726 Nova\">";
@@ -72,6 +72,10 @@ static std::wstring Xml(bool outlook)
     {
         x += L"<group id=\"NovaMail\" label=\"This email\">";
         x += Button(L"mailask", L"Talk about this email", L"ReplyAll", L"Summary, draft reply and questions about the selected email (Ctrl+Alt+Q)", true);
+        // \x1F517 Find related: every email about this document number, all revisions, every folder and archive
+        x += L"<menu id=\"relmenu\" label=\"Find related\" imageMso=\"FindDialog\" size=\"large\" screentip=\"Every email about this document number (all revisions)\">"
+             L"<button id=\"related\" label=\"In Nova \x2014 timeline (all revisions)\" imageMso=\"FindDialog\" onAction=\"OnAction\"/>"
+             L"<button id=\"relatedol\" label=\"In Outlook \x2014 search results\" imageMso=\"FindDialog\" onAction=\"OnAction\"/></menu>";
         x += L"</group>";
     }
     x += L"<group id=\"NovaFind\" label=\"Nova\">";
@@ -80,7 +84,13 @@ static std::wstring Xml(bool outlook)
     x += Button(L"brief", L"Morning brief", L"DateAndTimeInsert", L"Today's brief: what needs your answer", false);
     x += Button(L"files", L"Find a file", L"FileOpen", L"Find a project file by name", false);
     x += Button(L"settings", L"Settings", L"ControlProperties", L"Nova Enhance settings", false);
-    x += L"</group></tab></tabs></ribbon></customUI>";
+    x += L"</group></tab></tabs></ribbon>";
+    // Outlook's own right-click on an email (the main window): \x2726 Nova \x00B7 Find related
+    if (outlook && explorer)
+        x += L"<contextMenus><contextMenu idMso=\"ContextMenuMailItem\"><menu id=\"relctx\" label=\"\x2726 Nova \x00B7 Find related\" imageMso=\"FindDialog\">"
+             L"<button id=\"related_c\" label=\"In Nova \x2014 timeline (all revisions)\" onAction=\"OnAction\"/>"
+             L"<button id=\"relatedol_c\" label=\"In Outlook \x2014 search results\" onAction=\"OnAction\"/></menu></contextMenu></contextMenus>";
+    x += L"</customUI>";
     return x;
 }
 
@@ -184,7 +194,7 @@ public:
         std::wstring id = ribbonId ? ribbonId : L"";
         // Outlook asks once per window type: the main window and opened emails get the tab.
         if (outlook && !id.empty() && id != L"Microsoft.Outlook.Explorer" && id.rfind(L"Microsoft.Outlook.Mail.", 0) != 0) return S_OK;
-        *xml = SysAllocString(Xml(outlook).c_str());
+        *xml = SysAllocString(Xml(outlook, outlook && id == L"Microsoft.Outlook.Explorer").c_str());
         return S_OK;
     }
 };

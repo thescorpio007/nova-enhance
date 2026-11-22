@@ -10,7 +10,7 @@ static class EmailMenu
 {
     static readonly Regex RefRx = new(@"\b[A-Z][A-Z0-9]{1,6}(?:-[A-Z0-9]{1,8}){2,9}\b");
 
-    public static void Show(MailHit h, Control owner, Point screen, Action<MailHit> summary = null, Action<MailHit> draft = null, Action<MailHit> handled = null, Action<MailHit> preview = null)
+    public static void Show(MailHit h, Control owner, Point screen, Action<MailHit> summary = null, Action<MailHit> draft = null, Action<MailHit> handled = null, Action<MailHit> preview = null, string rowText = null)
     {
         if (h == null) return;
         var form = owner.FindForm();
@@ -18,12 +18,21 @@ static class EmailMenu
         void Add(string text, Action a, bool bold = false) { var i = m.Items.Add(text, null, (_, _) => { try { a(); } catch (Exception e) { MessageBox.Show(e.Message, "Nova Enhance"); } }); if (bold) i.Font = Th.F(10, true); }
         void Sep() => m.Items.Add(new ToolStripSeparator());
 
-        Add("👁 Preview", () => { if (preview != null) preview(h); else MailWindow.Open(h); }, true);
-        Add("Open in Outlook", () => Outlook.Open(h.Entry, h.StoreId));
+        var doc = Related.BaseOf(h);
+        if (doc.Length > 0) m.Items.Add(new ToolStripLabel(doc) { ForeColor = Th.AccentText, Font = Th.F(9) });
+        Add("👁 Open in Nova", () => { if (preview != null) preview(h); else Screens.MailAsk(h); }, true);
+        Add("✉ Open in Outlook", () => { var (e, st) = (h.Entry, h.StoreId); var mv = MailIndex.MovedTo(e); if (!string.IsNullOrEmpty(mv.Entry)) (e, st) = mv; Outlook.Open(e, st); });
+        var rel = new ToolStripMenuItem("🔗 Find related" + (doc.Length > 0 ? " — " + doc : ""));
+        rel.DropDownItems.Add("🔗 In Nova — timeline (all revisions)", null, (_, _) => Related.Find(h, false));
+        rel.DropDownItems.Add("🔎 In Outlook — search results", null, (_, _) => Related.Find(h, true));
+        m.Items.Add(rel);
+        if (!string.IsNullOrEmpty(h.Conv)) Add("🧵 Show the whole thread", () => Screens.AskFor($"the whole thread of “{Outstanding.NormSubject(h.Subject ?? "")}”"));
         Sep();
         Add("✦ Summary", () => { if (summary != null) summary(h); else MailWindow.Open(h, "summary"); });
         Add(h.Sent ? "✦ Draft follow-up" : "✦ Draft reply", () => { if (draft != null) draft(h); else DraftTo(h, false, form); });
         if (!h.Sent) Add("✦ Draft reply all", () => DraftTo(h, true, form));
+        Add("↪ Forward (draft)", () => Forward(h));
+        Add("⏰ Draft a reminder", () => Reminder(h, doc));
         Add("💬 Talk about this email", () => Screens.MailAsk(h));
         Sep();
         if (!h.Sent)
@@ -49,6 +58,8 @@ static class EmailMenu
         m.Items.Add(ProjectItems(new List<MailHit> { h }));
         Sep();
         Add("💾 Save as…", () => MailFile.SaveAs(h, form));
+        if ((h.AttNames ?? "").Length > 0) Add("📎 Save all attachments…", () => SaveAll(h, form));
+        Add("📄 Save as PDF…", () => SavePdf(h, form));
         Add("⧉ Copy as file (.msg)", () => MailFile.Copy(h, form));
         var copy = new ToolStripMenuItem("⧉ Copy");
         copy.DropDownItems.Add("Subject", null, (_, _) => Clipboard.SetText(h.Subject ?? ""));
@@ -56,13 +67,10 @@ static class EmailMenu
         foreach (var r in RefRx.Matches(h.Subject ?? "").Select(x => x.Value).Distinct().Take(4))
         { var rr = r; copy.DropDownItems.Add("Reference — " + rr, null, (_, _) => Clipboard.SetText(rr)); }
         copy.DropDownItems.Add("The email text", null, (_, _) => Clipboard.SetText(h.NewPart.Length > 0 ? h.NewPart : h.Body ?? ""));
+        if (h.Id > 0) copy.DropDownItems.Add("The link (✉ Open in Nova)", null, (_, _) => Clipboard.SetText(Export.NovaUrl(h.Id)));
+        if (!string.IsNullOrWhiteSpace(rowText)) copy.DropDownItems.Add("This row", null, (_, _) => Clipboard.SetText(rowText.Trim()));
         m.Items.Add(copy);
         Sep();
-        Add("🔍 Find related emails", () =>
-        {
-            var r = RefRx.Match(h.Subject ?? "");
-            Screens.AskFor(r.Success ? $"emails about {r.Value}" : $"emails with the subject \"{Outstanding.NormSubject(h.Subject ?? "")}\"");
-        });
         var dwg = Revisions.Numbers((h.Subject ?? "") + "\n" + (h.NewPart.Length > 0 ? h.NewPart : h.Body ?? "")).FirstOrDefault();
         if (dwg != null) Add("📂 Find " + dwg + " in the project files", () => Screens.FindFile(dwg));
         var names = (h.AttNames ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(n => !Regex.IsMatch(n, @"^image\d*\.(png|jpe?g|gif)$", RegexOptions.IgnoreCase)).ToList();
@@ -76,6 +84,80 @@ static class EmailMenu
         }
         foreach (ToolStripItem i in m.Items) Dark(i);
         m.Show(screen);
+    }
+
+    static void Forward(MailHit h)
+    {
+        using var step = UiWatch.Outlook("preparing a forward");
+        dynamic app = Outlook.Get(); dynamic ns = app.GetNamespace("MAPI");
+        var (e, st) = (h.Entry, h.StoreId); var mv = MailIndex.MovedTo(e); if (!string.IsNullOrEmpty(mv.Entry)) (e, st) = mv;
+        dynamic it = Outlook.Item(ns, e, st);
+        dynamic f = it.Forward(); f.Display(false);   // a draft: you add the people and send it yourself
+    }
+
+    static void Reminder(MailHit h, string doc)
+    {
+        using var step = UiWatch.Outlook("preparing a reminder");
+        dynamic app = Outlook.Get(); dynamic ns = app.GetNamespace("MAPI");
+        var (e, st) = (h.Entry, h.StoreId); var mv = MailIndex.MovedTo(e); if (!string.IsNullOrEmpty(mv.Entry)) (e, st) = mv;
+        dynamic it = Outlook.Item(ns, e, st);
+        dynamic r = h.Sent ? it.ReplyAll() : it.Reply();
+        if (h.Sent) { try { r.To = it.To; r.CC = it.CC; } catch { } }
+        var days = Math.Max(1, (int)(DateTime.Now - h.Date).TotalDays);
+        r.Subject = "Reminder - " + Regex.Replace(h.Subject ?? "", @"^\s*((re|fw|fwd|reminder)\s*[:\-]\s*)+", "", RegexOptions.IgnoreCase);
+        r.HTMLBody = $"<div style=\"font-family:Calibri;font-size:11pt\">Dear Sir,<br><br>Kindly note that we are still awaiting your feedback on {System.Net.WebUtility.HtmlEncode(doc.Length > 0 ? doc : "the below")}, sent on {h.Date:dd MMM yyyy} ({days} days ago).<br>We would appreciate your response at your earliest convenience.<br><br>Best regards,</div>" + r.HTMLBody;
+        r.Display(false);   // a draft: never sent by Nova
+    }
+
+    static void SaveAll(MailHit h, Form form)
+    {
+        using var d = new FolderBrowserDialog { Description = "Save every attachment of this email in…", UseDescriptionForTitle = true };
+        if (d.ShowDialog(form) != DialogResult.OK) return;
+        var dir = d.SelectedPath;
+        _ = Task.Run(async () =>
+        {
+            int n = 0;
+            foreach (var name in (h.AttNames ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(x => !Regex.IsMatch(x, @"^image\d*\.(png|jpe?g|gif)$", RegexOptions.IgnoreCase)))
+                try { await MailPreview.SaveAttachment(h, name, dir); n++; } catch { }
+            Shell.Open(dir);
+            Program.Balloon("📎 Nova", $"{n} attachment(s) saved");
+        });
+    }
+
+    static void SavePdf(MailHit h, Form form)
+    {
+        var name = Regex.Replace(h.Subject ?? "email", @"[\\/:*?""<>|]+", " ").Trim();
+        if (name.Length > 80) name = name[..80];
+        using var d = new SaveFileDialog { Filter = "PDF|*.pdf", FileName = name + ".pdf" };
+        if (d.ShowDialog(form) != DialogResult.OK) return;
+        var path = d.FileName;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var tmp = await MailPreview.Render(h);   // the email as a page (Nova's preview file)
+                if (string.IsNullOrEmpty(tmp) || !File.Exists(tmp)) throw new Exception("Outlook is not open, or the email could not be read");
+                Program.UiContext?.Post(async _ =>
+                {
+                    try
+                    {
+                        using var wv = new Microsoft.Web.WebView2.WinForms.WebView2();
+                        using var f = new Form { ShowInTaskbar = false, Opacity = 0, Width = 900, Height = 1200 };
+                        f.Controls.Add(wv); f.Show();
+                        await wv.EnsureCoreWebView2Async(await HubForm.Env());
+                        var done = new TaskCompletionSource<bool>();
+                        wv.CoreWebView2.NavigationCompleted += (_, _) => done.TrySetResult(true);
+                        wv.CoreWebView2.Navigate(new Uri(tmp).AbsoluteUri);
+                        await done.Task;
+                        await wv.CoreWebView2.PrintToPdfAsync(path);
+                        f.Close();
+                        Shell.Select(path);
+                    }
+                    catch (Exception x) { MessageBox.Show("Could not make the PDF: " + x.Message, "Nova Enhance"); }
+                }, null);
+            }
+            catch (Exception x) { MessageBox.Show("Could not read the email: " + x.Message, "Nova Enhance"); }
+        });
     }
 
     /// <summary>Right-click on several picked emails: every action applies to all of them.</summary>

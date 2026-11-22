@@ -75,7 +75,8 @@
       r.rows.forEach(function (row) {
         var tr = el("tr", row.entry ? "r" : null);
         (row.cells || []).forEach(function (c) { tr.appendChild(el("td", cellClass(c), c)); });
-        if (row.entry) { tr.title = "open in Outlook"; tr.onclick = function () { post({ t: "open", entry: row.entry, store: row.store }); }; }
+        if (row.entry) { tr.setAttribute("data-entry", row.entry); tr.setAttribute("data-store", row.store || ""); }
+        if (row.entry) { tr.title = "click: open in Outlook · right-click: every option (🔗 Find related, save, copy…)"; tr.onclick = function () { post({ t: "open", entry: row.entry, store: row.store }); }; }
         t.appendChild(tr);
       });
       tw.appendChild(t); n.appendChild(tw);

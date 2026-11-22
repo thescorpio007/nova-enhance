@@ -160,6 +160,7 @@ class NovaChat
                 }
                 case "ag.toLog": Screens.SubmittalChat(m["id"]?.ToString() ?? ""); break;
                 case "think.ask": Post(new JsonObject { ["t"] = "think.wait", ["text"] = Busy.Line() }); break;
+                case "rowmenu": WebPage.RowMenu(m, owner); break;
                 case "openSource": OpenSource(m["src"] as JsonObject, m["ctrl"]?.ToString() is "true" or "True"); break;
                 case "copy": Clipboard.SetText(m["text"]?.ToString() ?? " "); break;
                 case "saveWord": SaveWord(m["id"]?.ToString(), m["idx"]?.GetValue<int>() ?? -1); break;
