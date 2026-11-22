@@ -29,7 +29,8 @@ static class Export
     /// <summary>One folder per export: …\Exports\&lt;title date&gt;\ (the file, its Emails folder, and a zip next to it).</summary>
     public static (string Dir, string Name) Folder(string root, string title)
     {
-        var name = $"{Safe(title, 60) is { Length: > 0 } t ? t : "Nova export"} — {DateTime.Now:dd MMM yyyy HHmm}";
+        var t = Safe(title, 60);
+        var name = $"{(t.Length > 0 ? t : "Nova export")} — {DateTime.Now:dd MMM yyyy HHmm}";
         var dir = Path.Combine(root, name);
         Directory.CreateDirectory(dir);
         return (dir, name);
@@ -132,9 +133,11 @@ static class Export
             return cells.ToArray();
         }).ToList();
         var widths = r.Columns.Select((c, i) => Math.Clamp(r.Rows.Select(x => i < x.Cells.Count ? x.Cells[i].Length : 0).DefaultIfEmpty(10).Max() + 2, Math.Max(10, c.Length + 2), 70)).Concat(new[] { 14, 40 }).ToArray();
+        var sub = Regex.Replace(r.Text ?? "", @"\s+", " ");
+        if (sub.Length > 300) sub = sub[..300] + "…";
         var sheets = new List<SubmittalLog.XSheet>
         {
-            new("Result", "🧭 " + title, Regex.Replace(r.Text ?? "", @"\s+", " ") is var t && t.Length > 300 ? t[..300] + "…" : t, head, widths, rows, -1),
+            new("Result", "🧭 " + title, sub, head, widths, rows, -1),
             new("About", "ℹ About this export", "", null, new[] { 22, 120 }, new List<string[]>
             {
                 new[] { "Made by", "Nova Enhance · 🧭 agent · " + Program.Shown + " · Designed by A.HAMROUNI" },
