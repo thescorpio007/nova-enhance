@@ -23,6 +23,9 @@ static class BrainTrainer
     static readonly Regex Vague = new(@"\b(relevant|some|usually|normally|maybe|appropriate|etc|various|certain|properly|as needed|if needed|important ones?)\b", RegexOptions.IgnoreCase);
     static readonly Regex Words = new(@"[\p{L}\p{N}][\p{L}\p{N}.@\-]{3,}");
 
+    /// <summary>Text for comparing quotes: lower case, plain quotes and dashes, single spaces.</summary>
+    static string Fold(string t) => Regex.Replace((t ?? "").ToLowerInvariant().Replace('“', '"').Replace('”', '"').Replace('’', '\'').Replace('‘', '\'').Replace('–', '-').Replace('—', '-'), @"\s+", " ").Trim(' ', '"', '\'', '.', '…');
+
     static string BrainText(JsonObject b, bool withTests = true)
     {
         var sb = new StringBuilder();
@@ -610,7 +613,10 @@ THE BRAIN NOW:{BrainText(b)}";
             var sys = "You review the user's rule book (Nova Brain) for CONTRADICTIONS between rules (two rules that cannot both be followed, " +
                       "or that give the same list, setting, code or number differently) and rules too vague to apply. Check EVERY pair of rules, " +
                       "section by section, and list ALL contradictions you find — never stop at the first one. " +
-                      "Reply with JSON only: {\"contradictions\":[{\"ids\":[\"A-01\",\"B-02\"],\"why\":\"…\",\"fix\":\"one sentence: what to change\"}],\"vague\":[{\"id\":\"…\",\"why\":\"…\"}]}. Only real problems; an empty list is fine.";
+                      "A contradiction is ONLY when following one rule makes it impossible to follow the other. Two rules that say the same thing, " +
+                      "one rule that refers to another, or a rule that is more detailed than another are NOT contradictions. " +
+                      "For each one, quote the exact conflicting words from BOTH rules (copied word for word from the rule text). " +
+                      "Reply with JSON only: {\"contradictions\":[{\"ids\":[\"A-01\",\"B-02\"],\"quote_a\":\"exact words from A-01\",\"quote_b\":\"exact words from B-02\",\"why\":\"…\",\"fix\":\"one sentence: what to change\"}],\"vague\":[{\"id\":\"…\",\"why\":\"…\"}]}. Only real problems; an empty list is fine.";
             using var aiFor = Ai.For("brain");
             Brain.Quiet.Value = true;
             var j = new JsonObject { ["contradictions"] = new JsonArray(), ["vague"] = new JsonArray() };
@@ -635,12 +641,46 @@ THE BRAIN NOW:{BrainText(b)}";
                 }
             }
             finally { Brain.Quiet.Value = false; }
+            // 🛡 Strict: a finding counts only when both quotes are really in the two rules and they are not the same statement;
+            // then the AI judges once more, finding by finding, “can both be followed?”. The rest is dropped (said in the summary).
+            var texts = Brain.Rules(b).ToDictionary(x => x.Rule["id"]?.ToString() ?? "", x => Fold(x.Rule["text"]?.ToString()));
+            var kept = new List<JsonObject>(); int dropped = 0;
             foreach (var c in (j["contradictions"] as JsonArray ?? new()).OfType<JsonObject>())
+            {
+                var ids = (c["ids"] as JsonArray)?.Select(x => x?.ToString() ?? "").Where(rows.ContainsKey).ToList() ?? new();
+                string qa = Fold(c["quote_a"]?.ToString()), qb = Fold(c["quote_b"]?.ToString());
+                bool InRule(string id, string q) => q.Length >= 8 && texts.TryGetValue(id, out var t) && t.Contains(q);
+                bool quoted = ids.Count == 2 && ((InRule(ids[0], qa) && InRule(ids[1], qb)) || (InRule(ids[0], qb) && InRule(ids[1], qa)));
+                bool same = qa.Length > 0 && (qa == qb || Jaccard(Bag(qa), Bag(qb)) >= 0.8);
+                if (!quoted || same) { dropped++; continue; }
+                kept.Add(c);
+            }
+            if (kept.Count > 0)
+                try
+                {
+                    step("Double-checking each contradiction (can both rules be followed?)");
+                    Brain.Quiet.Value = true;
+                    var list = string.Join("\n", kept.Select((c, i) => $"{i}. {string.Join(" ↔ ", (c["ids"] as JsonArray)!.Select(x => x?.ToString()))}: “{c["quote_a"]}” vs “{c["quote_b"]}” — {c["why"]}"));
+                    var v = Ai.ParseJson(await Ai.Chat("You judge possible contradictions in a rule book. For each numbered item, answer whether it is a REAL contradiction: following one rule makes it impossible to follow the other. " +
+                        "Same meaning, one rule referring to the other, or one being more detailed is NOT real. Reply with JSON only: {\"real\":[0,2]} — the numbers of the real ones.",
+                        "THE RULES:" + BrainText(b, false) + "\n\nPOSSIBLE CONTRADICTIONS:\n" + list, false, true, null, ct)) ?? new JsonObject();
+                    if (v["real"] is JsonArray real)
+                    {
+                        var keep = real.Select(x => int.TryParse(x?.ToString(), out var k) ? k : -1).ToHashSet();
+                        dropped += kept.Count(c => !keep.Contains(kept.IndexOf(c)));
+                        kept = kept.Where((c, i) => keep.Contains(i)).ToList();
+                    }
+                }
+                catch (OperationCanceledException) { throw; }
+                catch { }
+                finally { Brain.Quiet.Value = false; }
+            foreach (var c in kept)
             {
                 var ids = (c["ids"] as JsonArray)?.Select(x => x?.ToString() ?? "").Where(rows.ContainsKey).ToList() ?? new();
                 foreach (var id in ids) { Notes(id).Add($"⛔ contradicts {string.Join(", ", ids.Where(x => x != id))}: {c["why"]}"); rows[id]["bad"] = 2; }
                 if (ids.Count > 0) contra.Add(c.DeepClone());
             }
+            if (dropped > 0) step($"{dropped} possible contradiction(s) dropped — not real after checking the exact words");
             foreach (var v in (j["vague"] as JsonArray ?? new()).OfType<JsonObject>())
                 if (v["id"]?.ToString() is { } id && rows.ContainsKey(id)) Notes(id).Add("💡 " + v["why"]);   // a suggestion, not a fault
         }
