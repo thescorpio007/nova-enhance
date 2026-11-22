@@ -814,6 +814,81 @@ static class MailIndex
     static readonly object statsLock = new();
 
     /// <summary>Shared by every progress row: counted at most every 10 s, by one reader at a time.</summary>
+    /// <summary>
+    /// 🔍 What Outlook itself holds in each mailbox / archive (not the index): every mail folder with its item count and newest date,
+    /// next to what Nova indexed. Finds an archive that is open in Outlook but empty for Nova, or not readable. Designed by A.HAMROUNI
+    /// </summary>
+    public static List<(string Store, string Kind, string File, int Folders, int Items, int Indexed, string Newest, string Problem, List<string> Lines)> StoreProbe(int maxFolders = 400)
+    {
+        var res = new List<(string, string, string, int, int, int, string, string, List<string>)>();
+        dynamic app = Outlook.Running();
+        if (app == null) return res;
+        dynamic ns = null;
+        var idx = StoreStats().ToDictionary(x => x.Store, x => x.Indexed, StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            ns = app.GetNamespace("MAPI");
+            dynamic stores = ns.Stores;
+            int n = (int)stores.Count;
+            for (int i = 1; i <= n; i++)
+            {
+                dynamic st = stores.Item(i);
+                string name = "", file = "", kind = "", problem = ""; int folders = 0, items = 0; DateTime newest = DateTime.MinValue;
+                var lines = new List<string>();
+                try
+                {
+                    name = Outlook.S(() => st.DisplayName);
+                    try { file = Outlook.S(() => st.FilePath); } catch { }
+                    int type = -1; try { type = (int)st.ExchangeStoreType; } catch { }
+                    kind = type switch { 0 => "mailbox", 1 => "shared / delegate", 2 => "public folders", 3 => "pst / ost file", 4 => "additional mailbox (online archive?)", _ => "?" };
+                    if (type == 2) { Outlook.Release(st); continue; }
+                    dynamic root = null;
+                    try { root = st.GetRootFolder(); } catch (Exception e) { problem = "cannot open: " + e.Message; }
+                    if (root != null)
+                    {
+                        void Scan(dynamic f, int depth, string path)
+                        {
+                            if (depth > 6 || folders >= maxFolders) return;
+                            string fn = Outlook.S(() => f.Name);
+                            int t = -1; try { t = (int)f.DefaultItemType; } catch { }
+                            if (t == 0 && depth > 0)
+                            {
+                                folders++;
+                                int c = 0; try { c = (int)f.Items.Count; } catch (Exception e) { problem = $"“{fn}” items not readable: {e.Message}"; }
+                                items += c;
+                                if (c > 0)
+                                {
+                                    string last = "";
+                                    try { dynamic its = f.Items; its.Sort("[ReceivedTime]", true); dynamic it = its.GetFirst(); if (it != null) { DateTime d = it.ReceivedTime; if (d > newest) newest = d; last = d.ToString("yyyy-MM-dd"); Outlook.Release(it); } Outlook.Release(its); } catch { }
+                                    if (lines.Count < 25) lines.Add($"{path}{fn}: {c:N0}{(last.Length > 0 ? " · newest " + last : "")}");
+                                }
+                            }
+                            dynamic subs = null;
+                            try
+                            {
+                                subs = f.Folders; int k = (int)subs.Count;
+                                for (int j = 1; j <= k && folders < maxFolders; j++) { dynamic s = subs.Item(j); try { Scan(s, depth + 1, depth == 0 ? "" : path + fn + " › "); } finally { Outlook.Release(s); } }
+                            }
+                            catch (Exception e) { problem = $"sub-folders of “{fn}” not readable: {e.Message}"; }
+                            finally { Outlook.Release(subs); }
+                        }
+                        Scan(root, 0, "");
+                        Outlook.Release(root);
+                    }
+                    idx.TryGetValue(name, out var ixd);
+                    if (problem.Length == 0 && items > 0 && ixd == 0) problem = "⚠ has emails in Outlook but none in Nova's index";
+                    if (problem.Length == 0 && items == 0 && file.Length > 0 && File.Exists(file) && new FileInfo(file).Length > 50_000_000) problem = $"⚠ the file is {new FileInfo(file).Length / 1_048_576:N0} MB but Outlook shows no emails (open it in Outlook and check it is connected)";
+                    res.Add((name, kind, file, folders, items, ixd, newest == DateTime.MinValue ? "" : newest.ToString("yyyy-MM-dd"), problem, lines));
+                }
+                catch (Exception e) { res.Add((name, kind, file, folders, items, 0, "", "error: " + e.Message, lines)); }
+                finally { Outlook.Release(st); }
+            }
+            Outlook.Release(stores);
+        }
+        finally { Outlook.Release(ns); Outlook.Release(app); }
+        return res;
+    }
+
     public static List<(string Store, int Indexed, int Total, DateTime? Oldest, DateTime? Newest)> StoreStats()
     {
         lock (statsLock)
@@ -954,7 +1029,7 @@ static class MailIndex
         }
         catch (OutlookPause) { throw; }
         catch (Exception e) when (Outlook.Gone(e)) { throw new OutlookPause(true, e); }
-        catch { }
+        catch (Exception e) { Log.Warn("Mail index", $"sub-folders of “{Outlook.S(() => folder.Name)}” ({storeName}) not readable: {e.Message}"); }
         finally { Outlook.Release(subs); }
     }
 

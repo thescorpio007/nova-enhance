@@ -139,6 +139,7 @@ static class TestConnector
             "errors" => "read the error log",
             "selfcheck" => "run the self-checks",
             "status" => "read Nova's status",
+            "stores" => "what Outlook holds in each mailbox / archive (folders, emails, newest) vs Nova's index",
             "submittal" => $"run the 📋 Submittal log ({S(req, "types", "all types")} · {S(req, "project", "all projects")} · last {S(req, "days", "30")} days)",
             "projects" => "read your 📁 projects list and the projects found in your emails",
             "brain_read" => "read the 🧠 Nova Brain rules" + (S(req, "section").Length > 0 ? $" (section {S(req, "section")})" : ""),
@@ -229,6 +230,18 @@ static class TestConnector
         var sb = new StringBuilder();
         switch (tool)
         {
+            case "stores":
+            {
+                var probe = await Task.Run(() => MailIndex.StoreProbe());
+                if (probe.Count == 0) sb.AppendLine("Outlook is not running.");
+                foreach (var p in probe)
+                {
+                    sb.AppendLine($"## {p.Store} · {p.Kind} · {p.Folders} mail folders · {p.Items:N0} emails in Outlook · {p.Indexed:N0} in Nova · newest {p.Newest}{(p.File.Length > 0 ? " · " + p.File : "")}");
+                    if (p.Problem.Length > 0) sb.AppendLine("   " + p.Problem);
+                    foreach (var l in p.Lines) sb.AppendLine("   - " + l);
+                }
+                break;
+            }
             case "status":
             {
                 sb.AppendLine($"Nova Enhance {Program.Shown} (internal {Program.Build}) · {DateTime.Now:dd MMM yyyy HH:mm} · safe mode {(Guard.SafeMode ? "ON" : "off")}");
