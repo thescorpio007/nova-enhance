@@ -158,7 +158,7 @@ static class Related
         try
         {
             var proj = mails.Select(Projects.ForMail).FirstOrDefault(p => p != null);
-            var folders = (proj != null ? new[] { proj } : Projects.All()).SelectMany(p => p.Folders.Concat((p.Sources ?? new()).Select(x => x.Path)))
+            var folders = (proj != null ? new List<Project> { proj } : Projects.All()).SelectMany(p => p.Folders.Concat((p.Sources ?? new()).Select(x => x.Path)))
                 .Where(f => !Projects.Private.IsMatch(f)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             foreach (var d in Projects.FindDoc(key, folders).Where(d => !Projects.Private.IsMatch(d.Path))
                 .OrderBy(d => d.Status == "latest" ? 0 : 1).ThenBy(d => ProjectSources.Of(d.Path) is { } x ? ProjectSources.Rank(x.S.Kind) : 7).Take(20))
