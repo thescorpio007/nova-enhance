@@ -9,6 +9,8 @@ static class Smoke
     static readonly StringBuilder log = new();
     static int fails;
 
+    static string outPath = "";
+
     static void Ok(bool cond, string what)
     {
         log.AppendLine((cond ? "PASS  " : "FAIL  ") + what);
@@ -19,6 +21,7 @@ static class Smoke
     {
         var data = args.SkipWhile(a => a != "--data").Skip(1).FirstOrDefault() ?? "";
         var outFile = args.SkipWhile(a => a != "--out").Skip(1).FirstOrDefault() ?? Path.Combine(Path.GetTempPath(), "nova-smoke.txt");
+        outPath = outFile;
         try
         {
             Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
@@ -296,6 +299,31 @@ static class Smoke
         }
         Ok(s.Visible, "Settings: every section opens"); s.Dispose();
         var a = new AskForm(); a.Show(); Pump(400); Ok(a.Visible, "Ask Nova window opens"); a.Dispose();
+        // 💬 Talk about this email with its email preview: small, normal and full size, email left and on top — a picture of each.
+        foreach (var (w, h, top) in new[] { (780, 560, false), (1150, 880, false), (1900, 1000, false), (780, 560, true), (1150, 880, true) })
+        {
+            try
+            {
+                Store.SetBool("win_mailask_top", top);
+                var m = new MailAskForm { Width = w, Height = h, StartPosition = FormStartPosition.Manual, Location = new Point(0, 0) };
+                m.Show();
+                m.ShowMail(new MailHit { Id = 1, Subject = "SLV # Non Conformance Report SLV-MZA-MS-NCR-00069_Rev00 - Failure to Provide Adequate Protection", FromName = "Malatag, Eric", To = "SeaLaVie; ZC; Zueblin; Ammon, Mazen; One; Two", Cc = string.Join("; ", Enumerable.Range(1, 60).Select(i => "Person " + i)), Body = string.Join("\n\n", Enumerable.Range(1, 40).Select(i => "Paragraph " + i + " of a long email, so the preview needs its scroll bar.")), Date = DateTime.Now, AttNames = "SLV-MZA-MS-NCR-00069_Rev00.pdf" });
+                Pump(2500);
+                Ok(m.Visible, $"Talk about this email opens at {w}×{h}{(top ? " (email on top)" : "")}");
+                try
+                {
+                    using var bmp = new Bitmap(m.Width, m.Height);
+                    m.DrawToBitmap(bmp, new Rectangle(0, 0, m.Width, m.Height));
+                    var dir = Path.Combine(Path.GetDirectoryName(outPath) ?? Path.GetTempPath(), "shots");
+                    Directory.CreateDirectory(dir);
+                    bmp.Save(Path.Combine(dir, $"mailask-{w}x{h}{(top ? "-top" : "")}.png"));
+                }
+                catch { }
+                m.Dispose();
+            }
+            catch (Exception e) { Ok(false, $"Talk about this email at {w}×{h}: {e.Message}"); }
+        }
+        Store.SetBool("win_mailask_top", false);
         var b = new BriefForm(); b.Show(); b.Reload(); Pump(1500); Ok(b.Visible, "Morning brief opens"); b.Dispose();
         var f = new FolderSearchForm(); f.Show(); f.Begin(Path.GetTempPath()); Pump(400); Ok(f.Visible, "Folder search window opens"); f.Dispose();
         var cs = new ConfirmSend("✦ Send 3 extracts to Gemini?", "Test", "[1] a\n[2] b", "Send and answer", true); cs.Show(); Pump(200); Ok(cs.Visible, "Confirmation window opens"); cs.Dispose();

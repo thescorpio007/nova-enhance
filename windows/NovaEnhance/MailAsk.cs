@@ -79,7 +79,7 @@ class MailAskForm : NovaForm
         top = new Stack { Dock = DockStyle.Top, AutoScroll = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(16, 10, 16, 6) };
         webHost = new Panel { Dock = DockStyle.Fill, BackColor = Th.Bg };
         var bottom = new Panel { Dock = DockStyle.Bottom, Height = 152, BackColor = Color.FromArgb(0x0E, 0x11, 0x17), Padding = new Padding(16, 8, 16, 6) };
-        split = new SplitContainer { Dock = DockStyle.Fill, BackColor = Color.FromArgb(0x2A, 0x30, 0x40), SplitterWidth = 6, Orientation = Store.Bool("win_mailask_top", false) ? Orientation.Horizontal : Orientation.Vertical, Panel1MinSize = 120, Panel2MinSize = 260 };
+        split = new SplitContainer { Dock = DockStyle.Fill, BackColor = Color.FromArgb(0x2A, 0x30, 0x40), SplitterWidth = 6, Orientation = Store.Bool("win_mailask_top", false) ? Orientation.Horizontal : Orientation.Vertical };
         split.Panel1.BackColor = Color.White; split.Panel2.BackColor = Th.Bg;
         var pvBar = new Panel { Dock = DockStyle.Top, Height = 24, BackColor = Color.FromArgb(0xF1, 0xF3, 0xF7) };
         pvState = new Label { Dock = DockStyle.Fill, ForeColor = Color.FromArgb(0x55, 0x5B, 0x66), Font = Th.F(8.5f), TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(8, 0, 0, 0) };
@@ -103,13 +103,15 @@ class MailAskForm : NovaForm
             try
             {
                 var whole = split.Orientation == Orientation.Vertical ? split.Width : split.Height;
-                if (whole <= 400) return;
+                if (whole <= 400) return;   // the window has no real size yet (WinForms refuses minimum sizes before that)
+                if (split.Panel1MinSize != 120) { split.Panel1MinSize = 120; split.Panel2MinSize = 260; }
                 var per = Store.Int(split.Orientation == Orientation.Vertical ? "win_mailask_splitv" : "win_mailask_splith", split.Orientation == Orientation.Vertical ? 500 : 420);
                 split.SplitterDistance = Math.Clamp(whole * per / 1000, split.Panel1MinSize, whole - split.Panel2MinSize - split.SplitterWidth);
             }
             catch { }
         }
         Shown += (_, _) => PlaceSplit();
+        split.SizeChanged += (_, _) => { if (split.Panel1MinSize != 120) PlaceSplit(); };
         Controls.Add(split); Controls.Add(bottom); Controls.Add(top);
 
         var hr = top.Add(Th.Row());

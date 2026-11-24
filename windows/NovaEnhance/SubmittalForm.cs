@@ -109,7 +109,7 @@ class SubmittalForm : WebPage
             case "ag.chat": if (agChat.Length > 0) Screens.HubOpenChat(agChat); else Screens.Hub(agQ); break;   // 💬 the same conversation, with everything
             case "ag.prompt": Prompts.AskSave(this, new SavedPrompt { Name = agQ.Length > 50 ? agQ[..50] : agQ, Question = agQ, Where = "ask" }); break;
             case "open":
-                NovaChat.OpenSource(new JsonObject { ["kind"] = "email", ["entry"] = m["entry"]?.ToString(), ["store"] = m["store"]?.ToString() });
+                NovaChat.OpenSource(new JsonObject { ["kind"] = "email", ["entry"] = m["entry"]?.ToString(), ["store"] = m["store"]?.ToString() }, m["ctrl"]?.ToString() is "true" or "True");
                 break;
             case "excel":
                 if (last == null) return;

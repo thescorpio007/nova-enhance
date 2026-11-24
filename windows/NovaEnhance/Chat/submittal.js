@@ -254,7 +254,7 @@
         if (c[0] === "type") td.title = i.label || "";
         tr.appendChild(td);
       });
-      tr.onclick = function () { if (i.entry) post({ t: "open", entry: i.entry, store: i.store }); };
+      tr.onclick = function (ev) { if (i.entry) post({ t: "open", entry: i.entry, store: i.store, ctrl: !!(ev && ev.ctrlKey) }); };
       if (i.subEntry || i.entry) { tr.setAttribute("data-entry", i.subEntry || i.entry); tr.setAttribute("data-store", i.subEntry ? i.subStore : i.store); }
       t.appendChild(tr);
     });
