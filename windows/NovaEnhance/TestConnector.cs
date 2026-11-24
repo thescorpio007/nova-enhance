@@ -225,7 +225,7 @@ static class TestConnector
                ((h.Entry ?? "").StartsWith("pst:") ? "  (from an archive read directly)\n" : "");
     }
 
-    static async Task<string> Tool(string tool, JsonObject a)
+    internal static async Task<string> Tool(string tool, JsonObject a)
     {
         var sb = new StringBuilder();
         switch (tool)
@@ -409,10 +409,31 @@ static class TestConnector
                 sb.AppendLine(BrainTrainer.QueueFromConnector(changes, summary));
                 break;
             }
-            default: throw new Exception("unknown tool " + tool);
+            default:
+                // 🔎 Claude checks and safe fixes (the same as over the relay): only while you allow Claude (tray → 🔗 Allow Claude)
+                if (Checks.TryGetValue(tool, out var c)) return await ClaudeOutlook.Run(c.Relay, a);
+                throw new Exception("unknown tool " + tool);
         }
         return sb.ToString();
     }
+
+    static readonly Dictionary<string, (string Relay, string Desc, string Schema)> Checks = new()
+    {
+        ["check_health"] = ("nova.errors", "Nova health: safe mode, jobs restarted, errors grouped by area, crashes, window freezes.", "{\"type\":\"object\",\"properties\":{\"hours\":{\"type\":\"integer\"}}}"),
+        ["check_perf"] = ("nova.perf", "Nova's memory, CPU, sizes, free disk and slowest steps.", "{\"type\":\"object\",\"properties\":{}}"),
+        ["check_index"] = ("nova.projects", "The project file index per project and folder: reachable over the VPN, names listed, files read, offline copies, problems.", "{\"type\":\"object\",\"properties\":{}}"),
+        ["check_jobs"] = ("nova.jobs", "Background jobs: email index per mailbox and archive, project index, read-inside, offline copies, phone link, transfers.", "{\"type\":\"object\",\"properties\":{}}"),
+        ["check_search"] = ("nova.searchtest", "Searches like the user would (a document number or words): the files and the emails found.", "{\"type\":\"object\",\"properties\":{\"q\":{\"type\":\"string\"}},\"required\":[\"q\"]}"),
+        ["check_vpn"] = ("nova.vpn", "The 🌐 Office VPN test (engine, gateway, adapter, office server, log). Never shows the password.", "{\"type\":\"object\",\"properties\":{}}"),
+        ["check_transfers"] = ("nova.transfers", "The 📦 transfer queue: speed, threads, mode, files done and failed, newest log.", "{\"type\":\"object\",\"properties\":{}}"),
+        ["check_phone"] = ("nova.phone", "Phone link: last sync, status, errors.", "{\"type\":\"object\",\"properties\":{}}"),
+        ["check_updates"] = ("nova.updates", "Installed build, waiting update, update status.", "{\"type\":\"object\",\"properties\":{}}"),
+        ["check_settings"] = ("nova.settings", "Nova's settings without anything secret.", "{\"type\":\"object\",\"properties\":{\"filter\":{\"type\":\"string\"}}}"),
+        ["run_selftest"] = ("nova.selftest", "Runs Nova's self-test on this PC (creates and deletes only its own test files).", "{\"type\":\"object\",\"properties\":{}}"),
+        ["fix_vpn"] = ("fix.vpn", "Connect, disconnect or reconnect the office VPN.", "{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\",\"enum\":[\"connect\",\"disconnect\",\"reconnect\"]}},\"required\":[\"action\"]}"),
+        ["fix_relist"] = ("fix.relist", "Lists a project folder again (part of its path; empty = all). Names only, nothing deleted.", "{\"type\":\"object\",\"properties\":{\"folder\":{\"type\":\"string\"}}}"),
+        ["fix_transfer"] = ("fix.transfer", "Retry failed files, resume or pause a transfer (id from check_transfers). Never cancels or deletes.", "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"action\":{\"type\":\"string\",\"enum\":[\"retry\",\"resume\",\"pause\"]}}}"),
+    };
 
     // ------------------------------------------------------------------ "NovaEnhance.exe --mcp": the MCP server Claude desktop starts
 
@@ -452,12 +473,13 @@ static class TestConnector
                         ["protocolVersion"] = m["params"]?["protocolVersion"]?.ToString() ?? "2025-06-18",
                         ["capabilities"] = new JsonObject { ["tools"] = new JsonObject() },
                         ["serverInfo"] = new JsonObject { ["name"] = "nova-enhance-test", ["version"] = Program.Build.ToString() },
-                        ["instructions"] = "Test tools for Nova Enhance for Windows on the user's PC (by A.HAMROUNI). Names are hidden as Person N; email bodies are never given."
+                        ["instructions"] = "Nova Enhance for Windows on the user's PC (by A.HAMROUNI): test, check and safe-fix tools to review and manage Nova's work. Names are hidden as Person N; email bodies are never given. check_* tools only read; fix_* tools never delete. Checks and fixes work only while the user allows Claude (tray → 🔗 Allow Claude)."
                     };
                     break;
                 case "ping": result = new JsonObject(); break;
                 case "tools/list":
-                    result = new JsonObject { ["tools"] = new JsonArray(Tools.Select(t => (JsonNode)new JsonObject { ["name"] = "nova_" + t.Name, ["description"] = t.Desc, ["inputSchema"] = JsonNode.Parse(t.Schema) }).ToArray()) };
+                    result = new JsonObject { ["tools"] = new JsonArray(Tools.Select(t => (JsonNode)new JsonObject { ["name"] = "nova_" + t.Name, ["description"] = t.Desc, ["inputSchema"] = JsonNode.Parse(t.Schema) })
+                        .Concat(Checks.Select(c => (JsonNode)new JsonObject { ["name"] = "nova_" + c.Key, ["description"] = c.Value.Desc + " (only while Claude is allowed on the PC: tray → 🔗 Allow Claude)", ["inputSchema"] = JsonNode.Parse(c.Value.Schema) })).ToArray()) };
                     break;
                 case "tools/call":
                 {

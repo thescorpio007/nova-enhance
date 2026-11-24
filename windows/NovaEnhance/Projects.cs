@@ -732,6 +732,14 @@ static class Projects
 
         /// <summary>⟳ List again now (all projects).</summary>
         public static void Refresh() { foreach (var f in AllFolders()) relist[f] = true; Wake(); }
+        /// <summary>One folder listed again (Claude's safe fix · “List again now”).</summary>
+        public static int Relist(string part)
+        {
+            var hit = AllFolders().Where(f => f.Contains(part, StringComparison.OrdinalIgnoreCase)).ToList();
+            foreach (var f in hit) relist[f] = true;
+            Wake();
+            return hit.Count;
+        }
 
         static IEnumerable<string> AllFolders() => All().SelectMany(p => p.Folders).Concat(General).Distinct(StringComparer.OrdinalIgnoreCase);
 

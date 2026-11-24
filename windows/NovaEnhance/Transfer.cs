@@ -694,7 +694,7 @@ static class Transfer
         {
             var secs = j.Started != null ? ((j.Ended ?? DateTime.Now) - j.Started.Value).TotalSeconds : 0;
             var avg = secs > 0 && j.Copied > 0 ? Size((long)(j.DoneBytes / secs)) + "/s average" : "";
-            var line = $"- {j.Added:HH:mm} {j.Kind} · {j.State} · {j.DoneFiles}/{j.TotalFiles} files · {Size(j.DoneBytes)} of {Size(j.TotalBytes)} · copied {j.Copied} · {(j.State == "running" ? Size((long)j.Speed) + "/s now · " : "")}{avg} · took {secs:0} s · {j.Mode} · failed {j.Failed.Count}" +
+            var line = $"- [{j.Id}] {j.Added:HH:mm} {j.Kind} · {j.State} · {j.DoneFiles}/{j.TotalFiles} files · {Size(j.DoneBytes)} of {Size(j.TotalBytes)} · copied {j.Copied} · {(j.State == "running" ? Size((long)j.Speed) + "/s now · " : "")}{avg} · took {secs:0} s · {j.Mode} · failed {j.Failed.Count}" +
                        $"\n    {string.Join(" + ", j.Sources.Take(3))}{(j.Sources.Count > 3 ? $" (+{j.Sources.Count - 3})" : "")} → {j.Dest}{(j.Note.Length > 0 ? "\n    note: " + j.Note : "")}";
             if (Projects.Private.IsMatch(line)) line = $"- {j.Added:HH:mm} {j.Kind} · {j.State} · 🔒 private path not shown";
             sb.Append(line).Append('\n');
