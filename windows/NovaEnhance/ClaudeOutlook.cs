@@ -147,6 +147,34 @@ static class ClaudeOutlook
         return string.Join("\n", t.Split('\n').Where(l => !Private(l)));
     }
 
+    /// <summary>🔗 Nova's own live check for Find related: the emails in Outlook now whose subject has this number (entry ids).</summary>
+    public static List<(string Entry, string StoreId, string Subject)> LiveSubject(string key, int seconds = 30)
+    {
+        var res = new List<(string, string, string)>();
+        dynamic app = Outlook.Running();
+        if (app == null || string.IsNullOrWhiteSpace(key)) return res;
+        dynamic ns = app.GetNamespace("MAPI");
+        var filter = $"@SQL=\"urn:schemas:httpmail:subject\" LIKE '%{Q(key.Trim())}%'";
+        var started = DateTime.Now;
+        foreach (var (f, _, _, sid) in MailFolders((object)ns, "", ""))
+        {
+            if ((DateTime.Now - started).TotalSeconds > seconds) break;
+            try
+            {
+                dynamic items = f.Items.Restrict(filter);
+                for (dynamic it = items.GetFirst(); it != null; it = items.GetNext())
+                {
+                    try { if ((int)it.Class == 43) res.Add((Outlook.S(() => it.EntryID), sid, Outlook.S(() => it.Subject))); }
+                    catch { }
+                    finally { Outlook.Release(it); }
+                }
+                Outlook.Release(items);
+            }
+            catch { }
+        }
+        return res;
+    }
+
     /// <summary>📨 Nova's own live check (no Claude access needed): every email these people sent since a date, read in Outlook now —
     /// subject, date and where it is (🔒 private ones left out). Used to re-check “no reply” before Nova shows it.</summary>
     public static List<(DateTime Date, string Subject, string Entry, string StoreId, string From)> LiveFrom(List<string> who, DateTime after, int seconds = 60)

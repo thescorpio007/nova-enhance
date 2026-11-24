@@ -10,7 +10,11 @@ namespace NovaEnhance;
 /// </summary>
 static class Related
 {
-    static readonly Regex DocRx = new(@"\b[A-Z0-9]{2,}(?:-[A-Z0-9]{1,8}){3,}\b");
+    // A document number ends at anything that is not a letter or digit: “…-MAR-00182_Rev00” → SLV-ZUC-AR-MAR-00182 (was: stopped at
+    // the “_” and kept “SLV-ZUC-AR-MAR”, then searched the whole subject as words — every drawing came up).
+    static readonly Regex DocRx = new(@"(?<![A-Za-z0-9-])[A-Z0-9]{2,}(?:-[A-Z0-9]{1,8}){3,}(?![A-Za-z0-9])");
+    static readonly Regex AutoRx = new(@"^\s*(automatic reply|auto(matic)?[- ]?reply|out of (the )?office|undeliverable|delivery (status|has failed)|read:|not read:)", RegexOptions.IgnoreCase);
+    static readonly Regex MzaResponse = new(@"with\s+MZA\s+Response", RegexOptions.IgnoreCase);
     static readonly Regex RevTail = new(@"(?:[_\-\s]*(?:Rev|R)\s?\d{1,2})$", RegexOptions.IgnoreCase);
     static readonly Regex ReplyRx = new(@"^\s*((re|aw|antw)\s*:\s*|\[external\]\s*)+", RegexOptions.IgnoreCase);
     static readonly Regex FwdRx = new(@"^\s*(fw|fwd|tr)\s*:", RegexOptions.IgnoreCase);
@@ -21,10 +25,17 @@ static class Related
     public static string BaseOf(MailHit h)
     {
         if (h == null) return "";
+        List<string> types;
+        try { types = SubmittalLog.Enabled(); } catch { types = new(); }
         foreach (var t in new[] { h.Subject, h.AttNames, h.NewPart.Length > 0 ? h.NewPart[..Math.Min(h.NewPart.Length, 2000)] : "" })
         {
-            var m = DocRx.Matches(t ?? "").Select(x => x.Value).FirstOrDefault(v => v.Any(char.IsDigit) && Regex.IsMatch(v, @"\d{2,}"));
-            if (m != null) return RevTail.Replace(m, "").ToUpperInvariant();
+            var text = t ?? "";
+            var cands = DocRx.Matches(text)
+                .Where(m => Regex.IsMatch(m.Value, @"\d{2,}") && !Regex.IsMatch(text[Math.Max(0, m.Index - 14)..m.Index], @"int\s*[:.]", RegexOptions.IgnoreCase))
+                .Select(m => RevTail.Replace(m.Value, "").ToUpperInvariant()).Distinct().ToList();
+            if (cands.Count == 0) continue;
+            // Several numbers: the one with a logged type (MAR, SDS, WIR…) is the document; the others are letters / internal refs.
+            return cands.FirstOrDefault(c => c.Split('-').Any(seg => types.Contains(seg, StringComparer.OrdinalIgnoreCase))) ?? cands[0];
         }
         return "";
     }
@@ -45,9 +56,16 @@ static class Related
     public static void Find(MailHit h, bool inOutlook)
     {
         var b = BaseOf(h);
-        var key = b.Length > 0 ? b : Clean(h?.Subject);
-        if (key.Length == 0) { MessageBox.Show("This email has no document number or subject to search for.", "Nova Enhance"); return; }
-        if (inOutlook) InOutlook(key); else Screens.Timeline(key, Clean(h?.Subject));
+        if (b.Length == 0)
+        {
+            // No document number: Outlook searches the exact subject; Nova shows the email's own thread (never a word search).
+            var subj = Clean(h?.Subject);
+            if (subj.Length == 0) { MessageBox.Show("This email has no document number or subject to search for.", "Nova Enhance"); return; }
+            if (inOutlook) InOutlook(subj);
+            else { Program.Balloon("🔗 Find related", "No document number in this email — showing its thread instead."); Screens.AskFor($"the whole thread of “{Outstanding.NormSubject(h.Subject ?? "")}”"); }
+            return;
+        }
+        if (inOutlook) InOutlook(b); else Screens.Timeline(b, Clean(h?.Subject));
     }
 
     /// <summary>🔎 Outlook's own search (all mailboxes and open archives) for the number — results in Outlook's list.</summary>
@@ -88,8 +106,8 @@ static class Related
     static string CodeOf(MailHit h)
     {
         var a = h.AttNames ?? "";
-        var m = Regex.Match(a + " " + h.Subject, @"-C([1-5])\b|\bCode\s*-?\s*([1-5])\b", RegexOptions.IgnoreCase);
-        if (!m.Success) m = Regex.Match(h.NewPart.Length > 0 ? h.NewPart[..Math.Min(h.NewPart.Length, 1500)] : "", @"\bCode\s*-?\s*([1-5])\b", RegexOptions.IgnoreCase);
+        var m = Regex.Match(a + " " + h.Subject, @"-C([1-5])(?![0-9])|\bCode\s*-?\s*([1-5])\b", RegexOptions.IgnoreCase);
+        if (!m.Success) m = Regex.Match((h.Body ?? "").Length > 0 ? h.Body[..Math.Min(h.Body.Length, 4000)] : "", @"Approval result\s*[:\-]?\s*Code\s*-?\s*([1-5])|\bCode\s*-?\s*([1-5])\b", RegexOptions.IgnoreCase);
         return m.Success ? "Code " + (m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value) : "";
     }
 
@@ -98,9 +116,10 @@ static class Related
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var mails = MailIndex.SubmittalsLike(new[] { "%" + key + "%" }, new[] { "%" + key + "%" }, DateTime.Today.AddYears(-8), DateTime.Now.AddDays(1), 600, 2000)
-            .GroupBy(h => (h.Subject, h.Date, h.FromAddr)).Select(g => g.First()).OrderBy(h => h.Date).ToList();
-        if (mails.Count == 0 && !DocRx.IsMatch(key))
-            mails = MailIndex.Search(new MailQuery { Words = key.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(8).ToList(), Limit = 300, BodyChars = 2000 }).OrderBy(h => h.Date).ToList();
+            .GroupBy(h => (h.Subject, h.Date, h.FromAddr)).Select(g => g.First())
+            // exactly this number (00557 is not 005570), no automatic replies / receipts
+            .Where(h => Regex.IsMatch((h.Subject ?? "") + " " + (h.AttNames ?? ""), Regex.Escape(key) + @"(?![0-9])", RegexOptions.IgnoreCase) && !AutoRx.IsMatch(h.Subject ?? ""))
+            .OrderBy(h => h.Date).ToList();
         var mza = Brain.ListOf("mza.match", Tracker.Us);
         bool Us(MailHit h) => h.Sent || mza.Any(m => (h.FromName ?? "").Contains(m, StringComparison.OrdinalIgnoreCase) || (h.FromAddr ?? "").Contains(m, StringComparison.OrdinalIgnoreCase));
         var revs = new JsonArray();
@@ -114,7 +133,9 @@ static class Related
                 var s = h.Subject ?? "";
                 var c = Us(h) ? CodeOf(h) : "";
                 string icon, what;
-                if (FwdRx.IsMatch(s)) { icon = "↪"; what = "Forwarded"; }
+                // Thinkproject's “…_with MZA Response” copy is MZA's coded answer, though Thinkproject sends it.
+                if (MzaResponse.IsMatch(s)) { c = CodeOf(h); icon = c is "Code 3" or "Code 4" ? "⛔" : "✅"; what = $"{Tracker.UsShort} response" + (c.Length > 0 ? " · " + c : ""); if (c.Length > 0) { code = c; closedAt = h.Date.ToString("dd MMM yyyy"); } }
+                else if (FwdRx.IsMatch(s)) { icon = "↪"; what = "Forwarded"; }
                 else if (!ReplyRx.IsMatch(s) && !Us(h)) { icon = "📥"; what = "Submitted"; }
                 else if (c.Length > 0) { icon = c is "Code 3" or "Code 4" ? "⛔" : "✅"; what = $"{Tracker.UsShort} reply · {c}"; code = c; closedAt = h.Date.ToString("dd MMM yyyy"); }
                 else if (Us(h)) { icon = "💬"; what = ReplyRx.IsMatch(s) ? $"{Tracker.UsShort} reply" : $"Sent by {Tracker.UsShort}"; }
@@ -170,13 +191,35 @@ class RelatedForm : WebPage
         if (Ready) Run();
     }
 
-    void Run() => Work($"Finding every email about {key}…", () => { var t = Related.Timeline(key); last = t; return t; });
+    void Run() => Work($"Finding every email about {key}…", () =>
+    {
+        var t = Related.Timeline(key); last = t;
+        // 🔎 Then Outlook is asked live: an email with this number that Nova's index does not have yet → said, and brought in.
+        var k = key;
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                var live = ClaudeOutlook.LiveSubject(k, 30).Where(x => !Regex.IsMatch(x.Subject ?? "", @"^\s*(automatic reply|out of office|undeliverable)", RegexOptions.IgnoreCase))
+                    .Where(x => Regex.IsMatch(x.Subject ?? "", Regex.Escape(k) + @"(?![0-9])", RegexOptions.IgnoreCase)).ToList();
+                if (live.Count == 0) { Post(new JsonObject { ["t"] = "live", ["text"] = "🔎 Outlook checked live: no email with this number in Outlook's open folders." }); return; }
+                var known = MailIndex.KnownEntries(live.Select(x => x.Entry).ToList());
+                var missing = live.Where(x => !known.Contains(x.Entry)).ToList();
+                if (missing.Count > 0) MailIndex.SyncNow();
+                Post(new JsonObject { ["t"] = "live", ["text"] = missing.Count == 0
+                    ? $"✓ Outlook checked live: {live.Count} email(s) with this number — all in this timeline."
+                    : $"⚠ Outlook checked live: {missing.Count} email(s) only in Outlook ({string.Join(" · ", missing.Take(3).Select(x => x.Subject))}) — Nova is adding them; press ↻ in a minute." });
+            }
+            catch (Exception e) { Log.Warn("find related · live", e.Message); }
+        });
+        return t;
+    });
 
     protected override void OnMessage(JsonObject m)
     {
         switch (m["t"]?.ToString())
         {
-            case "init": Run(); break;
+            case "init": case "again": Run(); break;
             case "open":
             {
                 if (!long.TryParse(m["id"]?.ToString(), out var id)) break;

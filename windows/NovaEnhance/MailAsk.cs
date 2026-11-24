@@ -54,6 +54,15 @@ class MailAskForm : NovaForm
     readonly Button sendBtn;
     readonly Panel webHost;
     Microsoft.Web.WebView2.WinForms.WebView2 web;
+    // 👁 The email itself, left of the conversation (or on top), with its own scroll bar: first Nova's text at once, then the full
+    // email from Outlook (formatting, tables, pictures, signature).
+    readonly SplitContainer split;
+    readonly Microsoft.Web.WebView2.WinForms.WebView2 pv = new() { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.White };
+    readonly Label pvState;
+    readonly ComboBox threadBox;
+    List<MailHit> threadMails = new();
+    MailHit shown;
+    int pvGen;
     CancellationTokenSource cts;
     bool gathered, busy;
     readonly List<AskSource> thread = new();
@@ -70,7 +79,38 @@ class MailAskForm : NovaForm
         top = new Stack { Dock = DockStyle.Top, AutoScroll = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(16, 10, 16, 6) };
         webHost = new Panel { Dock = DockStyle.Fill, BackColor = Th.Bg };
         var bottom = new Panel { Dock = DockStyle.Bottom, Height = 152, BackColor = Color.FromArgb(0x0E, 0x11, 0x17), Padding = new Padding(16, 8, 16, 6) };
-        Controls.Add(webHost); Controls.Add(bottom); Controls.Add(top);
+        split = new SplitContainer { Dock = DockStyle.Fill, BackColor = Color.FromArgb(0x2A, 0x30, 0x40), SplitterWidth = 6, Orientation = Store.Bool("win_mailask_top", false) ? Orientation.Horizontal : Orientation.Vertical, Panel1MinSize = 120, Panel2MinSize = 260 };
+        split.Panel1.BackColor = Color.White; split.Panel2.BackColor = Th.Bg;
+        var pvBar = new Panel { Dock = DockStyle.Top, Height = 24, BackColor = Color.FromArgb(0xF1, 0xF3, 0xF7) };
+        pvState = new Label { Dock = DockStyle.Fill, ForeColor = Color.FromArgb(0x55, 0x5B, 0x66), Font = Th.F(8.5f), TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(8, 0, 0, 0) };
+        var zoom = new FlowLayoutPanel { Dock = DockStyle.Right, AutoSize = true, BackColor = Color.Transparent, Margin = new Padding(0) };
+        Button Z(string t, double f) { var b = new Button { Text = t, FlatStyle = FlatStyle.Flat, Width = 30, Height = 22, ForeColor = Color.FromArgb(0x33, 0x33, 0x33), Margin = new Padding(0), Font = Th.F(9, true) }; b.FlatAppearance.BorderSize = 0; b.Click += (_, _) => { try { pv.ZoomFactor = f == 1 ? 1 : Math.Clamp(pv.ZoomFactor * f, 0.5, 2.5); } catch { } }; return b; }
+        zoom.Controls.Add(Z("−", 0.9)); zoom.Controls.Add(Z("100", 1)); zoom.Controls.Add(Z("+", 1.1));
+        pvBar.Controls.Add(pvState); pvBar.Controls.Add(zoom);
+        threadBox = new ComboBox { Dock = DockStyle.Bottom, DropDownStyle = ComboBoxStyle.DropDownList, Font = Th.F(9), FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(0xF6, 0xF7, 0xFA), Visible = false };
+        threadBox.SelectedIndexChanged += (_, _) =>
+        {
+            if (threadBox.SelectedIndex <= 0) { if (anchor != null && shown != anchor) Preview(anchor); return; }
+            var t = threadMails.ElementAtOrDefault(threadBox.SelectedIndex - 1);
+            if (t != null) Preview(t);
+        };
+        split.Panel1.Controls.Add(pv); split.Panel1.Controls.Add(pvBar); split.Panel1.Controls.Add(threadBox);
+        split.Panel2.Controls.Add(webHost);
+        split.Panel1Collapsed = Store.Bool("win_mailask_hidepv", false);
+        split.SplitterMoved += (_, _) => { if (split.Width > 0) Store.SetInt(split.Orientation == Orientation.Vertical ? "win_mailask_splitv" : "win_mailask_splith", split.SplitterDistance * 1000 / Math.Max(1, split.Orientation == Orientation.Vertical ? split.Width : split.Height)); };
+        void PlaceSplit()
+        {
+            try
+            {
+                var whole = split.Orientation == Orientation.Vertical ? split.Width : split.Height;
+                if (whole <= 400) return;
+                var per = Store.Int(split.Orientation == Orientation.Vertical ? "win_mailask_splitv" : "win_mailask_splith", split.Orientation == Orientation.Vertical ? 500 : 420);
+                split.SplitterDistance = Math.Clamp(whole * per / 1000, split.Panel1MinSize, whole - split.Panel2MinSize - split.SplitterWidth);
+            }
+            catch { }
+        }
+        Shown += (_, _) => PlaceSplit();
+        Controls.Add(split); Controls.Add(bottom); Controls.Add(top);
 
         var hr = top.Add(Th.Row());
         hr.Controls.Add(Th.L("💬 Talk about this email", 13, Th.Text, true));
@@ -80,6 +120,25 @@ class MailAskForm : NovaForm
         hr.Controls.Add(SideButton());
         hr.Controls.Add(Th.B("🧹 Clear", () => { NewChat(); status.Text = "🧹 Cleared — this email stays the reference."; }));
         hr.Controls.Add(Th.B("⇩ Word", SaveWord));
+        hr.Controls.Add(Th.B("⇅ Email left / top", () =>
+        {
+            split.Orientation = split.Orientation == Orientation.Vertical ? Orientation.Horizontal : Orientation.Vertical;
+            Store.SetBool("win_mailask_top", split.Orientation == Orientation.Horizontal);
+            PlaceSplit();
+        }));
+        var hideBtn = Th.B(split.Panel1Collapsed ? "👁 Show email" : "👁 Hide email", () => { });
+        hideBtn.Click += (_, _) => { split.Panel1Collapsed = !split.Panel1Collapsed; Store.SetBool("win_mailask_hidepv", split.Panel1Collapsed); hideBtn.Text = split.Panel1Collapsed ? "👁 Show email" : "👁 Hide email"; if (!split.Panel1Collapsed) PlaceSplit(); };
+        hr.Controls.Add(hideBtn);
+        var relBtn = Th.B("🔗 Find related ▾", () => { });
+        relBtn.Click += (_, _) =>
+        {
+            if (anchor == null) return;
+            var mm = new ContextMenuStrip();
+            mm.Items.Add("🔗 In Nova — timeline (all revisions)", null, (_, _) => Related.Find(anchor, false));
+            mm.Items.Add("🔎 In Outlook — search results", null, (_, _) => Related.Find(anchor, true));
+            mm.Show(relBtn, new Point(0, relBtn.Height));
+        };
+        hr.Controls.Add(relBtn);
         // ✉ The email itself in Outlook (an archive Nova closed is opened again; a moved email is followed).
         hr.Controls.Add(Th.B("✉ Open in Outlook", () =>
         {
@@ -146,6 +205,58 @@ class MailAskForm : NovaForm
     }
 
     // ------------------------------------------------------------------ the email
+    bool metaHooked;
+
+    static string Esc(string t) => System.Net.WebUtility.HtmlEncode(t ?? "");
+
+    /// <summary>👁 The email in the left pane: Nova's text at once, then the full email from Outlook.</summary>
+    async void Preview(MailHit h)
+    {
+        var gen = ++pvGen; shown = h;
+        try
+        {
+            if (pv.CoreWebView2 == null) { await pv.EnsureCoreWebView2Async(await HubForm.Env()); pv.CoreWebView2.Settings.IsStatusBarEnabled = false; pv.CoreWebView2.Settings.AreDevToolsEnabled = false;
+                pv.CoreWebView2.NewWindowRequested += (_, e) => { e.Handled = true; Shell.Open(e.Uri); };
+                pv.CoreWebView2.NavigationStarting += (_, e) => { if (e.Uri.StartsWith("http", StringComparison.OrdinalIgnoreCase) || e.Uri.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase)) { e.Cancel = true; Shell.Open(e.Uri); } }; }
+            if (gen != pvGen) return;
+            var text = h.Body is { Length: > 0 } b ? b : h.NewPart;
+            pvState.Text = "⏳ Nova's text — the full email is coming from Outlook…";
+            pv.CoreWebView2.NavigateToString("<html><head><meta charset='utf-8'><style>html{background:#fff}body{font-family:Calibri,'Segoe UI',Arial;font-size:14.5px;margin:18px 22px;color:#222;white-space:pre-wrap;line-height:1.45}</style></head><body>" + Esc(text) + "</body></html>");
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            string file = null;
+            try { file = await MailPreview.Render(h); } catch (Exception e) { Log.Warn("email preview", e.Message); }
+            if (gen != pvGen) return;
+            if (!string.IsNullOrEmpty(file) && File.Exists(file)) { pv.CoreWebView2.Navigate(new Uri(file).AbsoluteUri); pvState.Text = $"✓ the full email from Outlook ({sw.Elapsed.TotalSeconds:0.0} s)" + (h != anchor ? "   ·   an earlier email of the thread (pick the first line below to go back)" : ""); }
+            else pvState.Text = "Nova's text (Outlook is not open or the email could not be read — formatting and pictures are missing)";
+        }
+        catch (Exception e) { pvState.Text = "⚠ " + e.Message; }
+    }
+
+    /// <summary>🧵 The other emails of the conversation, under the preview.</summary>
+    void LoadThread(MailHit h)
+    {
+        threadBox.Visible = false; threadMails = new();
+        if (string.IsNullOrEmpty(h?.Conv)) return;
+        _ = Task.Run(() =>
+        {
+            List<MailHit> t;
+            try { t = MailIndex.ByConv(h.Conv, 60).Where(x => x.Id != h.Id).OrderByDescending(x => x.Date).ToList(); } catch { return; }
+            try
+            {
+                BeginInvoke(new Action(() =>
+                {
+                    if (anchor != h || t.Count == 0) return;
+                    threadMails = t;
+                    threadBox.Items.Clear();
+                    threadBox.Items.Add($"🧵 {t.Count} other email(s) in this thread ▾   (this one: {h.Date:dd MMM HH:mm})");
+                    foreach (var x in t) threadBox.Items.Add($"{x.Date:dd MMM yyyy HH:mm} · {(x.Sent ? "me" : x.FromName)} · {x.Subject}");
+                    threadBox.SelectedIndex = 0;
+                    threadBox.Visible = true;
+                }));
+            }
+            catch { }
+        });
+    }
 
     /// <summary>Opens for an email — a new conversation; nothing from the previous email stays.</summary>
     public void ShowMail(MailHit h, Conversation resume = null)
@@ -159,7 +270,14 @@ class MailAskForm : NovaForm
         prompt.Text = "";
         if (h == null) { head.Text = "No email selected — select an email in Outlook, then press 💬 Talk about this email (Ctrl+Alt+Q) again."; meta.Text = ""; atts.Controls.Clear(); Draw(); return; }
         head.Text = "✉ " + h.Subject;
-        meta.Text = $"{(h.Sent ? "You" : h.FromName)} → {h.To}" + (h.Cc.Length > 0 ? $" · Cc: {h.Cc}" : "") + $" · {h.Date:ddd dd MMM yyyy HH:mm}";
+        // The people on one line: the first names, then “+57 more ▾” (click the line for everyone).
+        string Few(string list, int n) { var p = (list ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries); return p.Length <= n ? string.Join("; ", p) : string.Join("; ", p.Take(n)) + $"  +{p.Length - n} more ▾"; }
+        var fullMeta = $"{(h.Sent ? "You" : h.FromName)} → {h.To}" + (h.Cc.Length > 0 ? $" · Cc: {h.Cc}" : "") + $" · {h.Date:ddd dd MMM yyyy HH:mm}";
+        var shortMeta = $"{(h.Sent ? "You" : h.FromName)} → {Few(h.To, 4)}" + (h.Cc.Length > 0 ? $"   ·   Cc: {Few(h.Cc, 3)}" : "") + $"   ·   {h.Date:ddd dd MMM yyyy HH:mm}";
+        meta.Text = shortMeta;
+        meta.Cursor = Cursors.Hand;
+        meta.Tag = (shortMeta, fullMeta);
+        if (!metaHooked) { metaHooked = true; meta.Click += (_, _) => { if (meta.Tag is ValueTuple<string, string> t) { meta.Text = meta.Text == t.Item1 ? t.Item2 : t.Item1; top.FitAll(); } }; }
         atts.Controls.Clear();
         foreach (var n in (h.AttNames ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(n => !Regex.IsMatch(n, @"^image\d*\.(png|jpe?g|gif)$", RegexOptions.IgnoreCase)))
         {
@@ -172,6 +290,8 @@ class MailAskForm : NovaForm
         foreach (Control c in new Control[] { head, meta }) EmailMenu.Hook(c, h, pt => { EmailMenu.Show(h, this, pt); return true; });
         SetFolder(resume?.Folder is { Length: > 0 } rf ? rf : FolderFor(h), false);
         top.FitAll();
+        Preview(h);
+        LoadThread(h);
         Draw();
         prompt.Focus();
     }

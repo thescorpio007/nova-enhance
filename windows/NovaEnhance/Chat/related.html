@@ -32,8 +32,10 @@ h2{margin:0;font-size:19px}.muted{color:#9AA3B5;font-size:12.5px}
     <button id="bO">🔎 Same search in Outlook</button>
     <button id="bA">💬 Ask Nova about it</button>
     <button id="bC">⧉ Copy timeline</button>
+    <button id="bR">↻</button>
   </div>
   <div id="busy"></div>
+  <div id="live" class="muted" style="margin:0 0 10px"></div>
   <div id="revs"></div>
   <div class="muted" style="margin-top:10px">click a line = open it in Nova · Ctrl+click = in Outlook · right-click = every option · Designed by A.HAMROUNI</div>
 </div>
@@ -52,6 +54,7 @@ h2{margin:0;font-size:19px}.muted{color:#9AA3B5;font-size:12.5px}
   $("bO").onclick = function () { post({ t: "outlook" }); };
   $("bA").onclick = function () { post({ t: "ask" }); };
   $("bC").onclick = function () { post({ t: "copy" }); };
+  $("bR").onclick = function () { $("live").textContent = ""; post({ t: "again" }); };
   function draw(m) {
     $("ttl").textContent = "🔗 " + m.key + (m.title ? " · " + m.title : "");
     $("sub").textContent = m.revs.length + " revision(s) · " + m.count + " email(s) · every folder and archive · from Nova's index in " + m.secs + " s";
@@ -86,6 +89,7 @@ h2{margin:0;font-size:19px}.muted{color:#9AA3B5;font-size:12.5px}
     if (m.t === "busy") { $("busy").textContent = ""; thk = window.Thinking ? Thinking.start($("busy"), m.text) : null; }
     else if (m.t === "timeline") { if (thk) thk.done(); thk = null; $("busy").innerHTML = ""; draw(m); }
     else if (m.t === "error") { if (thk) thk.fail(m.text); thk = null; }
+    else if (m.t === "live") { $("live").textContent = m.text; $("live").style.color = /^⚠/.test(m.text) ? "#FFD27A" : "#9AA3B5"; }
     else if (m.t === "toast") { var t = $("toast"); t.textContent = m.text; t.style.display = "block"; setTimeout(function () { t.style.display = "none"; }, 3500); }
   });
   post({ t: "init" });
