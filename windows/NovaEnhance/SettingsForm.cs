@@ -2141,6 +2141,24 @@ class SettingsForm : NovaForm
         cr.Controls.Add(Th.B("🔑 New key", () => { TestConnector.NewKey(); cst.Text = "🔑 New key made — the old one stops working at once. Restart Claude desktop so it uses the new one."; }));
         cr.Controls.Add(Th.B("📁 Claude desktop settings", () => { var f = TestConnector.ClaudeConfigs()[0]; Shell.Open(Path.GetDirectoryName(f)!); }));
 
+        page.Add(Th.Section("D · ✦ Gemini CLI (Google — free with your Google account, no API key)"));
+        Note("The same Nova connector for Google's Gemini CLI: Gemini can check and manage Nova like Claude (health, index, VPN, transfers, self-test, safe fixes) while you allow it in the tray (🔗 Allow Claude). Gemini asks you before every tool call.\n" +
+             "1. Install Node.js (nodejs.org, LTS), then in a terminal: npm install -g @google/gemini-cli\n2. Press “Add to Gemini CLI”.\n3. Press “Start Gemini CLI”, sign in with your Google account the first time, type /mcp to see Nova's tools, then ask e.g. “check Nova's health” or “why is the SLV index stuck?”.\n" +
+             "Gemini's web and phone app (Connected apps) need a public internet address with Google sign-in (OAuth) and are not open in every country — the CLI works on this PC without that.");
+        var gst = Note("", Th.Muted);
+        void GLine() => gst.Text = $"Node.js {(TestConnector.NodeInstalled() ? "✓" : "✗ not found")} · Gemini CLI {(TestConnector.GeminiCli() is { } gc ? "✓ " + gc : "✗ not installed")} · Nova in Gemini {(TestConnector.InGemini() ? "✓ added" : "not added")} · Test connector {(TestConnector.On ? "on" : "OFF — tick it above")}";
+        GLine();
+        var gr = page.Add(Th.Row(true));
+        gr.Controls.Add(Th.B("➕ Add to Gemini CLI", () =>
+        {
+            try { if (!TestConnector.On) TestConnector.On = true; var f = TestConnector.AddToGemini(); GLine(); gst.Text += " — written in " + f; }
+            catch (Exception ex) { gst.Text = "⚠ " + ex.Message; }
+        }, true));
+        gr.Controls.Add(Th.B("▶ Start Gemini CLI", () => { try { TestConnector.StartGemini(); } catch (Exception ex) { gst.Text = "⚠ " + ex.Message; } }));
+        gr.Controls.Add(Th.B("⧉ Copy the setup (by hand)", () => { Clipboard.SetText(TestConnector.GeminiSnippet()); gst.Text = "⧉ Copied — paste it into %USERPROFILE%\\.gemini\\settings.json"; }));
+        gr.Controls.Add(Th.B("⧉ Copy the install command", () => { Clipboard.SetText("npm install -g @google/gemini-cli"); gst.Text = "⧉ Copied: npm install -g @google/gemini-cli — paste it in a terminal (Node.js must be installed)."; }));
+        gr.Controls.Add(Th.B("🌐 Gemini CLI page", () => Shell.Open("https://github.com/google-gemini/gemini-cli")));
+
         page.Add(Th.Section("Last calls from Claude"));
         string calls; lock (TestConnector.Calls) calls = TestConnector.Calls.Count == 0 ? "No call yet." : string.Join("\r\n", TestConnector.Calls);
         page.Add(new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Height = 200, BackColor = Th.Bg, ForeColor = Th.Text, Font = new Font("Consolas", 9.5f), BorderStyle = BorderStyle.FixedSingle, Text = calls }, true);

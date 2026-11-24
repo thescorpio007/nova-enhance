@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
@@ -577,5 +578,57 @@ static class TestConnector
             done.Add(f);
         }
         return done;
+    }
+
+    // ------------------------------------------------------------------ ✦ Gemini CLI (Google): the same Nova connector, free with your Google account
+
+    public static string GeminiConfig => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".gemini", "settings.json");
+
+    /// <summary>Gemini CLI on this PC (installed with npm), or null.</summary>
+    public static string GeminiCli()
+    {
+        var npm = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "npm", "gemini.cmd");
+        if (File.Exists(npm)) return npm;
+        foreach (var d in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries))
+            try { var f = Path.Combine(d.Trim(), "gemini.cmd"); if (File.Exists(f)) return f; } catch { }
+        return null;
+    }
+
+    public static bool NodeInstalled() =>
+        (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries).Any(d => { try { return File.Exists(Path.Combine(d.Trim(), "node.exe")); } catch { return false; } });
+
+    public static bool InGemini()
+    {
+        try { return File.Exists(GeminiConfig) && JsonNode.Parse(File.ReadAllText(GeminiConfig))?["mcpServers"]?["nova"] != null; } catch { return false; }
+    }
+
+    /// <summary>Adds "nova" to Gemini CLI's user settings (%USERPROFILE%\.gemini\settings.json; the old file is kept as .bak). Gemini asks you before
+    /// each tool call (trust off).</summary>
+    public static string AddToGemini()
+    {
+        var f = GeminiConfig;
+        Directory.CreateDirectory(Path.GetDirectoryName(f)!);
+        JsonObject o = new();
+        if (File.Exists(f))
+        {
+            File.Copy(f, f + ".bak", true);
+            try { o = JsonNode.Parse(File.ReadAllText(f))?.AsObject() ?? new JsonObject(); } catch { throw new Exception("Gemini CLI's settings file could not be read — fix it or paste the setup by hand: " + f); }
+        }
+        if (o["mcpServers"] is not JsonObject servers) { servers = new JsonObject(); o["mcpServers"] = servers; }
+        servers["nova"] = new JsonObject { ["command"] = Exe, ["args"] = new JsonArray("--mcp"), ["timeout"] = 600000, ["trust"] = false };
+        File.WriteAllText(f, o.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+        return f;
+    }
+
+    public static string GeminiSnippet() => new JsonObject
+    {
+        ["mcpServers"] = new JsonObject { ["nova"] = new JsonObject { ["command"] = Exe, ["args"] = new JsonArray("--mcp"), ["timeout"] = 600000, ["trust"] = false } }
+    }.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+
+    /// <summary>Opens Gemini CLI in a terminal, in Nova's documents folder.</summary>
+    public static void StartGemini()
+    {
+        var g = GeminiCli() ?? "gemini";
+        Process.Start(new ProcessStartInfo("cmd.exe", $"/k title Gemini CLI · Nova && \"{g}\"") { UseShellExecute = true, WorkingDirectory = Paths.Root });
     }
 }
