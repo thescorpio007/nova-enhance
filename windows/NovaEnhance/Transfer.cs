@@ -52,7 +52,12 @@ static class Transfer
     public static bool DeletePartial { get => Store.Bool("win_xf_delpartial", true); set => Store.SetBool("win_xf_delpartial", value); }
     public static bool RenameOriginal { get => Store.Bool("win_xf_renorig", false); set => Store.SetBool("win_xf_renorig", value); }
     public static bool AskDelete { get => Store.Bool("win_xf_askdel", true); set => Store.SetBool("win_xf_askdel", value); }
-    public static string RenameRule { get => Store.Str("win_xf_rule", "{name} ({n}){ext}"); set => Store.Set("win_xf_rule", value); }
+    /// <summary>Your rule: an underscore before the number — “SLV-ZUC-AR-MAR-00092_Rev01_(3).pdf” (the old default “name (2)” is moved to it).</summary>
+    public static string RenameRule
+    {
+        get { var r = Store.Str("win_xf_rule", "{name}_({n}){ext}"); return r == "{name} ({n}){ext}" ? "{name}_({n}){ext}" : r; }
+        set => Store.Set("win_xf_rule", value);
+    }
     public static string Threads { get => Store.Str("win_xf_threads", "auto"); set => Store.Set("win_xf_threads", value); }          // auto · 8 · 16 · 32 · 64 · 128
     public static bool Unbuffered { get => Store.Bool("win_xf_unbuf", true); set => Store.SetBool("win_xf_unbuf", value); }
     public static string Compress { get => Store.Str("win_xf_compress", "auto"); set => Store.Set("win_xf_compress", value); }     // auto · off
@@ -636,7 +641,7 @@ static class Transfer
         var dir = Path.GetDirectoryName(path)!;
         var name = folder ? Path.GetFileName(path) : Path.GetFileNameWithoutExtension(path);
         var ext = folder ? "" : Path.GetExtension(path);
-        var rule = RenameRule.Contains("{n}") ? RenameRule : "{name} ({n}){ext}";
+        var rule = RenameRule.Contains("{n}") ? RenameRule : "{name}_({n}){ext}";
         for (int n = 2; n < 10000; n++)
         {
             var cand = Path.Combine(dir, rule.Replace("{name}", name).Replace("{n}", n.ToString()).Replace("{ext}", ext).Replace("{date}", DateTime.Now.ToString("yyyy-MM-dd")));

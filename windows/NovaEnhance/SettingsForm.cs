@@ -1749,7 +1749,7 @@ class SettingsForm : NovaForm
         rn.Controls.Add(new Label { Text = "✎ Renaming rule", AutoSize = false, Width = 230, ForeColor = Th.Muted, Font = Th.F(9.5f), TextAlign = ContentAlignment.MiddleLeft, Height = 28 });
         var rule = new TextBox { Text = Transfer.RenameRule, Width = 220, BackColor = Th.Card2, ForeColor = Th.Text, BorderStyle = BorderStyle.FixedSingle };
         rule.TextChanged += (_, _) => { if (rule.Text.Contains("{n}")) Transfer.RenameRule = rule.Text; };
-        rn.Controls.Add(rule); rn.Controls.Add(Th.L("{name} {n} {ext} {date} — e.g. “{name} ({n}){ext}” or “{name} - copy {n}{ext}”", 9, Th.Muted));
+        rn.Controls.Add(rule); rn.Controls.Add(Th.L("{name} {n} {ext} {date} — default “{name}_({n}){ext}” → SLV-ZUC-AR-MAR-00092_Rev01_(3).pdf", 9, Th.Muted));
 
         page.Add(Th.Section("Speed"));
         Pick("Threads", new[] { ("auto", "Auto (32 small files · 8 big)"), ("8", "8"), ("16", "16"), ("32", "32"), ("64", "64"), ("128", "128") }, Transfer.Threads, v => Transfer.Threads = v);
