@@ -231,7 +231,7 @@ static class OfficeVpn
         {
             try
             {
-                if (Pids(OcProcs).Count > 0) GuiButton(OcProcs, "Disconnect");
+                if (Pids(OcProcs).Count > 0) { if (VpnHelper.Installed) VpnHelper.Run("oc-disconnect", ""); else GuiButton(OcProcs, "Disconnect"); }
                 if (Tool() is { } t) Run(t, "disconnect", 20000);
                 else if (Pids(FortiProcs).Count > 0) GuiButton(FortiProcs, "Disconnect");
             }
@@ -273,7 +273,14 @@ static class OfficeVpn
     static string ConnectOc()
     {
         Way = $"OpenConnect ({OcProfile})";
-        try { return OcConnect(Oc()); } catch (Exception e) { return "OpenConnect: " + e.Message; }
+        try
+        {
+            // OpenConnect always runs as administrator: the 🛡 VPN helper presses its buttons
+            if (VpnHelper.Installed) { var r = VpnHelper.Run("oc-connect", OcProfile); return r.Length == 0 ? "" : "OpenConnect: " + r; }
+            var d = OcConnect(Oc());
+            return d.Length == 0 ? "" : "OpenConnect: " + d + " — set up the 🛡 VPN helper in Settings ▸ 🌐 Office VPN (OpenConnect runs as administrator)";
+        }
+        catch (Exception e) { return "OpenConnect: " + e.Message; }
     }
 
     static string ConnectForti()
@@ -295,7 +302,9 @@ static class OfficeVpn
                 Way = $"FortiClient ({Profile})";
                 if (Pids(FortiProcs).Count == 0) { Process.Start(new ProcessStartInfo(g) { UseShellExecute = true }); Thread.Sleep(6000); }
                 Reveal(FortiProcs);
-                return GuiConnect();
+                var r = GuiConnect();
+                if (r.Length > 0 && VpnHelper.Installed) { var h = VpnHelper.Run("forti-connect", ""); r = h.Length == 0 ? "" : r + " · with the helper: " + h; }
+                return r;
             }
             return "FortiClient is not installed";
         }
@@ -411,6 +420,19 @@ static class OfficeVpn
         string Ver(string f) { try { return FileVersionInfo.GetVersionInfo(f).ProductVersion ?? ""; } catch { return ""; } }
         L(g != null, g != null ? $"FortiClient {Ver(g)} installed · {(Process.GetProcessesByName("FortiClient").Any() ? "running" : "not running")}" : "FortiClient not found in Program Files");
         L(t != null ? true : null, t != null ? "FortiClientTools command line: " + t : "FortiClientTools not on this PC — Nova uses the FortiClient window");
+        var hs = VpnHelper.State();
+        L(hs.StartsWith("set up (") ? true : false, "🛡 VPN admin helper: " + hs + (hs.StartsWith("set up (") ? "" : " — needed for OpenConnect (it runs as administrator): Settings ▸ 🌐 Office VPN ▸ Set up the VPN helper"));
+        try
+        {
+            foreach (var pr in Process.GetProcesses().Where(x => Regex.IsMatch(x.ProcessName, "^(forti|openconnect)", RegexOptions.IgnoreCase)).OrderBy(x => x.ProcessName))
+            {
+                string adm; try { _ = pr.MainModule; adm = ""; } catch { adm = " · administrator"; }
+                string ttl; try { ttl = pr.MainWindowTitle; } catch { ttl = ""; }
+                sb.Append("   process ").Append(pr.ProcessName).Append(adm).Append(ttl.Length > 0 ? " · window “" + ttl + "”" : "").Append('\n');
+            }
+        }
+        catch { }
+        if (hs.StartsWith("set up (")) L(null, "Seen by the helper: " + VpnHelper.Run("look", "", 30).Replace("\n", "\n   "));
         var oc = Oc();
         L(oc != null ? true : null, oc != null ? $"OpenConnect {Ver(oc)} installed · {(Pids(OcProcs).Count > 0 ? "running" : "not running")} · server “{OcProfile}” · order: {(Order == "forti" ? "FortiClient first, then OpenConnect" : "OpenConnect first, then FortiClient")}" : "OpenConnect-GUI not found (choose openconnect-gui.exe in Settings if it is installed elsewhere)");
         if (oc != null && Pids(OcProcs).Count > 0)

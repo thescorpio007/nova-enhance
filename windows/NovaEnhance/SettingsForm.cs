@@ -1756,6 +1756,18 @@ class SettingsForm : NovaForm
         var rbOcFirst = new RadioButton { Text = "OpenConnect, then FortiClient", AutoSize = true, ForeColor = Th.Text, Font = Th.F(9.5f), Checked = OfficeVpn.Order != "forti", Margin = new Padding(0, 5, 16, 0) };
         var rbFortiFirst = new RadioButton { Text = "FortiClient, then OpenConnect", AutoSize = true, ForeColor = Th.Text, Font = Th.F(9.5f), Checked = OfficeVpn.Order == "forti", Margin = new Padding(0, 5, 0, 0) };
         ordRow.Controls.Add(rbOcFirst); ordRow.Controls.Add(rbFortiFirst);
+        var hRow = page.Add(Th.Row(false));
+        var hLbl = Th.L("🛡 VPN helper: " + VpnHelper.State(), 9.5f, VpnHelper.Installed ? Th.Good : Th.Warn);
+        hRow.Controls.Add(Th.B("🛡 Set up the VPN helper (Windows asks once)", async () =>
+        {
+            hLbl.Text = "🛡 Setting up… answer Windows' question with Yes"; hLbl.ForeColor = Th.AccentText;
+            var r = await Task.Run(VpnHelper.Install);
+            if (hLbl.IsDisposed) return;
+            hLbl.Text = r.Length == 0 ? "✓ 🛡 VPN helper set up — Nova can now press Connect in OpenConnect" : "⚠ " + r; hLbl.ForeColor = r.Length == 0 ? Th.Good : Th.Warn;
+        }, !VpnHelper.Installed));
+        hRow.Controls.Add(Th.B("Remove", async () => { var r = await Task.Run(VpnHelper.Remove); if (!hLbl.IsDisposed) hLbl.Text = r.Length == 0 ? "🛡 VPN helper: " + VpnHelper.State() : "⚠ " + r; }));
+        hRow.Controls.Add(hLbl);
+        page.Add(Th.L("OpenConnect always runs as administrator, and Windows does not let normal programs press its buttons. The helper does only that (connect / disconnect OpenConnect or FortiClient) with administrator rights; Nova itself stays a normal program so it keeps reaching your Outlook. It never sees a password.", 9, Th.Muted));
         page.Add(Th.L("In OpenConnect keep the password saved and “Batch mode” ticked — Nova chooses the server and presses Connect; if it fails, Nova tries the other one.", 9, Th.Muted));
         page.Add(Th.Section("Checking that it works"));
         var probe = Field("Office server to check", OfficeVpn.Probe, 220);
