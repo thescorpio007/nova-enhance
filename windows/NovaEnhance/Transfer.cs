@@ -26,6 +26,7 @@ class XJob
     public DateTime? Ended { get; set; }
     public string LogFile { get; set; } = "";
     public int Threads { get; set; }
+    public long Copied { get; set; }
     public bool Verified { get; set; }
     [System.Text.Json.Serialization.JsonIgnore] public Process Proc;
     [System.Text.Json.Serialization.JsonIgnore] public bool StopAsked, PauseAsked;
@@ -170,7 +171,7 @@ static class Transfer
 
     static void Run(XJob j)
     {
-        j.Failed.Clear(); j.Note = ""; j.DoneBytes = 0; j.DoneFiles = 0; j.Speed = 0; j.Verified = false;
+        j.Failed.Clear(); j.Note = ""; j.DoneBytes = 0; j.DoneFiles = 0; j.Speed = 0; j.Verified = false; j.Copied = 0;
         j.State = "scanning"; Fire();
 
         // 🔒 never copied, never a source
@@ -281,7 +282,7 @@ static class Transfer
         {
             foreach (var (src, dst) in collisions)
             {
-                try { var to = Unique(dst, false); Directory.CreateDirectory(Long(Path.GetDirectoryName(to)!)); File.Copy(Long(src), Long(to)); renamedAway.Add(src); j.DoneFiles++; }
+                try { var to = Unique(dst, false); Directory.CreateDirectory(Long(Path.GetDirectoryName(to)!)); File.Copy(Long(src), Long(to)); renamedAway.Add(src); j.DoneFiles++; j.Copied++; try { j.DoneBytes += new FileInfo(Long(src)).Length; } catch { } }
                 catch (Exception e) { j.Failed.Add(src); Log.Warn("transfer", "rename copy: " + e.Message); }
             }
             fileMode = "skip";   // the rest: copy only what is not there
@@ -306,7 +307,8 @@ static class Transfer
         // threads: many small files → many threads; big files → fewer threads, unbuffered
         var avg = files > 0 ? bytes / files : 0;
         var bigMode = avg >= 50L << 20 || (big > 0 && files < 40);
-        j.Threads = Threads == "auto" ? (bigMode ? 8 : 32) : int.TryParse(Threads, out var t) ? Math.Clamp(t, 1, 128) : 16;
+        // big files or only a few: one thread with a live % (threads do not speed up a single file); many files: many threads
+        j.Threads = bigMode || files <= 3 ? 1 : Threads == "auto" ? 32 : int.TryParse(Threads, out var t) ? Math.Clamp(t, 2, 128) : 16;
 
         j.State = "running"; j.LogFile = Path.Combine(Paths.Logs, $"transfer-{j.Id}.log");
         try { File.Delete(j.LogFile); } catch { }
@@ -348,6 +350,14 @@ static class Transfer
         }
         j.State = j.Failed.Count == 0 ? "done" : "failed";
         if (j.Failed.Count > 0) j.Note += $"{j.Failed.Count} file(s) failed — see the log. ";
+        else
+        {
+            // files already there and identical are skipped by Robocopy without a line: they count as done
+            var skipped = Math.Max(0, j.TotalFiles - j.Copied);
+            if (skipped > 0) j.Note += $"{skipped:N0} file(s) already up to date (skipped). ";
+            j.DoneFiles = j.TotalFiles; j.DoneBytes = j.TotalBytes;
+        }
+        j.Speed = sw.Elapsed.TotalSeconds > 0 ? j.Copied > 0 ? j.DoneBytes / Math.Max(1, sw.Elapsed.TotalSeconds) : 0 : 0;
         j.Ended = DateTime.Now;
     }
 
@@ -416,11 +426,11 @@ static class Transfer
         a.Append(fileMode switch { "newer" => " /XO", "skip" => " /XC /XN /XO", "always" => " /IS /IT", _ => "" });
         var ferr = FileError;
         a.Append(ferr is "end" or "skip" or "ask" ? " /R:0 /W:0" : $" /R:{Retries} /W:{Wait}");
-        a.Append($" /MT:{Math.Max(1, j.Threads)}");
+        if (j.Threads > 1) a.Append($" /MT:{j.Threads}");   // one thread = Robocopy reports the live % of each file
         if (bigMode && Unbuffered) a.Append(" /J");
         if (Compress != "off" && CanCompress()) a.Append(" /COMPRESS");
         a.Append(SpeedLimit switch { "gentle" => " /IPG:5", "low" => " /IPG:25", _ => "" });
-        a.Append(" /XJ /FFT /BYTES /NP /NDL /NJH /NJS");
+        a.Append(j.Threads > 1 || listOnly ? " /XJ /FFT /BYTES /NP /NDL /NJH /NJS" : " /XJ /FFT /BYTES /NDL /NJH /NJS");
         // 🔒 private folders and files, your exclusions, the files already handled by “rename”
         var xd = new List<string> { "*TrustWalletBackup*", "*wallet*", "*password*", "*passwd*", "*keepass*", "*bitwarden*" };
         xd.AddRange(privDirs.Where(d => d.StartsWith(it.Src, StringComparison.OrdinalIgnoreCase)));
@@ -438,6 +448,23 @@ static class Transfer
     static readonly Regex ErrLine = new(@"ERROR (\d+) \(0x[0-9A-Fa-f]+\) (.+?) (\S:\\.+|\\\\.+)$", RegexOptions.Compiled);
 
     /// <summary>Runs one Robocopy and follows its Unicode log: files done, bytes, speed, current file, failures.</summary>
+    static readonly Regex Pct = new(@"^\s*(\d+(?:\.\d+)?)%\s*$", RegexOptions.Compiled);
+
+    static long NetBytes()
+    {
+        long t = 0;
+        try
+        {
+            foreach (var n in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+                if (n.OperationalStatus == System.Net.NetworkInformation.OperationalStatus.Up && n.NetworkInterfaceType != System.Net.NetworkInformation.NetworkInterfaceType.Loopback)
+                { var st = n.GetIPStatistics(); t += st.BytesReceived + st.BytesSent; }
+        }
+        catch { }
+        return t;
+    }
+
+    /// <summary>Runs one Robocopy and follows its Unicode log. Big files (one thread): the live % of the file being copied. Many files (many
+    /// threads): each file as it finishes, and the live speed from the network when the copy goes over the network / VPN.</summary>
     static int RunRobocopy(XJob j, string args, Stopwatch sw)
     {
         var tmp = Path.Combine(Path.GetTempPath(), $"nova-rc-{j.Id}-{Guid.NewGuid().ToString("N")[..6]}.log");
@@ -447,40 +474,76 @@ static class Transfer
         p.OutputDataReceived += (_, _) => { }; p.ErrorDataReceived += (_, _) => { };
         p.BeginOutputReadLine(); p.BeginErrorReadLine();
         long pos = 0; var carry = "";
+        var single = j.Threads <= 1;
+        var overNet = IsNetwork(j.Dest) || j.Sources.Any(IsNetwork);
+        long baseBytes = j.DoneBytes, curSize = -1; string openFirst = null;
+        long net0 = NetBytes(); var netAt = DateTime.Now; double netSpeed = 0;
         var stopOnError = FileError == "stop" || FolderError == "stop";
+
+        void Commit() { if (curSize >= 0) { j.DoneFiles++; j.Copied++; baseBytes += curSize; j.DoneBytes = baseBytes; curSize = -1; } }
+
+        void First(string l)
+        {
+            try { File.AppendAllText(j.LogFile, l + Environment.NewLine); } catch { }
+            var e = ErrLine.Match(l);
+            if (e.Success)
+            {
+                var path = e.Groups[3].Value.Trim();
+                var folder = e.Groups[2].Value.Contains("Directory", StringComparison.OrdinalIgnoreCase);
+                if (!(folder && FolderError == "skip")) j.Failed.Add(path);
+                if (single && !folder) { curSize = -1; j.DoneBytes = baseBytes; }   // the file being copied failed
+                if (stopOnError && (folder ? FolderError == "stop" : FileError == "stop")) { j.StopAsked = true; j.Note += "Stopped at the first error. "; try { p.Kill(true); } catch { } }
+                return;
+            }
+            var m = FileLine.Match(l);
+            if (!m.Success || m.Groups[1].Value is "Same" or "*EXTRA File" or "New Dir" or "*EXTRA Dir" || !long.TryParse(m.Groups[2].Value, out var size)) return;
+            if (single) { Commit(); curSize = size; j.Current = m.Groups[3].Value; }   // starts now: the % follows
+            else { j.DoneFiles++; j.Copied++; j.DoneBytes += size; j.Current = m.Groups[3].Value; }   // finished
+        }
+
+        void Line(string line, bool complete)
+        {
+            var segs = line.Split('\r');
+            if (!complete && segs.Length < 2) return;   // still being written
+            if (openFirst == null || openFirst != segs[0]) First(segs[0]);
+            openFirst = complete ? null : segs[0];
+            for (int k = segs.Length - 1; k >= 1; k--)
+            {
+                var pm = Pct.Match(segs[k]);
+                if (!pm.Success) continue;
+                if (single && curSize > 0 && double.TryParse(pm.Groups[1].Value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var pc))
+                    j.DoneBytes = baseBytes + (long)(Math.Min(100, pc) / 100.0 * curSize);
+                break;
+            }
+        }
+
         void Read()
         {
             try
             {
-                if (!File.Exists(tmp)) return;
-                using var fs = new FileStream(tmp, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-                if (fs.Length <= pos) return;
-                fs.Position = pos;
-                var buf = new byte[fs.Length - pos]; var n = fs.Read(buf, 0, buf.Length);
-                n -= n % 2; pos += n;
-                var text = carry + Encoding.Unicode.GetString(buf, 0, n).TrimStart('\uFEFF');
-                var lines = text.Split('\n'); carry = lines[^1];
-                foreach (var raw in lines.Take(lines.Length - 1))
+                if (File.Exists(tmp))
                 {
-                    var l = raw.TrimEnd('\r');
-                    try { File.AppendAllText(j.LogFile, l + Environment.NewLine); } catch { }
-                    var e = ErrLine.Match(l);
-                    if (e.Success)
+                    using var fs = new FileStream(tmp, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                    if (fs.Length > pos)
                     {
-                        var path = e.Groups[3].Value.Trim();
-                        var folder = e.Groups[2].Value.Contains("Directory", StringComparison.OrdinalIgnoreCase);
-                        if (!(folder && FolderError == "skip")) j.Failed.Add(path);
-                        if (stopOnError && (folder ? FolderError == "stop" : FileError == "stop")) { j.StopAsked = true; j.Note += "Stopped at the first error. "; try { p.Kill(true); } catch { } }
-                        continue;
+                        fs.Position = pos;
+                        var buf = new byte[fs.Length - pos]; var n = fs.Read(buf, 0, buf.Length);
+                        n -= n % 2; pos += n;
+                        var text = carry + Encoding.Unicode.GetString(buf, 0, n).TrimStart('﻿');
+                        var lines = text.Split('\n'); carry = lines[^1];
+                        foreach (var raw in lines.Take(lines.Length - 1)) Line(raw.TrimEnd('\r'), true);
                     }
-                    var m = FileLine.Match(l);
-                    if (m.Success && m.Groups[1].Value is not ("Same" or "*EXTRA File" or "New Dir" or "*EXTRA Dir") && long.TryParse(m.Groups[2].Value, out var size))
-                    {
-                        j.DoneFiles++; j.DoneBytes += size; j.Current = m.Groups[3].Value;
-                    }
+                    if (carry.Length > 0) Line(carry, false);
                 }
                 var secs = Math.Max(0.5, sw.Elapsed.TotalSeconds);
-                j.Speed = j.DoneBytes / secs;
+                if (!single && overNet)
+                {
+                    // many threads over the network: the speed the network really carries (files only report when finished)
+                    var now = DateTime.Now; var nb = NetBytes(); var dt = (now - netAt).TotalSeconds;
+                    if (dt >= 1) { var v = Math.Max(0, nb - net0) / dt; netSpeed = netSpeed == 0 ? v : netSpeed * 0.6 + v * 0.4; net0 = nb; netAt = now; }
+                    j.Speed = netSpeed;
+                }
+                else j.Speed = j.DoneBytes / secs;
                 Fire();
             }
             catch { }
@@ -493,9 +556,12 @@ static class Transfer
         }
         try { p.WaitForExit(5000); } catch { }
         Read();
+        if (carry.Length > 0) Line(carry, true);
+        var code = p.HasExited ? p.ExitCode : 16;
+        if (single && code < 8 && !j.StopAsked && !j.PauseAsked) Commit();   // the last file finished
         j.Proc = null;
         try { File.Delete(tmp); } catch { }
-        return p.HasExited ? p.ExitCode : 16;
+        return code;
     }
 
     static void RetryAtEnd(XJob j, Stopwatch sw)
@@ -845,9 +911,17 @@ static class Transfer
             j.LogFile = Path.Combine(root, "test.log");
             var code = RunRobocopy(j, Args(j, it, null, "different", false, new(), new(), new(), new()), sw);
             var left = CountDifferences(it, null, new(), new(), new());
-            var ok = code < 8 && left == 0 && j.DoneFiles == 200;
+            // a big file with one thread: the live % path
+            var bigSrc = Path.Combine(root, "big"); Directory.CreateDirectory(bigSrc);
+            var bigFile = Path.Combine(bigSrc, "model — نموذج.bin");
+            using (var fs = File.Create(bigFile)) { fs.SetLength(48L << 20); }
+            var j2 = new XJob { Kind = "copy", Sources = new() { bigFile }, Dest = dst, Threads = 1, LogFile = Path.Combine(root, "test2.log") };
+            var it2 = new Item(bigSrc, dst, new List<string> { Path.GetFileName(bigFile) });
+            var code2 = RunRobocopy(j2, Args(j2, it2, it2.Files, "different", true, new(), new(), new(), new()), Stopwatch.StartNew());
+            var bigOk = code2 < 8 && j2.DoneFiles == 1 && j2.DoneBytes == 48L << 20 && File.Exists(Path.Combine(dst, Path.GetFileName(bigFile)));
+            var ok = code < 8 && left == 0 && j.DoneFiles == 200 && bigOk;
             return $"{(ok ? "✅" : "❌")} {j.DoneFiles} of 200 files copied in {sw.Elapsed.TotalSeconds:0.0} s (Robocopy code {code}) · longest path {deep.Length + 40} characters · Arabic names · {left} difference(s) after the check" +
-                   (CanCompress() ? " · compression available" : "") + (ok ? "" : "\r\nLog: " + j.LogFile);
+                   (CanCompress() ? " · compression available" : "") + $" · big file (one thread, live %): {(bigOk ? "✓" : $"✗ code {code2}, {j2.DoneFiles} file, {j2.DoneBytes:N0} bytes")}" + (ok ? "" : "\r\nLog: " + j.LogFile);
         }
         catch (Exception e) { return "❌ " + e.Message; }
         finally { try { Directory.Delete(Long(root), true); } catch { } }

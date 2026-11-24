@@ -327,6 +327,10 @@ static class Smoke
         var b = new BriefForm(); b.Show(); b.Reload(); Pump(1500); Ok(b.Visible, "Morning brief opens"); b.Dispose();
         var f = new FolderSearchForm(); f.Show(); f.Begin(Path.GetTempPath()); Pump(400); Ok(f.Visible, "Folder search window opens"); f.Dispose();
         var cs = new ConfirmSend("✦ Send 3 extracts to Gemini?", "Test", "[1] a\n[2] b", "Send and answer", true); cs.Show(); Pump(200); Ok(cs.Visible, "Confirmation window opens"); cs.Dispose();
+        // 📦 Nova transfer: 200 files, a path over 300 characters, Arabic names — copied with Robocopy and checked
+        try { var xr = Transfer.SelfTest(); Ok(xr.StartsWith("✅"), "Nova transfer: " + xr); } catch (Exception ex) { Ok(false, "Nova transfer: " + ex.Message); }
+        try { var tw = new TransferForm(); tw.Show(); Pump(300); Ok(tw.Visible, "Nova transfer window opens"); tw.Dispose(); } catch (Exception ex) { Ok(false, "Nova transfer window: " + ex.Message); }
+        try { var vw = new VpnForm(); vw.Show(); Pump(500); Ok(vw.Visible, "Nova VPN window opens"); vw.Dispose(); } catch (Exception ex) { Ok(false, "Nova VPN window: " + ex.Message); }
         var errs = Log.Read();
         Ok(!errs.Contains("settings ") || true, "No settings errors");
     }

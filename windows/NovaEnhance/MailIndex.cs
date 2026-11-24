@@ -24,6 +24,7 @@ static class Outlook
     {
         try
         {
+            if (SendCheck.Closing) return null;   // you closed Outlook: let it go
             if (CLSIDFromProgID("Outlook.Application", out var clsid) != 0) return null;
             return GetActiveObject(ref clsid, IntPtr.Zero, out var o) == 0 ? o : null;
         }

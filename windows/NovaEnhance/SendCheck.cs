@@ -23,6 +23,10 @@ static class SendCheck
     delegate void ItemSendHandler(object item, ref bool cancel);
     static readonly Guid AppEvents = new("0006300E-0000-0000-C000-000000000046");   // Outlook ApplicationEvents_11
     const int ItemSendId = 0xF002;
+    const int QuitId = 0xF007;   // Outlook closing: Nova lets go of it at once (no “Another program is using Outlook”)
+    delegate void QuitHandler();
+    static QuitHandler quitHandler;
+    static int quitPid, windowless;
     static object hooked;
     static int hookedPid;
 
@@ -42,7 +46,21 @@ static class SendCheck
     {
         // Checked every 10 s: a restarted Outlook is watched again almost at once.
         if (watch == null) { watch = new System.Windows.Forms.Timer { Interval = 10_000 }; watch.Tick += (_, _) => Ensure(); watch.Start(); }
+        // Outlook's window is gone (you closed it) but its process lives on: Nova's leftover links to it are dropped so it can close
+        try
+        {
+            var ol = System.Diagnostics.Process.GetProcessesByName("OUTLOOK");
+            if (ol.Length > 0 && ol.All(p => p.MainWindowHandle == IntPtr.Zero))
+            {
+                if (++windowless >= 2) { windowless = 0; GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect(); }   // only unused links (the Send watch stays: Outlook may just be in the tray)
+            }
+            else windowless = 0;
+            foreach (var p in ol) p.Dispose();
+        }
+        catch { }
         if (!On) { if (hooked != null) Log.Write("🛡 check before sending: off"); Unhook(); Status = "Off"; return; }
+        // the Outlook you just closed is still shutting down: never hold it again
+        if (quitPid != 0) { if (OutlookPid() == quitPid) { Status = "Outlook is closing…"; return; } quitPid = 0; }
         // Still the same Outlook? Checked by its process, not by asking Outlook (asking a busy Outlook every 10 s froze Nova).
         if (hooked != null)
         {
@@ -57,6 +75,8 @@ static class SendCheck
             if (app == null) { Status = "Waiting for Outlook to open…"; return; }
             handler = OnItemSend;
             ComEventsHelper.Combine(app, AppEvents, ItemSendId, handler);
+            quitHandler = OnQuit;
+            try { ComEventsHelper.Combine(app, AppEvents, QuitId, quitHandler); } catch { }
             hooked = app; hookedPid = OutlookPid();
             Status = $"✓ Watching Outlook's Send (since {DateTime.Now:HH:mm:ss})";
             warned = false;
@@ -73,7 +93,34 @@ static class SendCheck
     static void Unhook()
     {
         try { if (hooked != null && handler != null) ComEventsHelper.Remove(hooked, AppEvents, ItemSendId, handler); } catch { }
+        try { if (hooked != null && quitHandler != null) ComEventsHelper.Remove(hooked, AppEvents, QuitId, quitHandler); } catch { }
         hooked = null;
+    }
+
+    /// <summary>You closed Outlook: Nova drops every link to it (Send watch, index reads) so Outlook closes for real; Nova connects again when
+    /// you open Outlook next time.</summary>
+    static void OnQuit()
+    {
+        var pid = hookedPid;
+        Program.UiContext?.Post(_ => ReleaseOutlook(pid), null);
+    }
+
+    /// <summary>The Outlook you closed is still shutting down: nobody in Nova may take hold of it again.</summary>
+    public static bool Closing => quitPid != 0 && OutlookPid() == quitPid;
+
+    public static void ReleaseOutlook(int pid)
+    {
+        try
+        {
+            quitPid = pid != 0 ? pid : OutlookPid();
+            var h = hooked;
+            Unhook();
+            try { if (h != null && Marshal.IsComObject(h)) Marshal.FinalReleaseComObject(h); } catch { }
+            Status = "Outlook closed — waiting for it to open again…";
+            Log.Write("🛡 Outlook closed: Nova let go of it");
+            GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();   // every other Outlook object Nova still had
+        }
+        catch { }
     }
 
     public class Snap
