@@ -61,6 +61,7 @@ static class ClaudeOutlook
         ["fix.project"] = "puts emails into a project in Nova: ids (list), project (code) — ↩ undo in Activity / Email projects",
         ["nova.health"] = "runs the 🧠 Brain health check (every contradiction, vague rules, untested) — read only",
         ["fix.brain"] = "applies 🧠 Brain changes directly (summary, changes [op add|change|remove, section, id, title, text]) — only while you allow Claude; a version is saved first (↩ undo in Brain → Versions & backups); a broken [setting] is refused",
+        ["nova.transfers"] = "📦 the Nova transfer queue — the last jobs (speed, threads, buffered / VPN mode, files done and failed) and the end of the newest log — read only",
         ["nova.vpn"] = "🧪 the 🌐 Office VPN test (FortiClient, gateway, adapter, office server, FortiClient window, recent VPN log) — read only, never connects, never shows the password",
         ["fix.status"] = "Claude's connection: allowed until when",
     };
@@ -91,6 +92,7 @@ static class ClaudeOutlook
             "fix.brain" => OnUi(() => FixBrain(a)),
             "nova.health" => await Health(),
             "nova.vpn" => await Task.Run(OfficeVpn.Diagnose),
+            "nova.transfers" => Transfer.Report(),
             "fix.status" => $"{ClaudeAccess.Line} · Nova {Program.Shown}",
             _ => throw new Exception("unknown tool " + tool + " · tools: " + string.Join(", ", Help.Keys))
         };

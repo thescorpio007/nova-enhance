@@ -27,6 +27,8 @@ class XJob
     public string LogFile { get; set; } = "";
     public int Threads { get; set; }
     public long Copied { get; set; }
+    public string Mode { get; set; } = "";
+    public DateTime? Started { get; set; }
     public bool Verified { get; set; }
     [System.Text.Json.Serialization.JsonIgnore] public Process Proc;
     [System.Text.Json.Serialization.JsonIgnore] public bool StopAsked, PauseAsked;
@@ -315,6 +317,8 @@ static class Transfer
         if (overNet) j.Threads = files <= 1 ? 1 : user > 0 ? user : bigMode ? (int)Math.Clamp(files, 4, 8) : 32;
         else j.Threads = bigMode || files <= 3 ? 1 : user > 0 ? Math.Max(2, user) : 32;
         var unbuffered = bigMode && !overNet;
+        j.Mode = $"{(overNet ? "VPN / network" : "local")} · {(unbuffered ? "unbuffered (/J)" : "buffered")} · {j.Threads} thread(s){(Compress != "off" && CanCompress() ? " · compression asked" : "")}{(SpeedLimit != "none" ? " · speed limit " + SpeedLimit : "")}";
+        j.Started = DateTime.Now;
 
         j.State = "running"; j.LogFile = Path.Combine(Paths.Logs, $"transfer-{j.Id}.log");
         try { File.Delete(j.LogFile); } catch { }
@@ -678,6 +682,30 @@ static class Transfer
         }
         return sb.ToString();
         static string Label(string k) => k switch { "New File" => "Only in the source (new)", "Newer" => "Newer in the source", "Older" => "Older in the source", "*EXTRA File" => "Only at the destination", _ => "Changed" };
+    }
+
+    /// <summary>🔎 For Claude's read-only transfers check: the last jobs, how they ran, and the end of the newest log (🔒 private lines left out).</summary>
+    public static string Report()
+    {
+        var sb = new StringBuilder($"📦 Nova transfer · {DateTime.Now:dd MMM HH:mm:ss}\n");
+        sb.Append($"Settings: threads {Threads} · big local files {(Unbuffered ? "unbuffered" : "normal")} · compression {Compress} · speed limit {SpeedLimit} · file collision {FileCollision} · file error {FileError} · verify {(Verify ? "on" : "off")} · pause on VPN {(PauseOnVpn ? "on" : "off")} · VPN {OfficeVpn.Now}\n");
+        List<XJob> jobs; try { jobs = Jobs.ToList(); } catch { jobs = new(); }
+        foreach (var j in jobs.OrderByDescending(x => x.Added).Take(10))
+        {
+            var secs = j.Started != null ? ((j.Ended ?? DateTime.Now) - j.Started.Value).TotalSeconds : 0;
+            var avg = secs > 0 && j.Copied > 0 ? Size((long)(j.DoneBytes / secs)) + "/s average" : "";
+            var line = $"- {j.Added:HH:mm} {j.Kind} · {j.State} · {j.DoneFiles}/{j.TotalFiles} files · {Size(j.DoneBytes)} of {Size(j.TotalBytes)} · copied {j.Copied} · {(j.State == "running" ? Size((long)j.Speed) + "/s now · " : "")}{avg} · took {secs:0} s · {j.Mode} · failed {j.Failed.Count}" +
+                       $"\n    {string.Join(" + ", j.Sources.Take(3))}{(j.Sources.Count > 3 ? $" (+{j.Sources.Count - 3})" : "")} → {j.Dest}{(j.Note.Length > 0 ? "\n    note: " + j.Note : "")}";
+            if (Projects.Private.IsMatch(line)) line = $"- {j.Added:HH:mm} {j.Kind} · {j.State} · 🔒 private path not shown";
+            sb.Append(line).Append('\n');
+        }
+        var last = jobs.Where(x => x.LogFile.Length > 0 && File.Exists(x.LogFile)).OrderByDescending(x => x.Added).FirstOrDefault();
+        if (last != null)
+        {
+            sb.Append($"Log of the newest job ({last.Added:HH:mm}), last lines:\n");
+            try { foreach (var l in File.ReadAllLines(last.LogFile).Where(x => x.Trim().Length > 0 && !Projects.Private.IsMatch(x)).TakeLast(15)) sb.Append("   ").Append(l.Trim()).Append('\n'); } catch { }
+        }
+        return sb.ToString();
     }
 
     // ------------------------------------------------------------------ 🌐 VPN, names, long paths
