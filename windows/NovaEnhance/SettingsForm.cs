@@ -1774,7 +1774,7 @@ class SettingsForm : NovaForm
         }, !VpnHelper.Installed));
         hRow.Controls.Add(Th.B("Remove", async () => { var r = await Task.Run(VpnHelper.Remove); if (!hLbl.IsDisposed) hLbl.Text = r.Length == 0 ? "🛡 VPN helper: " + VpnHelper.State() : "⚠ " + r; }));
         hRow.Controls.Add(hLbl);
-        page.Add(Th.L("OpenConnect always runs as administrator, and Windows does not let normal programs press its buttons. The helper does only that (connect / disconnect OpenConnect or FortiClient, and start / stop OpenConnect's command line) with administrator rights; Nova itself stays a normal program so it keeps reaching your Outlook. Only the command line gets your password, encrypted for your Windows account.", 9, Th.Muted));
+        page.Add(Th.L("OpenConnect always runs as administrator, and Windows does not let normal programs press its buttons. The helper does only that (connect / disconnect OpenConnect or FortiClient, and start / stop OpenConnect's command line) with administrator rights; Nova itself stays a normal program so it keeps reaching your Outlook. The helper is a copy of Nova in Program Files (no PowerShell, no script). Only the command line gets your password, encrypted for your Windows account.", 9, Th.Muted));
         page.Add(Th.L("In OpenConnect keep the password saved and “Batch mode” ticked — Nova chooses the server and presses Connect; if it fails, Nova tries the other one.", 9, Th.Muted));
         page.Add(Th.Section("Checking that it works"));
         var probe = Field("Office server to check", OfficeVpn.Probe, 220);

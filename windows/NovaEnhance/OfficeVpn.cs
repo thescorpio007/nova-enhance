@@ -110,8 +110,8 @@ static class OfficeVpn
         return null;
     }
 
-    static readonly string[] FortiProcs = { "FortiClient" };
-    static readonly string[] OcProcs = { "openconnect-gui" };
+    internal static readonly string[] FortiProcs = { "FortiClient" };
+    internal static readonly string[] OcProcs = { "openconnect-gui" };
 
     // ------------------------------------------------------------------ windows of a program (found by the program, never by the title)
 
@@ -123,10 +123,10 @@ static class OfficeVpn
     [System.Runtime.InteropServices.DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h, uint cmd);
     delegate bool EnumProc(IntPtr h, IntPtr l);
 
-    static HashSet<int> Pids(string[] names) => names.SelectMany(n => { try { return Process.GetProcessesByName(n); } catch { return Array.Empty<Process>(); } }).Select(p => p.Id).ToHashSet();
+    internal static HashSet<int> Pids(string[] names) => names.SelectMany(n => { try { return Process.GetProcessesByName(n); } catch { return Array.Empty<Process>(); } }).Select(p => p.Id).ToHashSet();
 
     /// <summary>A window hidden in the tray has no buttons: its main window is shown again (restored), as clicking its tray icon would.</summary>
-    static void Reveal(string[] names)
+    internal static void Reveal(string[] names)
     {
         var ids = Pids(names);
         if (ids.Count == 0) return;
@@ -159,7 +159,7 @@ static class OfficeVpn
         return list;
     }
 
-    static System.Windows.Automation.AutomationElement AppWindow(string[] names, int seconds, Func<System.Windows.Automation.AutomationElement, bool> good = null)
+    internal static System.Windows.Automation.AutomationElement AppWindow(string[] names, int seconds, Func<System.Windows.Automation.AutomationElement, bool> good = null)
     {
         for (int i = 0; i < Math.Max(1, seconds); i++)
         {
@@ -180,7 +180,7 @@ static class OfficeVpn
         return null;
     }
 
-    static bool HasButton(System.Windows.Automation.AutomationElement w, string name) =>
+    internal static bool HasButton(System.Windows.Automation.AutomationElement w, string name) =>
         All(w, System.Windows.Automation.ControlType.Button).Any(b => NameOf(b).Trim().Equals(name, StringComparison.OrdinalIgnoreCase));
 
     // ------------------------------------------------------------------ status
@@ -359,18 +359,18 @@ static class OfficeVpn
         catch (Exception e) { return "FortiClient: " + e.Message; }
     }
 
-    static System.Windows.Automation.AutomationElement FortiWindow(int seconds) =>
+    internal static System.Windows.Automation.AutomationElement FortiWindow(int seconds) =>
         AppWindow(FortiProcs, seconds, w => HasButton(w, "Connect") || HasButton(w, "Disconnect"));
 
-    static List<System.Windows.Automation.AutomationElement> All(System.Windows.Automation.AutomationElement w, System.Windows.Automation.ControlType t) =>
+    internal static List<System.Windows.Automation.AutomationElement> All(System.Windows.Automation.AutomationElement w, System.Windows.Automation.ControlType t) =>
         w.FindAll(System.Windows.Automation.TreeScope.Descendants, new System.Windows.Automation.PropertyCondition(System.Windows.Automation.AutomationElement.ControlTypeProperty, t))
             .Cast<System.Windows.Automation.AutomationElement>().ToList();
 
-    static string NameOf(System.Windows.Automation.AutomationElement e) { try { return e.Current.Name ?? ""; } catch { return ""; } }
+    internal static string NameOf(System.Windows.Automation.AutomationElement e) { try { return e.Current.Name ?? ""; } catch { return ""; } }
 
     /// <summary>Your free FortiClient: the window is found; the username / password are typed when it asks (“Prompt on login”); Connect is pressed.
     /// Returns "" when Connect was pressed (or it is already connected), otherwise what went wrong.</summary>
-    static string GuiConnect()
+    internal static string GuiConnect()
     {
         try
         {
@@ -403,7 +403,7 @@ static class OfficeVpn
     }
 
     /// <summary>A button in the program's window (FortiClient or OpenConnect), pressed through Windows UI Automation — as a screen reader would.</summary>
-    static bool GuiButton(string[] procs, string name)
+    internal static bool GuiButton(string[] procs, string name)
     {
         try
         {
@@ -418,7 +418,9 @@ static class OfficeVpn
 
     /// <summary>🔓 OpenConnect: its window is shown, the server “AHMED-MZA” chosen, Connect pressed (its saved password and Batch mode do the rest).
     /// Returns "" when Connect was pressed (or it is already connected), otherwise what went wrong.</summary>
-    static string OcConnect(string exe)
+    internal static string OcConnect(string exe) => OcConnectWith(exe, OcProfile);
+
+    internal static string OcConnectWith(string exe, string profile)
     {
         try
         {
@@ -432,15 +434,15 @@ static class OfficeVpn
             {
                 string cur = NameOf(combo);
                 try { if (combo.TryGetCurrentPattern(System.Windows.Automation.ValuePattern.Pattern, out var vp)) cur = ((System.Windows.Automation.ValuePattern)vp).Current.Value ?? cur; } catch { }
-                if (!cur.Trim().Equals(OcProfile, StringComparison.OrdinalIgnoreCase))
+                if (!cur.Trim().Equals(profile, StringComparison.OrdinalIgnoreCase))
                 {
                     try
                     {
                         if (combo.TryGetCurrentPattern(System.Windows.Automation.ExpandCollapsePattern.Pattern, out var ec)) { ((System.Windows.Automation.ExpandCollapsePattern)ec).Expand(); Thread.Sleep(600); }
                         var item = combo.FindAll(System.Windows.Automation.TreeScope.Descendants, new System.Windows.Automation.PropertyCondition(System.Windows.Automation.AutomationElement.ControlTypeProperty, System.Windows.Automation.ControlType.ListItem))
-                            .Cast<System.Windows.Automation.AutomationElement>().FirstOrDefault(x => NameOf(x).Trim().Equals(OcProfile, StringComparison.OrdinalIgnoreCase));
+                            .Cast<System.Windows.Automation.AutomationElement>().FirstOrDefault(x => NameOf(x).Trim().Equals(profile, StringComparison.OrdinalIgnoreCase));
                         if (item != null && item.TryGetCurrentPattern(System.Windows.Automation.SelectionItemPattern.Pattern, out var si)) ((System.Windows.Automation.SelectionItemPattern)si).Select();
-                        else if (item == null) return $"OpenConnect has no server named “{OcProfile}” — check the name in Settings ▸ 🌐 Office VPN";
+                        else if (item == null) return $"OpenConnect has no server named “{profile}” — check the name in Settings ▸ 🌐 Office VPN";
                         if (combo.TryGetCurrentPattern(System.Windows.Automation.ExpandCollapsePattern.Pattern, out var ec2)) ((System.Windows.Automation.ExpandCollapsePattern)ec2).Collapse();
                     }
                     catch (Exception e) { Log.Warn("office vpn", "OpenConnect server list: " + e.Message); }

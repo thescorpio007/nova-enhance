@@ -42,6 +42,10 @@ static class Program
         // 🛡 Windows OCR in quarantine: one scanned file per helper process (a crash there never closes Nova).
         if (args.Contains("--ocr")) { try { return Ocr.Helper(args); } catch { return 3; } }
         if (args.Contains("--update-selftest")) return Updater.SelfTest(args);
+        // 🛡 Office VPN admin helper: the one-time set-up / removal (started with Windows' “Yes”) and the helper copy in Program Files
+        if (args.Contains("--vpn-setup")) return VpnHelper.SetupElevated(args);
+        if (args.Contains("--vpn-remove")) return VpnHelper.RemoveElevated();
+        if (args.Contains("--vpn-helper")) { try { return VpnHelper.Serve(args); } catch { return 3; } }
         // 🛡 The Guardian: a second copy that only watches Nova (restarts it after a crash or a freeze).
         if (args.Contains("--guardian")) { Application.EnableVisualStyles(); return Guard.Watch(args); }
         Restored = args.Contains("--restored");
