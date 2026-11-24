@@ -1723,11 +1723,35 @@ class SettingsForm : NovaForm
             var b = Th.Box(false, 1, pw); if (b is SpellBox sb) sb.Off = true;
             b.Width = w; b.Text = value; r.Controls.Add(b); return b;
         }
-        var prof = Field("FortiClient connection name", OfficeVpn.Profile);
-        var host = Field("Remote gateway : port", OfficeVpn.Host);
+        page.Add(Th.Section("Connection — as in FortiClient ▸ Edit VPN Connection"));
+        page.Add(Th.L("VPN: SSL-VPN (IPsec is not driven by Nova)", 9.5f, Th.Muted));
+        var prof = Field("Connection Name", OfficeVpn.Profile);
+        var gw = Field("Remote Gateway", OfficeVpn.Gateway);
+        var port = Field("Port (Customize port)", OfficeVpn.Port.ToString(), 100);
+        var ssoRow = page.Add(Th.Row(false));
+        var sso = Th.Check("Single Sign On (SSO) for VPN Tunnel", OfficeVpn.Sso, _ => { }); ssoRow.Controls.Add(sso);
+        var authRow = page.Add(Th.Row(false));
+        authRow.Controls.Add(new Label { Text = "Authentication", AutoSize = false, Width = 190, ForeColor = Th.Muted, Font = Th.F(9.5f), TextAlign = ContentAlignment.MiddleLeft, Height = 28 });
+        var rbPrompt = new RadioButton { Text = "Prompt on login", AutoSize = true, ForeColor = Th.Text, Font = Th.F(9.5f), Checked = !OfficeVpn.SaveLogin, Margin = new Padding(0, 5, 16, 0) };
+        var rbSave = new RadioButton { Text = "Save login", AutoSize = true, ForeColor = Th.Text, Font = Th.F(9.5f), Checked = OfficeVpn.SaveLogin, Margin = new Padding(0, 5, 0, 0) };
+        authRow.Controls.Add(rbPrompt); authRow.Controls.Add(rbSave);
         var user = Field("Username", OfficeVpn.User);
-        var pw = Field("Password (command line only)", OfficeVpn.Password.Length > 0 ? "••••••••" : "", 220, true);
+        var pw = Field("Password (kept encrypted here)", OfficeVpn.Password.Length > 0 ? "••••••••" : "", 220, true);
+        var certRow = page.Add(Th.Row(false));
+        certRow.Controls.Add(new Label { Text = "Client Certificate", AutoSize = false, Width = 190, ForeColor = Th.Muted, Font = Th.F(9.5f), TextAlign = ContentAlignment.MiddleLeft, Height = 28 });
+        var certLbl = Th.L(OfficeVpn.Cert.Length > 0 ? OfficeVpn.Cert : "None", 9.5f, Th.Text);
+        certRow.Controls.Add(certLbl);
+        certRow.Controls.Add(Th.B("📁 Choose…", () =>
+        {
+            using var d = new OpenFileDialog { Filter = "Certificates|*.pfx;*.p12|All files|*.*", Title = "Client certificate (only if IT gave you one)" };
+            if (d.ShowDialog(this) == DialogResult.OK) certLbl.Text = d.FileName;
+        }));
+        certRow.Controls.Add(Th.B("None", () => certLbl.Text = "None"));
+        var dualRow = page.Add(Th.Row(false));
+        var dual = Th.Check("Enable Dual-stack IPv4/IPv6 address", OfficeVpn.DualStack, _ => { }); dualRow.Controls.Add(dual);
+        page.Add(Th.Section("Checking that it works"));
         var probe = Field("Office server to check", OfficeVpn.Probe, 220);
+        page.Add(Th.L("An office computer that answers only through the VPN — e.g. 192.168.1.12 (the O: N: S: server). Not the gateway.", 9, Th.Muted));
         var toolRow = page.Add(Th.Row(false));
         var tool = OfficeVpn.Tool();
         var toolLbl = Th.L(tool != null ? "✓ FortiClientTools found: " + tool : OfficeVpn.Gui() != null ? "FortiClientTools not found — Nova will use your free FortiClient window" : "⚠ FortiClient is not installed", 9.5f, tool != null ? Th.Good : Th.Warn);
@@ -1738,19 +1762,38 @@ class SettingsForm : NovaForm
         }));
         toolRow.Controls.Add(toolLbl);
         var st = page.Add(Th.Wrap(OfficeVpn.Line, 10, Th.AccentText), true);
-        var br = page.Add(Th.Row(false));
-        br.Controls.Add(Th.B("💾 Save", () =>
+        DateTime savedAt = DateTime.MinValue;
+        void SaveAll()
         {
-            OfficeVpn.Profile = prof.Text.Trim(); OfficeVpn.Host = host.Text.Trim(); OfficeVpn.User = user.Text.Trim(); OfficeVpn.Probe = probe.Text.Trim();
+            OfficeVpn.Profile = prof.Text.Trim(); OfficeVpn.User = user.Text.Trim(); OfficeVpn.Probe = probe.Text.Trim();
+            var g = gw.Text.Trim().Replace("https://", "").TrimEnd('/');
+            if (g.Contains(':') && int.TryParse(g[(g.LastIndexOf(':') + 1)..], out var gp)) { g = g[..g.LastIndexOf(':')]; port.Text = gp.ToString(); gw.Text = g; }
+            OfficeVpn.Host = g + (int.TryParse(port.Text.Trim(), out var pn) && pn > 0 && pn != 443 ? ":" + pn : "");
+            OfficeVpn.SaveLogin = rbSave.Checked; OfficeVpn.Sso = sso.Checked; OfficeVpn.DualStack = dual.Checked;
+            OfficeVpn.Cert = certLbl.Text == "None" ? "" : certLbl.Text;
             if (pw.Text.Length > 0 && pw.Text != "••••••••") OfficeVpn.Password = pw.Text;
-            st.Text = "✓ Saved. " + OfficeVpn.Line;
-        }, true));
-        br.Controls.Add(Th.B("🟢 Connect now", () => { OfficeVpn.On = true; OfficeVpn.Connect(); }));
+            savedAt = DateTime.Now;
+        }
+        var br = page.Add(Th.Row(false));
+        br.Controls.Add(Th.B("💾 Save", () => { SaveAll(); st.Text = "✓ Saved. " + OfficeVpn.Line; }, true));
+        br.Controls.Add(Th.B("🟢 Connect now", () => { SaveAll(); OfficeVpn.On = true; OfficeVpn.Connect(); st.Text = "🟡 Connecting…"; }));
         br.Controls.Add(Th.B("■ Disconnect", OfficeVpn.Disconnect));
         br.Controls.Add(Th.B("🗂 Project sources…", Screens.Sources));
-        Note("🔐 The password is used only with the FortiClientTools command line. It is kept encrypted on this PC, locked to your Windows account — never in a backup, never sent to the phone or the AI. With your free FortiClient, Nova never needs it (FortiClient keeps it).", Th.Muted);
+        page.Add(Th.Section("🧪 Test"));
+        var testOut = page.Add(Th.Wrap("Checks FortiClient, the gateway, the Fortinet adapter, the office server and FortiClient's window — it does not connect.", 9.5f, Th.Muted), true);
+        var tr = page.Add(Th.Row(false));
+        tr.Controls.Add(Th.B("🧪 Test the VPN setup", async () =>
+        {
+            SaveAll();
+            testOut.Text = "🧪 Testing… (up to 15 s)"; testOut.ForeColor = Th.AccentText;
+            var r = await Task.Run(OfficeVpn.Diagnose);
+            if (testOut.IsDisposed) return;
+            testOut.Text = r; testOut.ForeColor = r.Contains("❌") ? Th.Warn : Th.Good; page.FitAll();
+        }, true));
+        tr.Controls.Add(Th.B("⧉ Copy result", () => { if (testOut.Text.StartsWith("🧪 Office")) Clipboard.SetText(testOut.Text); }));
+        Note("🔐 The password is used with the FortiClientTools command line, and typed into FortiClient only when it asks (“Prompt on login”). It is kept encrypted on this PC, locked to your Windows account — never in a backup, never sent to the phone or the AI. With “Save login”, FortiClient keeps it.", Th.Muted);
         var t = new System.Windows.Forms.Timer { Interval = 1500 };
-        t.Tick += (_, _) => { if (st.IsDisposed) { t.Dispose(); return; } if (!st.Text.StartsWith("✓ Saved")) st.Text = OfficeVpn.Line; };
+        t.Tick += (_, _) => { if (st.IsDisposed) { t.Dispose(); return; } if (DateTime.Now - savedAt > TimeSpan.FromSeconds(3)) st.Text = OfficeVpn.Line; };
         t.Start();
     }
 

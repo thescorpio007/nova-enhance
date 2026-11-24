@@ -1,3 +1,4 @@
+using System.Text;
 using System.Diagnostics;
 using System.Drawing.Drawing2D;
 using System.Net.NetworkInformation;
@@ -25,6 +26,21 @@ static class OfficeVpn
     public static string User { get => Store.Str("win_vpn_user", Environment.UserName); set => Store.Set("win_vpn_user", value); }
     /// <summary>An office server that answers only through the VPN (the projects server).</summary>
     public static string Probe { get => Store.Str("win_vpn_probe", "192.168.1.12"); set => Store.Set("win_vpn_probe", value); }
+    /// <summary>The FortiClient connection, as in its “Edit VPN Connection” page.</summary>
+    public static string Gateway { get => Split(Host).H; set => Host = Join(value, Port); }
+    public static int Port { get => Split(Host).P; set => Host = Join(Gateway, value); }
+    static (string H, int P) Split(string hp)
+    {
+        hp = (hp ?? "").Trim().Replace("https://", "").TrimEnd('/');
+        var i = hp.LastIndexOf(':');
+        return i > 0 && int.TryParse(hp[(i + 1)..], out var p) ? (hp[..i], p) : (hp, 443);
+    }
+    static string Join(string h, int p) => (h ?? "").Trim() + (p > 0 && p != 443 ? ":" + p : "");
+    /// <summary>“Save login” (FortiClient keeps the password) or “Prompt on login” (Nova types it from its encrypted copy).</summary>
+    public static bool SaveLogin { get => Store.Bool("win_vpn_savelogin", true); set => Store.SetBool("win_vpn_savelogin", value); }
+    public static string Cert { get => Store.Str("win_vpn_cert", ""); set => Store.Set("win_vpn_cert", value); }
+    public static bool Sso { get => Store.Bool("win_vpn_sso", false); set => Store.SetBool("win_vpn_sso", value); }
+    public static bool DualStack { get => Store.Bool("win_vpn_dual", false); set => Store.SetBool("win_vpn_dual", value); }
     public static string ToolPath { get => Store.Str("win_vpn_tool", ""); set => Store.Set("win_vpn_tool", value); }
     public static string Password { get => Store.Secret("win_vpn_pw"); set => Store.SetSecret("win_vpn_pw", value ?? ""); }
 
@@ -74,13 +90,26 @@ static class OfficeVpn
     /// <summary>The office server answers (file sharing port), within 1.5 s.</summary>
     public static bool ServerOk()
     {
-        var host = Probe.Trim();
+        var (host, port) = ProbeTarget();
         if (host.Length == 0) return true;
+        return Tcp(host, port, 1500);
+    }
+
+    /// <summary>The office server to check: “192.168.1.12” (file sharing, port 445) or “host:port”.</summary>
+    public static (string Host, int Port) ProbeTarget()
+    {
+        var p = Probe.Trim();
+        var i = p.LastIndexOf(':');
+        return i > 0 && int.TryParse(p[(i + 1)..], out var n) ? (p[..i], n) : (p, 445);
+    }
+
+    static bool Tcp(string host, int port, int ms)
+    {
         try
         {
             using var c = new TcpClient();
-            var t = c.ConnectAsync(host, 445);
-            return t.Wait(1500) && c.Connected;
+            var t = c.ConnectAsync(host, port);
+            return t.Wait(ms) && c.Connected;
         }
         catch { return false; }
     }
@@ -152,19 +181,77 @@ static class OfficeVpn
                 var pw = Password;
                 if (pw.Length == 0) { Set(State.Down, "🔴 Not connected — add your VPN password in Settings ▸ 🌐 Office VPN (kept encrypted on this PC)"); Want = false; return; }
                 // -i ignore the certificate warning · -m minimized · -q no message boxes
-                var args = $"connect -s {Q("Nova " + Profile)} -h {Q(Host)} -u {Q(User + ":" + pw)} -i -m -q";
+                var args = $"connect -s {Q("Nova " + Profile)} -h {Q(Host)} -u {Q(User + ":" + pw)}" + (Cert.Length > 0 && File.Exists(Cert) ? $" -c {Q(Cert)}" : "") + " -i -m -q";
                 _ = Task.Run(() => { try { Run(t, args, 90000); } catch (Exception e) { Log.Warn("office vpn", "connect: " + e.Message); } });
             }
             else if (Gui() is { } g)
             {
                 Way = "your FortiClient window";
-                if (!Process.GetProcessesByName("FortiClient").Any()) Process.Start(new ProcessStartInfo(g) { UseShellExecute = true });
-                Thread.Sleep(4000);
-                if (!GuiButton("Connect")) Log.Warn("office vpn", "the Connect button was not found in FortiClient");
+                // started again even when it runs in the tray: FortiClient then shows its window (a hidden window has no buttons)
+                var running = Process.GetProcessesByName("FortiClient").Any();
+                Process.Start(new ProcessStartInfo(g) { UseShellExecute = true });
+                Thread.Sleep(running ? 2500 : 6000);
+                var r = GuiConnect();
+                if (r.Length > 0) { Log.Warn("office vpn", r); Set(State.Down, "🔴 " + r); }
             }
             else { Set(State.Down, "🔴 FortiClient is not installed on this PC"); Want = false; return; }
         }
         catch (Exception e) { Log.Warn("office vpn", "connect: " + e.Message); }
+    }
+
+    static System.Windows.Automation.AutomationElement FortiWindow(int seconds)
+    {
+        var root = System.Windows.Automation.AutomationElement.RootElement;
+        var cond = new System.Windows.Automation.PropertyCondition(System.Windows.Automation.AutomationElement.ControlTypeProperty, System.Windows.Automation.ControlType.Window);
+        for (int i = 0; i < seconds; i++)
+        {
+            foreach (System.Windows.Automation.AutomationElement w in root.FindAll(System.Windows.Automation.TreeScope.Children, cond))
+            {
+                try { if ((w.Current.Name ?? "").Contains("FortiClient", StringComparison.OrdinalIgnoreCase)) return w; } catch { }
+            }
+            Thread.Sleep(1000);
+        }
+        return null;
+    }
+
+    static List<System.Windows.Automation.AutomationElement> All(System.Windows.Automation.AutomationElement w, System.Windows.Automation.ControlType t) =>
+        w.FindAll(System.Windows.Automation.TreeScope.Descendants, new System.Windows.Automation.PropertyCondition(System.Windows.Automation.AutomationElement.ControlTypeProperty, t))
+            .Cast<System.Windows.Automation.AutomationElement>().ToList();
+
+    static string NameOf(System.Windows.Automation.AutomationElement e) { try { return e.Current.Name ?? ""; } catch { return ""; } }
+
+    /// <summary>Your free FortiClient: the window is found; the username / password are typed when it asks (“Prompt on login”); Connect is pressed.
+    /// Returns "" when Connect was pressed (or it is already connected), otherwise what went wrong.</summary>
+    static string GuiConnect()
+    {
+        try
+        {
+            var w = FortiWindow(15);
+            if (w == null) return "FortiClient's window did not open — open FortiClient once and leave it on the Remote Access page";
+            for (int i = 0; i < 10; i++)
+            {
+                var buttons = All(w, System.Windows.Automation.ControlType.Button);
+                if (buttons.Any(b => NameOf(b).Equals("Disconnect", StringComparison.OrdinalIgnoreCase))) return "";   // already connected
+                var connect = buttons.FirstOrDefault(b => NameOf(b).Equals("Connect", StringComparison.OrdinalIgnoreCase));
+                if (connect != null)
+                {
+                    foreach (var e in All(w, System.Windows.Automation.ControlType.Edit))
+                    {
+                        bool pw; try { pw = e.Current.IsPassword; } catch { continue; }
+                        if (!e.TryGetCurrentPattern(System.Windows.Automation.ValuePattern.Pattern, out var vp)) continue;
+                        var v = (System.Windows.Automation.ValuePattern)vp;
+                        string cur; try { cur = v.Current.Value ?? ""; } catch { cur = ""; }
+                        if (pw && cur.Length == 0) { if (Password.Length == 0) return "FortiClient asks for the password — type it in Settings ▸ 🌐 Office VPN (kept encrypted on this PC) or tick “Save login” in FortiClient"; v.SetValue(Password); }
+                        else if (!pw && cur.Length == 0 && User.Length > 0 && NameOf(e).Contains("user", StringComparison.OrdinalIgnoreCase)) v.SetValue(User);
+                    }
+                    if (connect.TryGetCurrentPattern(System.Windows.Automation.InvokePattern.Pattern, out var ip)) { ((System.Windows.Automation.InvokePattern)ip).Invoke(); return ""; }
+                    return "FortiClient's Connect button could not be pressed";
+                }
+                Thread.Sleep(1000);
+            }
+            return "FortiClient's Connect button was not found — open FortiClient on the Remote Access page with “" + Profile + "” selected";
+        }
+        catch (Exception e) { return "FortiClient window: " + e.Message; }
     }
 
     /// <summary>Your free FortiClient: its window is found and the button pressed (Windows UI Automation — as a screen reader would).</summary>
@@ -191,6 +278,62 @@ static class OfficeVpn
         }
         catch (Exception e) { Log.Warn("office vpn", "FortiClient window: " + e.Message); }
         return false;
+    }
+
+    // ------------------------------------------------------------------ 🧪 the test (Settings and Claude's nova.vpn) — read only, it never connects
+
+    public static string Diagnose()
+    {
+        var sb = new StringBuilder($"🧪 Office VPN test · {DateTime.Now:dd MMM HH:mm:ss}\n");
+        void L(bool? ok, string t) => sb.Append(ok == true ? "✅ " : ok == false ? "❌ " : "• ").Append(t).Append('\n');
+        L(On, "Companion " + (On ? "on" : "off — tick “Use the Office VPN companion”") + $" · reconnect automatically {(Auto ? "on" : "off")} · you want it up: {(Want ? "yes" : "no — press Connect")}");
+        L(null, $"Connection “{Profile}” · SSL-VPN · gateway {Gateway} · port {Port} · user {User} · {(SaveLogin ? "Save login" : "Prompt on login")} · certificate {(Cert.Length > 0 ? Path.GetFileName(Cert) : "None")}{(Sso ? " · SSO" : "")}{(DualStack ? " · dual-stack" : "")} · password in Nova: {(Password.Length > 0 ? "yes (encrypted)" : "no")}");
+        var g = Gui(); var t = Tool();
+        string Ver(string f) { try { return FileVersionInfo.GetVersionInfo(f).ProductVersion ?? ""; } catch { return ""; } }
+        L(g != null, g != null ? $"FortiClient {Ver(g)} installed · {(Process.GetProcessesByName("FortiClient").Any() ? "running" : "not running")}" : "FortiClient not found in Program Files");
+        L(t != null ? true : null, t != null ? "FortiClientTools command line: " + t : "FortiClientTools not on this PC — Nova uses the FortiClient window");
+        try
+        {
+            var ips = System.Net.Dns.GetHostAddresses(Gateway);
+            L(ips.Length > 0, $"Gateway {Gateway} → {string.Join(", ", ips.Take(3).Select(x => x.ToString()))}");
+            var open = Tcp(Gateway, Port, 4000);
+            L(open, open ? $"Gateway answers on port {Port} (internet path to the office firewall is fine)" : $"Gateway does NOT answer on port {Port} — internet down, wrong port, or the office firewall is off");
+        }
+        catch (Exception e) { L(false, $"Gateway {Gateway} cannot be found (DNS): {e.Message}"); }
+        try
+        {
+            var ad = NetworkInterface.GetAllNetworkInterfaces().Where(n => (n.Description + n.Name).Contains("Forti", StringComparison.OrdinalIgnoreCase)).ToList();
+            if (ad.Count == 0) L(false, "No Fortinet network adapter — reinstall FortiClient VPN (its virtual adapter is missing)");
+            foreach (var n in ad) L(n.OperationalStatus == OperationalStatus.Up ? true : null, $"Adapter “{n.Description}”: {n.OperationalStatus}" + (n.OperationalStatus == OperationalStatus.Up ? " · " + string.Join(", ", n.GetIPProperties().UnicastAddresses.Where(u => u.Address.AddressFamily == AddressFamily.InterNetwork).Select(u => u.Address)) : ""));
+        }
+        catch (Exception e) { L(false, "Adapters: " + e.Message); }
+        var (ph, pp) = ProbeTarget();
+        if (ph.Equals(Gateway, StringComparison.OrdinalIgnoreCase)) L(false, $"“Office server to check” is the gateway itself — use an office server that answers only through the VPN (e.g. 192.168.1.12, the O: N: S: server)");
+        else if (ph.Length > 0) { var ok = Tcp(ph, pp, 2000); L(ok, $"Office server {ph}:{pp} " + (ok ? "answers (the VPN works)" : "does not answer (normal while the VPN is down)")); }
+        if (g != null && t == null)
+        {
+            try
+            {
+                var w = FortiWindow(2);
+                if (w == null) L(null, "FortiClient window not open (Nova opens it when connecting)");
+                else
+                {
+                    var names = All(w, System.Windows.Automation.ControlType.Button).Select(NameOf).Where(n => n.Length > 0).Distinct().Take(12).ToList();
+                    var pwBox = All(w, System.Windows.Automation.ControlType.Edit).Any(e => { try { return e.Current.IsPassword; } catch { return false; } });
+                    var canConnect = names.Any(n => n.Equals("Connect", StringComparison.OrdinalIgnoreCase));
+                    var isUp = names.Any(n => n.Equals("Disconnect", StringComparison.OrdinalIgnoreCase));
+                    L(canConnect || isUp, $"FortiClient window “{NameOf(w)}”: {(isUp ? "connected (Disconnect shown)" : canConnect ? "Connect button found — Nova can press it" : "no Connect button visible")} · password box {(pwBox ? "shown" : "not shown")} · buttons: {string.Join(", ", names)}");
+                }
+            }
+            catch (Exception e) { L(false, "FortiClient window: " + e.Message); }
+        }
+        L(Now is State.Up ? true : Now is State.Off ? null : false, "Now: " + Line + (Way.Length > 0 ? " · last way: " + Way : "") + (tries > 0 ? $" · tries {tries}" : ""));
+        try
+        {
+            foreach (var e in Log.ReadAll().Where(x => x.Area == "office vpn").Take(6)) sb.Append("   log ").Append(Log.Format(e).Split('\n')[0]).Append('\n');
+        }
+        catch { }
+        return sb.ToString();
     }
 
     // ------------------------------------------------------------------ the watchdog
