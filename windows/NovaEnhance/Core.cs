@@ -43,6 +43,8 @@ static class Shell
             // ✓ A file that moved is followed; one that is gone says which folder is wrong.
             if (System.Text.RegularExpressions.Regex.IsMatch(path, @"^[A-Za-z]:\\|^\\\\[^?]") && !File.Exists(path) && !Directory.Exists(path))
             {
+                // ⚡ The office folder is not reachable (VPN down) but Nova keeps an offline copy: that one opens.
+                if (ProjectSources.Offline.LocalOf(path) is { } local) { Process.Start(new ProcessStartInfo(local) { UseShellExecute = true }); Program.Balloon("⚡ Offline copy", "The office folder is not reachable — opened Nova's copy: " + Path.GetFileName(local)); return; }
                 var real = FileCheck.Resolve(path, out var why);
                 if (real == null) { MessageBox.Show(why, "Nova Enhance · file not found", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
                 path = real;

@@ -57,7 +57,9 @@ static class FolderAsk
     {
         if (p.Kind is "email" or "memory" or "history") return p.Loc;   // 🔎 shared Nova search: emails, 🧠 memory, 🕘 past answers
         var where = FolderIndex.Where(new PieceHit { Loc = p.Loc, Goto = p.Goto, Text = p.Text, Matches = new() });
-        return $"{Path.GetFileName(p.Path)} · {where}";
+        // 🗂 the named source and its kind: “[SLV · Contract · Contract] Particular Conditions.pdf · page 42”
+        var tag = ProjectSources.Tag(p.Path);
+        return (tag.Length > 0 ? $"[{tag}] " : "") + $"{Path.GetFileName(p.Path)} · {where}";
     }
 
     /// <summary>[3] Spec.pdf · page 14 — Specification · latest, Rev C of 3</summary>

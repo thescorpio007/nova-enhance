@@ -3,7 +3,7 @@ namespace NovaEnhance;
 /// <summary>Settings, split into sections like the phone app.</summary>
 class SettingsForm : NovaForm
 {
-    static readonly string[] AllSections = { "🧠 Nova Brain", "🔐 Admin", "AI & API keys", "⚙ AI for each feature", "About me", "Enhancement", "Email & AI", "📥 Email index", "🗂 Mailboxes & archives", "📂 Folders in the index", "📁 Email projects", "Folder search", "📁 Projects", "✦ Prompts", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "🧪 Activity history", "🔌 Test connector", "📱 Phone link", "About" };
+    static readonly string[] AllSections = { "🧠 Nova Brain", "🔐 Admin", "AI & API keys", "⚙ AI for each feature", "About me", "Enhancement", "Email & AI", "📥 Email index", "🗂 Mailboxes & archives", "📂 Folders in the index", "📁 Email projects", "Folder search", "📁 Projects", "🌐 Office VPN", "🗂 Project sources", "✦ Prompts", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "🧪 Activity history", "🔌 Test connector", "📱 Phone link", "About" };
     /// <summary>🧪 Activity history and 🔌 Test connector are advanced tools: shown only when switched on (About → Advanced tools).</summary>
     static readonly string[] AdvancedSections = { "🧪 Activity history", "🔌 Test connector" };
     static string[] Sections = Visible();
@@ -92,6 +92,8 @@ class SettingsForm : NovaForm
                 case "📁 Email projects": EmailProjectsSection(); break;
                 case "Folder search": FolderSearch(); break;
                 case "📁 Projects": ProjectsPage(); break;
+                case "🌐 Office VPN": VpnPage(); break;
+                case "🗂 Project sources": SourcesPage(); break;
                 case "Google Drive": GoogleDrive(); break;
                 case "Shortcuts": Shortcuts(); break;
                 case "🔐 Admin": AdminPage(); break;
@@ -1705,6 +1707,72 @@ class SettingsForm : NovaForm
     int actDays = 1;
 
     /// <summary>📱 Phone link (2.0): the phone gets Nova's data from this PC, encrypted with the key in the QR code.</summary>
+    // ------------------------------------------------------------------ 🌐 Office VPN
+
+    void VpnPage()
+    {
+        Note("Nova keeps your office VPN up: its own icon beside the clock (🟢 connected · 🟡 connecting · 🔴 not connected), one click to connect, and a watchdog that reconnects by itself after a drop, sleep or a Wi-Fi change. " +
+             "Nova drives FortiClient: with Fortinet's FortiClientTools command line when it is on this PC (silent and fastest — ask IT for “FortiClientTools, SSLVPNcmdline”), otherwise your free FortiClient window (Nova opens it and presses Connect). " +
+             "When the VPN is up, Explorer and your O: N: S: drives work as usual.");
+        page.Add(Th.Check("Use the Office VPN companion (shows the 🌐 icon beside the clock)", OfficeVpn.On, v => OfficeVpn.On = v));
+        page.Add(Th.Check("🔁 Reconnect automatically after a drop, sleep or a Wi-Fi change", OfficeVpn.Auto, v => OfficeVpn.Auto = v));
+        TextBox Field(string label, string value, int w = 320, bool pw = false)
+        {
+            var r = page.Add(Th.Row(false));
+            r.Controls.Add(new Label { Text = label, AutoSize = false, Width = 190, ForeColor = Th.Muted, Font = Th.F(9.5f), TextAlign = ContentAlignment.MiddleLeft, Height = 28 });
+            var b = Th.Box(false, 1, pw); if (b is SpellBox sb) sb.Off = true;
+            b.Width = w; b.Text = value; r.Controls.Add(b); return b;
+        }
+        var prof = Field("FortiClient connection name", OfficeVpn.Profile);
+        var host = Field("Remote gateway : port", OfficeVpn.Host);
+        var user = Field("Username", OfficeVpn.User);
+        var pw = Field("Password (command line only)", OfficeVpn.Password.Length > 0 ? "••••••••" : "", 220, true);
+        var probe = Field("Office server to check", OfficeVpn.Probe, 220);
+        var toolRow = page.Add(Th.Row(false));
+        var tool = OfficeVpn.Tool();
+        var toolLbl = Th.L(tool != null ? "✓ FortiClientTools found: " + tool : OfficeVpn.Gui() != null ? "FortiClientTools not found — Nova will use your free FortiClient window" : "⚠ FortiClient is not installed", 9.5f, tool != null ? Th.Good : Th.Warn);
+        toolRow.Controls.Add(Th.B("📁 FortiSSLVPNclient.exe…", () =>
+        {
+            using var d = new OpenFileDialog { Filter = "FortiSSLVPNclient.exe|FortiSSLVPNclient.exe|Programs|*.exe", Title = "FortiClientTools · SSLVPNcmdline · FortiSSLVPNclient.exe" };
+            if (d.ShowDialog(this) == DialogResult.OK) { OfficeVpn.ToolPath = d.FileName; toolLbl.Text = "✓ FortiClientTools: " + d.FileName; toolLbl.ForeColor = Th.Good; }
+        }));
+        toolRow.Controls.Add(toolLbl);
+        var st = page.Add(Th.Wrap(OfficeVpn.Line, 10, Th.AccentText), true);
+        var br = page.Add(Th.Row(false));
+        br.Controls.Add(Th.B("💾 Save", () =>
+        {
+            OfficeVpn.Profile = prof.Text.Trim(); OfficeVpn.Host = host.Text.Trim(); OfficeVpn.User = user.Text.Trim(); OfficeVpn.Probe = probe.Text.Trim();
+            if (pw.Text.Length > 0 && pw.Text != "••••••••") OfficeVpn.Password = pw.Text;
+            st.Text = "✓ Saved. " + OfficeVpn.Line;
+        }, true));
+        br.Controls.Add(Th.B("🟢 Connect now", () => { OfficeVpn.On = true; OfficeVpn.Connect(); }));
+        br.Controls.Add(Th.B("■ Disconnect", OfficeVpn.Disconnect));
+        br.Controls.Add(Th.B("🗂 Project sources…", Screens.Sources));
+        Note("🔐 The password is used only with the FortiClientTools command line. It is kept encrypted on this PC, locked to your Windows account — never in a backup, never sent to the phone or the AI. With your free FortiClient, Nova never needs it (FortiClient keeps it).", Th.Muted);
+        var t = new System.Windows.Forms.Timer { Interval = 1500 };
+        t.Tick += (_, _) => { if (st.IsDisposed) { t.Dispose(); return; } if (!st.Text.StartsWith("✓ Saved")) st.Text = OfficeVpn.Line; };
+        t.Start();
+    }
+
+    void SourcesPage()
+    {
+        Note("🗂 Pick the office folders (O: MZA-Projects · S: Site Projects · N: Archive) and local folders Nova should know for each project. Name each one (how Nova calls it in answers) and give its kind — the contract counts more than a letter. " +
+             "Their file names — and, if you choose, the text inside — join your emails in one project database, kept up to date while the folder is reachable. Every answer links to its email, file and page.");
+        var r = page.Add(Th.Row(false));
+        r.Controls.Add(Th.B("🗂 Open the project sources explorer", Screens.Sources, true));
+        r.Controls.Add(Th.B("⟳ List all again now", Projects.Indexer.Refresh));
+        foreach (var g in ProjectSources.All().GroupBy(x => x.P.Code))
+        {
+            page.Add(Th.L($"📁 {g.Key}", 11, Th.Text, true));
+            foreach (var (p, src) in g.OrderBy(x => ProjectSources.Rank(x.S.Kind)))
+            {
+                var stx = Projects.Status.TryGetValue(src.Path, out var x) ? (x.Phase == "listed" ? $"✓ {x.Files:N0} files" : x.Phase) : "⏳";
+                page.Add(Th.Wrap($"   {src.Name} · {src.Kind} · {(src.Depth == "text" ? "names + text" : "names")}{(src.Offline ? " · ⚡ offline copy" : "")} · {stx}\n   {src.Path}", 9.5f, Th.Muted), true);
+            }
+        }
+        if (ProjectSources.Offline.Line.Length > 0) Note(ProjectSources.Offline.Line, Th.AccentText);
+    }
+
     void PhoneLinkPage()
     {
         Note("Your phone gets Nova's data from this PC — every email with full text (all periods), attachment text, brief, email projects, project-file catalogue, ⭐ starred items, rules, prompts, profile, vocabulary and My Work — encrypted with the key in the QR code. 🔒 Private folders and files (wallet, password, bank…) never leave this PC.");

@@ -15,6 +15,8 @@ class Project
     public int Order;
     /// <summary>🧭 The client on this project: a name and the client's email domain (e.g. “Charbel · gefinorproperties.com”).</summary>
     public string Client = "";
+    /// <summary>🗂 The named folders of this project (office or local): name, kind, names-only or text, ⚡ offline copy.</summary>
+    public List<ProjectSource> Sources = new();
 }
 
 /// <summary>A line of the scan summary (a folder of your work folder).</summary>
@@ -905,6 +907,18 @@ static class Projects
                     if (r.Read()) list.Add(new Prog { Code = p.Code, Total = r.GetInt32(0), Done = r.IsDBNull(1) ? 0 : r.GetInt32(1) });
                 }
                 catch (Exception e) { Error = e.Message; Log.Warn("read all", "count: " + e.Message); }
+            var tf = ProjectSources.TextFolders().Where(f => !On || !Chosen().Any(p => p.Folders.Contains(f, StringComparer.OrdinalIgnoreCase))).Select(RootKey).ToList();
+            if (tf.Count > 0)
+                try
+                {
+                    using var c = Db();
+                    using var cmd = c.CreateCommand();
+                    cmd.CommandText = $"SELECT COUNT(*), SUM(CASE WHEN f.id IS NULL THEN 0 ELSE 1 END) FROM pnames p LEFT JOIN files f ON f.path=p.path WHERE ({Under(cmd, tf, "p.path")}) AND p.ext IN ({ExtIn(cmd)}) AND p.size <= $max";
+                    cmd.Parameters.AddWithValue("$max", max);
+                    using var r = cmd.ExecuteReader();
+                    if (r.Read()) list.Add(new Prog { Code = "🗂 sources", Total = r.GetInt32(0), Done = r.IsDBNull(1) ? 0 : r.GetInt32(1) });
+                }
+                catch (Exception e) { Log.Warn("read all", "count sources: " + e.Message); }
             Counts = list;
             // The "read" number of every project line, kept live while reading.
             foreach (var st in Status.Values.ToList()) try { st.Read = CountRead(st.Folder); } catch { }
@@ -917,7 +931,8 @@ static class Projects
         {
             List<string> res = new();
             long max = (long)FolderIndex.MaxMb * 1024 * 1024;
-            var folders = Chosen().SelectMany(p => p.Folders).Select(RootKey).ToList();
+            // 📖 the chosen projects (when “Read everything” is on) and every 🗂 source set to “names + text”
+            var folders = (On ? Chosen().SelectMany(p => p.Folders) : Enumerable.Empty<string>()).Concat(ProjectSources.TextFolders()).Select(RootKey).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             if (folders.Count == 0) return res;
             try
             {
@@ -943,7 +958,7 @@ static class Projects
             {
                 try
                 {
-                    if (!On) { Phase = "off"; Current = ""; wake.WaitOne(TimeSpan.FromMinutes(5)); continue; }
+                    if (!On && ProjectSources.TextFolders().Count == 0) { Phase = "off"; Current = ""; wake.WaitOne(TimeSpan.FromMinutes(5)); continue; }
                     if (DateTime.Now - counted > TimeSpan.FromSeconds(30)) Recount();
                     if (Paused) { Phase = "⏸ paused"; Current = ""; wake.WaitOne(TimeSpan.FromSeconds(30)); continue; }
                     if (!MayRun()) { Phase = $"⏸ paused — you are working (resumes after {Gentle.EndHour}:00 or when the PC is idle)"; Current = ""; wake.WaitOne(TimeSpan.FromSeconds(60)); continue; }

@@ -153,11 +153,23 @@ static class Related
             revs.Add(new JsonObject { ["rev"] = label, ["status"] = status, ["code"] = code, ["superseded"] = g.Key >= 0 && lastRev != null && g.Key < lastRev, ["events"] = events });
             if (g.Key >= 0) lastRev ??= g.Key;
         }
+        // 📄 The files with this number in the project folders and 🗂 sources (contract weight first, latest revision on top).
+        var files = new JsonArray();
+        try
+        {
+            var proj = mails.Select(Projects.ForMail).FirstOrDefault(p => p != null);
+            var folders = (proj != null ? new[] { proj } : Projects.All()).SelectMany(p => p.Folders.Concat((p.Sources ?? new()).Select(x => x.Path)))
+                .Where(f => !Projects.Private.IsMatch(f)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            foreach (var d in Projects.FindDoc(key, folders).Where(d => !Projects.Private.IsMatch(d.Path))
+                .OrderBy(d => d.Status == "latest" ? 0 : 1).ThenBy(d => ProjectSources.Of(d.Path) is { } x ? ProjectSources.Rank(x.S.Kind) : 7).Take(20))
+                files.Add(new JsonObject { ["path"] = d.Path, ["name"] = System.IO.Path.GetFileName(d.Path), ["rev"] = d.Rev, ["status"] = d.Status, ["src"] = ProjectSources.Tag(d.Path), ["cad"] = d.Cad });
+        }
+        catch (Exception e) { Log.Warn("find related · files", e.Message); }
         var title = mails.Select(h => Clean(h.Subject)).FirstOrDefault(t => t.Length > 0) ?? key;
         title = Regex.Replace(title, @"^.*?" + Regex.Escape(key) + @"[\s_\-]*(?:Rev|R)?\s?\d{0,2}[\s_\-]*", "", RegexOptions.IgnoreCase).Trim(' ', '-', '_');
         return new JsonObject
         {
-            ["t"] = "timeline", ["key"] = key, ["title"] = title, ["count"] = mails.Count, ["revs"] = revs,
+            ["t"] = "timeline", ["key"] = key, ["title"] = title, ["count"] = mails.Count, ["revs"] = revs, ["files"] = files,
             ["secs"] = Math.Round(sw.Elapsed.TotalSeconds, 1)
         };
     }
@@ -173,6 +185,8 @@ static class Related
                     Id = long.TryParse(e["id"]?.ToString(), out var id) ? id : 0,
                     Cells = new() { rv["rev"]?.ToString() ?? "", rv["status"]?.ToString() ?? "", e["date"]?.ToString() ?? "", e["icon"] + " " + e["what"], e["who"]?.ToString() ?? "", e["subject"]?.ToString() ?? "", e["atts"]?.ToString() ?? "" }
                 });
+        foreach (var f in (t["files"] as JsonArray ?? new()).OfType<JsonObject>())
+            r.Rows.Add(new Agent.Row { Id = 0, Cells = new() { "📄 File", f["status"]?.ToString() ?? "", f["rev"]?.ToString() is { Length: > 0 } rv2 ? "rev " + rv2 : "", f["src"]?.ToString() ?? "", "", f["name"]?.ToString() ?? "", f["path"]?.ToString() ?? "" } });
         return r;
     }
 }
@@ -226,6 +240,13 @@ class RelatedForm : WebPage
                 var h = MailIndex.ByIds(new[] { id }, 1, 0).FirstOrDefault();
                 if (h == null) break;
                 if (m["outlook"]?.ToString() is "true" or "True") Outlook.Open(h.Entry, h.StoreId); else Screens.MailAsk(h);
+                break;
+            }
+            case "file":
+            {
+                // only a file this timeline listed is opened
+                var pth = m["path"]?.ToString() ?? "";
+                if (last?["files"] is JsonArray fs && fs.OfType<JsonObject>().Any(f => f["path"]?.ToString() == pth)) Shell.Open(pth);
                 break;
             }
             case "outlook": Related.InOutlook(key); break;

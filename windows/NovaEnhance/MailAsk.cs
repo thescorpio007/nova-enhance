@@ -490,7 +490,7 @@ class MailAskForm : NovaForm
         "When sources disagree (spec vs BOQ vs drawing vs email), write a line starting with ⚠ CONFLICT: naming both values and both sources. " +
         "If something the prompt asks for is not in the sources, write 'Not found in your documents' for it — never invent values, clauses, dates or names. " +
         "Never bring in people, emails, projects or facts that are not in these sources (other email threads, earlier chats). " +
-        "Be technically precise: exact values, units, standards, clause numbers as written in the sources. This is a conversation: earlier questions and answers are given for context.";
+        "Be technically precise: exact values, units, standards, clause numbers as written in the sources. This is a conversation: earlier questions and answers are given for context. " + NovaSearch.Authority;
 
     const string CheckRules =
         "You are a strict technical checker. Compare the ANSWER with the SOURCES, statement by statement (ignore the 🎓 EXPERT ADVICE section). Reply with JSON only: " +

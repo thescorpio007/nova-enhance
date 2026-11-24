@@ -136,6 +136,39 @@ class NovaContext : ApplicationContext
 
         tray = new NotifyIcon { Icon = Th.AppIcon, Text = "Nova Enhance", Visible = true };
         Program.Tray = tray;
+        // 🌐 Office VPN: its own icon beside the clock (🟢 connected · 🟡 connecting · 🔴 not connected); click = connect.
+        var vpnTray = new NotifyIcon { Icon = OfficeVpn.IconFor(OfficeVpn.State.Off), Text = "Office VPN", Visible = OfficeVpn.On };
+        var vm = new ContextMenuStrip { Font = Th.F(10) };
+        var vStatus = new ToolStripMenuItem("…") { Enabled = false };
+        vm.Items.Add(vStatus);
+        vm.Items.Add(new ToolStripSeparator());
+        vm.Items.Add("🟢  Connect", null, (_, _) => OfficeVpn.Connect());
+        vm.Items.Add("■  Disconnect", null, (_, _) => OfficeVpn.Disconnect());
+        vm.Items.Add("🔁  Reconnect automatically", null, (s2, _) => { OfficeVpn.Auto = !OfficeVpn.Auto; });
+        vm.Items.Add(new ToolStripSeparator());
+        vm.Items.Add("🗂  Project sources (office folders)…", null, (_, _) => Screens.Sources());
+        vm.Items.Add("🛡  Open FortiClient", null, (_, _) => { if (OfficeVpn.Gui() is { } g) Shell.Open(g); });
+        vm.Items.Add("⚙  VPN settings", null, (_, _) => Screens.Settings("🌐 Office VPN"));
+        vm.Opening += (_, _) => { vStatus.Text = OfficeVpn.Line; ((ToolStripMenuItem)vm.Items[4]).Checked = OfficeVpn.Auto; };
+        vpnTray.ContextMenuStrip = vm;
+        vpnTray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) { if (OfficeVpn.Now is OfficeVpn.State.Up or OfficeVpn.State.UpNoServer) vpnTray.ShowBalloonTip(4000, "Office VPN", OfficeVpn.Line, ToolTipIcon.Info); else OfficeVpn.Connect(); } };
+        var vpnTick = new System.Windows.Forms.Timer { Interval = 2000 };
+        vpnTick.Tick += (_, _) =>
+        {
+            try
+            {
+                vpnTray.Visible = OfficeVpn.On;
+                if (!OfficeVpn.On) return;
+                vpnTray.Icon = OfficeVpn.IconFor(OfficeVpn.Now);
+                var t = OfficeVpn.Line;
+                vpnTray.Text = t.Length > 127 ? t[..127] : t;
+            }
+            catch { }
+        };
+        vpnTick.Start();
+        OfficeVpn.Start();
+        Task.Run(ProjectSources.Migrate);
+        ProjectSources.Offline.Start();
         // 🌐 Universal Nova: old installs keep their field (construction for an architecture profile); a first start shows the welcome.
         try { if (Persona.Fresh) new System.Windows.Forms.Timer { Interval = 1500, Enabled = true }.Tick += (s, _) => { ((System.Windows.Forms.Timer)s!).Stop(); new WelcomeForm().Show(); }; } catch { }
         Dots.Start();   // ● ○ ○ Nova is thinking — every "…" status in every window, and the tray icon
@@ -583,6 +616,16 @@ static class Screens
             case "files": FindFile(""); break;
             default: Settings(); break;
         }
+    }
+
+    static SourcesForm sources;
+
+    /// <summary>🗂 The project sources explorer (office and local folders per project).</summary>
+    public static void Sources()
+    {
+        if (Program.OffUi(Sources)) return;
+        if (sources == null || sources.IsDisposed) sources = new SourcesForm();
+        Show(sources);
     }
 
     static RelatedForm related;

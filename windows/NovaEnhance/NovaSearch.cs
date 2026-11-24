@@ -36,6 +36,10 @@ static class NovaSearch
             }.Where(x => x.Length > 0)) + (Notes.Count > 0 ? "\n    " + string.Join(" · ", Notes) : "");
     }
 
+    /// <summary>For the AI: how much each kind of source counts, and to say where every fact comes from.</summary>
+    public const string Authority = "Extracts are labelled with their source and kind in [brackets], e.g. [SLV · Contract · Contract]. Contractual weight: Contract (agreement, conditions) > Specifications > Drawings (approved / IFC) > Submittals (with the consultant's code) > BOQ / Cost > Correspondence (letters, RFIs, EIs) > Minutes > emails and other. " +
+        "When sources disagree, show both, newest first, mark ⚠, and say which one governs by that order. Every fact gets its [number]. If an office folder is said to be unreachable, say a newer file may exist there. ";
+
     static readonly Regex Stop = new("^(the|and|for|with|this|that|from|please|email|emails|what|which|about|check|find|send|give|nova|are|was|were|have|has|you|your|our|any|all|can|could|would|should|tell|show|me|my|is|in|on|of|to|a|an|it|be|by|at|or|as|do|does|did|how|why|when|where|who)$");
 
     static List<(DateTime At, List<Conversations.Item> Items)> histCache = new();
@@ -136,7 +140,18 @@ static class NovaSearch
             // Best first: what the names pointed to and what matches most words; one file can't take every place.
             r.Docs = r.Docs.Select(p => (p, sc: words.Count(w => (p.Text ?? "").Contains(w, StringComparison.OrdinalIgnoreCase)) + (Path.GetFileName(p.Path ?? "").ToLowerInvariant() is var nm && words.Any(w => nm.Contains(w)) ? 2 : 0)))
                 .OrderByDescending(x => x.sc).GroupBy(x => x.p.Path, StringComparer.OrdinalIgnoreCase).SelectMany(g => g.Take(3)).OrderByDescending(x => x.sc)
-                .Select(x => x.p).Take(o.MaxDocs).ToList();
+                .Select(x => x.p).Take(o.MaxDocs)
+                // 🗂 contractual weight among equals: the contract, then specifications, drawings, submittals, letters, minutes
+                .Select((p, i) => (p, i, k: ProjectSources.Of(p.Path) is { } src ? ProjectSources.Rank(src.S.Kind) : 7))
+                .OrderBy(x => x.i / 4).ThenBy(x => x.k).ThenBy(x => x.i).Select(x => x.p).ToList();
+            // ⚠ office folders of this project that can't be reached now (VPN down): a newer file may exist there
+            try
+            {
+                var off = ProjectSources.All().Where(x => r.Project == null || x.P.Code == r.Project.Code).Where(x => x.S.Path.StartsWith(@"\\") || ProjectSources.IsNetworkDrive(x.S.Path))
+                    .Where(x => !ProjectSources.Reach(x.S.Path)).Select(x => x.S.Name).Distinct().ToList();
+                if (off.Count > 0) r.Notes.Add($"⚠ not reachable now (VPN down?): {string.Join(", ", off)} — Nova used what it indexed before; a newer file may exist there");
+            }
+            catch { }
         }
 
         // ✉ Emails: the most specific words first (numbers, long words), the project code when there is one.

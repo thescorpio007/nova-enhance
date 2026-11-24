@@ -436,6 +436,7 @@ class NovaChat
                 }
                 foreach (var p in ns.Memory.Concat(ns.History)) sources.Add(new Src { Kind = "note", Label = p.Loc, Text = p.Text });
                 if (ns.Project != null) notes.Add($"📁 project {ns.Project.Code} detected");
+                notes.AddRange(ns.Notes.Where(n => n.StartsWith("⚠ not reachable")));
             }
             catch (Exception ex) { Log.Warn("Nova Chat", "Nova search: " + ex.Message); }
 
@@ -464,7 +465,7 @@ class NovaChat
         var sys = new StringBuilder("You are Nova, the user's assistant in Nova Enhance for Windows. Reply in the language of the question. ");
         if (sources.Count > 0)
             sys.Append("Numbered extracts from the user's own files and emails are given. Use them first, quote exact values (dimensions, ratings, codes, clauses, dates), and after each fact taken from them put its number in square brackets, e.g. [2]. " +
-                       "If two extracts disagree, write a line starting with ⚠ and cite both. If the extracts do not contain the answer, say so plainly, then you may add general knowledge clearly marked as such. Never invent document content. ");
+                       "If two extracts disagree, write a line starting with ⚠ and cite both. If the extracts do not contain the answer, say so plainly, then you may add general knowledge clearly marked as such. Never invent document content. " + NovaSearch.Authority);
         else sys.Append("Answer from general knowledge and say when something must be checked against the project documents or the local code/authority. ");
         sys.Append(detailed ? "Give a complete, well-structured answer with headings or bullets where useful. " : "Be concise: the direct answer first, then at most 6 short lines or bullets. ");
         if (sources.Any(x => x.Kind == "file"))

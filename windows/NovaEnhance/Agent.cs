@@ -147,6 +147,7 @@ TOOLS
 - thread: every email of a conversation, oldest first, with From / To / Cc domains. args: id (an email #id) or doc (a document number such as RS5-C7-ACC-AR-SSM-00038). Use it to see who sent what to whom and whether someone replied after.
 - log: the 📋 Submittal log (submissions, their {Tracker.UsShort} code / reply, status). args: types (WIR, MAR, SDS, SSM, PQS, RFI, MIR, MSS, TSR, LTR, EI, MOM…), projects (codes), from, to (yyyy-mm-dd), status (Open|Overdue|Closed|Code3/4).
 - followup: THE tool for “what did we send to X, and did X reply?” (a client, consultant, contractor). It finds every email sent by the user's colleagues (or args.from) with X in To or Cc, groups them per document number / thread, and checks each thread for a later email FROM X. args: to (X's names / addresses / company domain — use the CLIENT domain from the project list), from (optional; default = the user's colleagues), project (code), words / any_words (optional, e.g. submittal type codes), after, before (yyyy-mm-dd; default: the last 3 years). Only emails with X in TO count as requests (cc: true adds the Cc ones). Daily site reports (DSR) and minutes of meetings (MOM) are left out unless the user asks for them. It reads EVERY email (no newest-N cut) and also X's addresses found from X's own emails. Returns a count line, then one line per document: first sent (date, by whom, To or Cc), how many times, and X's reply (date, #id) matched by document number in any folder, or NO REPLY, or REPLIED … then ASKED AGAIN — NO REPLY since (count that as still waiting). Give ALL its lines in the answer table, not a sample.
+- files: search the user's PROJECT FILES (🗂 Project sources: contract, specifications, drawings, submittals, BOQ, letters, minutes on O:, S:, N: or local). args: doc (a document number — finds the file and its latest revision) or words (all-important words of the question), project (code), kinds (optional: Contract, Specifications, Drawings, Submittals, BOQ / Cost, Correspondence, Minutes). Returns passages labelled [Source · Kind] with the file path, highest contractual weight first. Use it when the question needs what a contract / spec / drawing SAYS, or to link an email to its file. Put the file path in a “File” column of the answer.
 - confirm: show the user 3 to 5 example emails (#ids) that you think match, with a question, and get ✓ / ✗ back. args: ids, question. You MUST call confirm once before the final answer, with the best examples you found.
 - draft: prepare an Outlook draft (never sent; the user checks and sends). args: to, cc, subject, body. Only when the user asked for a draft / reminder / email.
 - answer: the final result. args: text (short summary: what you searched and how you decided), columns (list of column names), rows (list of {{""id"": email #id or 0, ""cells"": [...]}}). Use a table whenever there is more than one item; one row per document / thread, newest first, with a status column such as ""✅ replied 18 Nov"" / ""⏳ no reply (3 days)"".
@@ -157,6 +158,7 @@ RULES
 - Ignore the filters shown in the window (period, status…): unless the user names a period, search the last 2 years.
 - When the user asks for a list / table / “show me all”, the answer MUST have rows (never write “below are…” without them). Keep requests for formal feedback / approval / review / comments; drop pure information forwards, MOMs and payment letters unless asked.
 - “Replied / formal response” = an email from that person or their company's domain on the same thread AFTER the request. A reply from the user's colleagues is not the client's reply.
+- When files and emails disagree, the contractual weight decides: Contract > Specifications > Drawings > Submittals (with the consultant's code) > BOQ > letters > minutes > emails — say which source wins and show both.
 - At most 11 steps. Never invent emails, numbers or names: only what the tools returned. If nothing matches, say so and suggest how to widen the search.
 - The result is shown in: {where}.";
     }
@@ -326,6 +328,41 @@ RULES
         return head + string.Join("\n", lines.Take(400)) + (lines.Count > 400 ? $"\n… {lines.Count - 400} older not shown" : "") + "\n";
     }
 
+    /// <summary>📄 The project files: a document by number (latest revision) or passages for words, labelled [Source · Kind], contract first.</summary>
+    static string ToolFiles(JsonObject a, CancellationToken ct)
+    {
+        var code = Projects.Canon(a["project"]?.ToString() ?? "");
+        var projs = Projects.All().Where(p => code.Length == 0 || p.Code.Equals(code, StringComparison.OrdinalIgnoreCase)).ToList();
+        var kinds = L(a["kinds"]);
+        var folders = projs.SelectMany(p => p.Folders.Concat((p.Sources ?? new()).Where(x => kinds.Count == 0 || kinds.Any(k => x.Kind.StartsWith(k, StringComparison.OrdinalIgnoreCase))).Select(x => x.Path)))
+            .Where(f => kinds.Count == 0 || ProjectSources.Of(f) is { } src && kinds.Any(k => src.S.Kind.StartsWith(k, StringComparison.OrdinalIgnoreCase)))
+            .Where(f => !Projects.Private.IsMatch(f)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (folders.Count == 0) return "No project folders" + (code.Length > 0 ? " for " + code : "") + ". The user can add them in 🗂 Project sources.";
+        var sb = new StringBuilder();
+        var down = ProjectSources.Unreachable();
+        if (down.Count > 0) sb.Append("⚠ not reachable now (VPN down?): ").Append(string.Join(", ", down)).Append(" — offline copies used where they exist.\n");
+        string Tag(string path) => ProjectSources.Tag(path) is { Length: > 0 } t ? "[" + t + "] " : "";
+        int RankOf(string path) => ProjectSources.Of(path) is { } x ? ProjectSources.Rank(x.S.Kind) : 7;
+        var doc = a["doc"]?.ToString()?.Trim() ?? "";
+        if (doc.Length > 0)
+        {
+            var hits = Projects.FindDoc(doc, folders).Where(h => !Projects.Private.IsMatch(h.Path)).Take(12).ToList();
+            sb.Append(hits.Count).Append(" file(s) for ").Append(doc).Append(":\n");
+            foreach (var h in hits.OrderBy(h => h.Status == "latest" ? 0 : 1).ThenBy(h => RankOf(h.Path)))
+                sb.Append("- ").Append(Tag(h.Path)).Append(h.Path).Append(h.Rev.Length > 0 ? " · rev " + h.Rev : "").Append(h.Status.Length > 0 ? " · " + h.Status : "").Append(h.Cad ? " · CAD" : "").Append('\n');
+            if (hits.Count == 0) sb.Append("Not found in the project files.\n");
+            return sb.ToString();
+        }
+        var words = L(a["words"]).SelectMany(w => w.Split(' ', StringSplitOptions.RemoveEmptyEntries)).Where(w => w.Length > 2 && !Projects.Private.IsMatch(w)).Distinct(StringComparer.OrdinalIgnoreCase).Take(12).ToList();
+        if (words.Count == 0) return "Give doc or words.";
+        var ps = Projects.Ask(folders, words, 40, 14, _ => { }, ct).OrderBy(p => RankOf(p.Path)).ThenByDescending(p => p.Score).Take(10).ToList();
+        sb.Append(ps.Count).Append(" passage(s), highest contractual weight first:\n");
+        foreach (var p in ps)
+            sb.Append("- ").Append(Tag(p.Path)).Append(p.Path).Append(p.Loc.Length > 0 ? " (" + p.Loc + ")" : "").Append(p.Status.Length > 0 ? " · " + p.Status : "").Append(":\n  ").Append(Short(p.Text, 700).Replace('\n', ' ')).Append('\n');
+        if (ps.Count == 0) sb.Append("Nothing found in the project files (text sources must be set to “Read the text”).\n");
+        return sb.ToString();
+    }
+
     static string ToolLog(JsonObject a, Session s, CancellationToken ct)
     {
         var o = new SubmittalLog.Options();
@@ -437,6 +474,7 @@ RULES
                     case "emails": got = await Task.Run(() => ToolEmails(args, s), ct); break;
                     case "thread": got = await Task.Run(() => ToolThread(args, s), ct); break;
                     case "log": got = await Task.Run(() => ToolLog(args, s, ct), ct); break;
+                    case "files": got = await Task.Run(() => ToolFiles(args, ct), ct); break;
                     case "followup": got = await Task.Run(() => ToolFollowup(args, s, host.Detail, ct), ct); break;
                     case "draft": got = ToolDraft(args); break;
                     case "confirm":
@@ -549,6 +587,7 @@ RULES
         "thread" => await Task.Run(() => ToolThread(args, s), ct),
         "followup" => await Task.Run(() => ToolFollowup(args, s, detail, ct), ct),
         "log" => await Task.Run(() => ToolLog(args, s, ct), ct),
+        "files" => await Task.Run(() => ToolFiles(args, ct), ct),
         _ => "unknown tool " + name
     };
 
