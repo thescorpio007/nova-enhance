@@ -1752,8 +1752,8 @@ class SettingsForm : NovaForm
         rn.Controls.Add(rule); rn.Controls.Add(Th.L("{name} {n} {ext} {date} — default “{name}_({n}){ext}” → SLV-ZUC-AR-MAR-00092_Rev01_(3).pdf", 9, Th.Muted));
 
         page.Add(Th.Section("Speed"));
-        Pick("Threads", new[] { ("auto", "Auto (32 small files · 8 big)"), ("8", "8"), ("16", "16"), ("32", "32"), ("64", "64"), ("128", "128") }, Transfer.Threads, v => Transfer.Threads = v);
-        Pick("Big files (≥ 100 MB)", new[] { ("1", "Unbuffered (/J) — faster for big files"), ("0", "Normal") }, Transfer.Unbuffered ? "1" : "0", v => Transfer.Unbuffered = v == "1");
+        Pick("Threads", new[] { ("auto", "Auto (VPN / network: 4–8 big files, 32 small · local: big one by one, 32 small)"), ("8", "8"), ("16", "16"), ("32", "32"), ("64", "64"), ("128", "128") }, Transfer.Threads, v => Transfer.Threads = v);
+        Pick("Big files (≥ 100 MB)", new[] { ("1", "Unbuffered (/J) for big local files (never over the VPN)"), ("0", "Normal") }, Transfer.Unbuffered ? "1" : "0", v => Transfer.Unbuffered = v == "1");
         Pick("Compression", new[] { ("auto", "Auto (if Windows and the server support it)"), ("off", "Off") }, Transfer.Compress, v => Transfer.Compress = v);
         Pick("Speed limit", new[] { ("none", "None"), ("gentle", "Gentle (leaves room for Outlook / Teams)"), ("low", "Low") }, Transfer.SpeedLimit, v => Transfer.SpeedLimit = v);
         page.Add(Th.Check("🌐 Over the VPN: pause when it drops, resume after", Transfer.PauseOnVpn, v => Transfer.PauseOnVpn = v));

@@ -308,7 +308,13 @@ static class Transfer
         var avg = files > 0 ? bytes / files : 0;
         var bigMode = avg >= 50L << 20 || (big > 0 && files < 40);
         // big files or only a few: one thread with a live % (threads do not speed up a single file); many files: many threads
-        j.Threads = bigMode || files <= 3 ? 1 : Threads == "auto" ? 32 : int.TryParse(Threads, out var t) ? Math.Clamp(t, 2, 128) : 16;
+        // Over the VPN / a network drive: buffered and in parallel (fills the line like Explorer or better); the live % comes from the network.
+        // Local: big files one at a time, unbuffered, with Robocopy's own live %.
+        var overNet = IsNetwork(j.Dest) || j.Sources.Any(IsNetwork);
+        int user = Threads == "auto" ? 0 : int.TryParse(Threads, out var t) ? Math.Clamp(t, 1, 128) : 16;
+        if (overNet) j.Threads = files <= 1 ? 1 : user > 0 ? user : bigMode ? (int)Math.Clamp(files, 4, 8) : 32;
+        else j.Threads = bigMode || files <= 3 ? 1 : user > 0 ? Math.Max(2, user) : 32;
+        var unbuffered = bigMode && !overNet;
 
         j.State = "running"; j.LogFile = Path.Combine(Paths.Logs, $"transfer-{j.Id}.log");
         try { File.Delete(j.LogFile); } catch { }
@@ -321,7 +327,7 @@ static class Transfer
             // the file list goes in chunks so a big selection never overflows Windows' command-line limit
             foreach (var chunk in Chunks(files2))
             {
-                var args = Args(j, it, chunk, fileMode, bigMode, privDirs, privFiles, renamedAway, excl);
+                var args = Args(j, it, chunk, fileMode, unbuffered, privDirs, privFiles, renamedAway, excl);
                 RunRobocopy(j, args, sw);
                 if (j.StopAsked || j.PauseAsked) break;
             }
@@ -450,17 +456,19 @@ static class Transfer
     /// <summary>Runs one Robocopy and follows its Unicode log: files done, bytes, speed, current file, failures.</summary>
     static readonly Regex Pct = new(@"^\s*(\d+(?:\.\d+)?)%\s*$", RegexOptions.Compiled);
 
-    static long NetBytes()
+    /// <summary>Bytes received and sent by this PC (the VPN adapter when it is up, otherwise every network adapter).</summary>
+    static (long Rx, long Tx) NetBytes()
     {
-        long t = 0;
+        long rx = 0, tx = 0;
         try
         {
-            foreach (var n in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
-                if (n.OperationalStatus == System.Net.NetworkInformation.OperationalStatus.Up && n.NetworkInterfaceType != System.Net.NetworkInformation.NetworkInterfaceType.Loopback)
-                { var st = n.GetIPStatistics(); t += st.BytesReceived + st.BytesSent; }
+            var all = System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces()
+                .Where(n => n.OperationalStatus == System.Net.NetworkInformation.OperationalStatus.Up && n.NetworkInterfaceType != System.Net.NetworkInformation.NetworkInterfaceType.Loopback).ToList();
+            var vpn = all.Where(n => n.Name.Equals(OfficeVpn.Iface, StringComparison.OrdinalIgnoreCase) || Regex.IsMatch(n.Description, "OpenConnect|Wintun|Fortinet SSL", RegexOptions.IgnoreCase)).ToList();
+            foreach (var n in vpn.Count > 0 ? vpn : all) { var st = n.GetIPStatistics(); rx += st.BytesReceived; tx += st.BytesSent; }
         }
         catch { }
-        return t;
+        return (rx, tx);
     }
 
     /// <summary>Runs one Robocopy and follows its Unicode log. Big files (one thread): the live % of the file being copied. Many files (many
@@ -477,7 +485,9 @@ static class Transfer
         var single = j.Threads <= 1;
         var overNet = IsNetwork(j.Dest) || j.Sources.Any(IsNetwork);
         long baseBytes = j.DoneBytes, curSize = -1; string openFirst = null;
-        long net0 = NetBytes(); var netAt = DateTime.Now; double netSpeed = 0;
+        var netStart = NetBytes(); var net0 = netStart; var netAt = DateTime.Now; double netSpeed = 0;
+        long confirmed = j.DoneBytes, startBytes = j.DoneBytes;
+        long Moved((long Rx, long Tx) a, (long Rx, long Tx) b) => Math.Max(Math.Max(0, b.Rx - a.Rx), Math.Max(0, b.Tx - a.Tx));   // one direction counts (S: → S: would count twice)
         var stopOnError = FileError == "stop" || FolderError == "stop";
 
         void Commit() { if (curSize >= 0) { j.DoneFiles++; j.Copied++; baseBytes += curSize; j.DoneBytes = baseBytes; curSize = -1; } }
@@ -498,7 +508,7 @@ static class Transfer
             var m = FileLine.Match(l);
             if (!m.Success || m.Groups[1].Value is "Same" or "*EXTRA File" or "New Dir" or "*EXTRA Dir" || !long.TryParse(m.Groups[2].Value, out var size)) return;
             if (single) { Commit(); curSize = size; j.Current = m.Groups[3].Value; }   // starts now: the % follows
-            else { j.DoneFiles++; j.Copied++; j.DoneBytes += size; j.Current = m.Groups[3].Value; }   // finished
+            else { j.DoneFiles++; j.Copied++; confirmed += size; j.DoneBytes = Math.Max(j.DoneBytes, confirmed); j.Current = m.Groups[3].Value; }   // finished
         }
 
         void Line(string line, bool complete)
@@ -540,8 +550,11 @@ static class Transfer
                 {
                     // many threads over the network: the speed the network really carries (files only report when finished)
                     var now = DateTime.Now; var nb = NetBytes(); var dt = (now - netAt).TotalSeconds;
-                    if (dt >= 1) { var v = Math.Max(0, nb - net0) / dt; netSpeed = netSpeed == 0 ? v : netSpeed * 0.6 + v * 0.4; net0 = nb; netAt = now; }
+                    if (dt >= 1) { var v = Moved(net0, nb) / dt; netSpeed = netSpeed == 0 ? v : netSpeed * 0.6 + v * 0.4; net0 = nb; netAt = now; }
                     j.Speed = netSpeed;
+                    // live %: what went over the network since this copy started (a little is protocol overhead), never past what is left
+                    var est = startBytes + (long)(Moved(netStart, nb) * 0.97);
+                    j.DoneBytes = Math.Max(confirmed, Math.Min(est, Math.Max(confirmed, j.TotalBytes - 1)));
                 }
                 else j.Speed = j.DoneBytes / secs;
                 Fire();
@@ -559,6 +572,7 @@ static class Transfer
         if (carry.Length > 0) Line(carry, true);
         var code = p.HasExited ? p.ExitCode : 16;
         if (single && code < 8 && !j.StopAsked && !j.PauseAsked) Commit();   // the last file finished
+        if (!single) j.DoneBytes = confirmed;   // exact figures once Robocopy has finished
         j.Proc = null;
         try { File.Delete(tmp); } catch { }
         return code;
