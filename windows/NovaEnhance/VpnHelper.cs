@@ -15,7 +15,7 @@ namespace NovaEnhance;
 static class VpnHelper
 {
     public const string TaskName = "Nova Enhance VPN helper";
-    public const int Version = 1;
+    public const int Version = 2;
     static string HelperDir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Nova Enhance VPN Helper");
     public static string Dir
     {
@@ -47,7 +47,8 @@ static class VpnHelper
         get
         {
             if (Sch($"/query /tn \"{TaskName}\"", out _) != 0) return false;
-            try { return File.ReadAllText(Path.Combine(HelperDir, "helper.ps1")).Contains("# nova-vpn-helper v" + Version + "\n"); } catch { return false; }
+            // line endings differ between the build and the PC: the version line is matched whatever ends it
+            try { return System.Text.RegularExpressions.Regex.IsMatch(File.ReadAllText(Path.Combine(HelperDir, "helper.ps1")), @"# nova-vpn-helper v" + Version + @"\s"); } catch { return false; }
         }
     }
 
@@ -94,15 +95,15 @@ static class VpnHelper
     static readonly object gate = new();
 
     /// <summary>Asks the helper for one job and waits for its answer: "" = done, otherwise what went wrong (or what it saw, for "look").</summary>
-    public static string Run(string action, string profile, int seconds = 45)
+    public static string Run(string action, string profile, int seconds = 45, params string[] extra)
     {
-        if (action is not ("oc-connect" or "oc-disconnect" or "forti-connect" or "forti-disconnect" or "look")) return "unknown job";
+        if (action is not ("oc-connect" or "oc-disconnect" or "forti-connect" or "forti-disconnect" or "cli-connect" or "cli-disconnect" or "look")) return "unknown job";
         lock (gate)
         {
             var id = Guid.NewGuid().ToString("N")[..12];
             var res = Path.Combine(Dir, "res.txt");
             try { File.Delete(res); } catch { }
-            File.WriteAllText(Path.Combine(Dir, "req.txt"), id + "\n" + action + "\n" + (profile ?? "") + "\n");
+            File.WriteAllText(Path.Combine(Dir, "req.txt"), id + "\n" + action + "\n" + (profile ?? "") + "\n" + string.Join("\n", extra.Select(x => (x ?? "").Replace("\n", " "))) + "\n");
             if (Sch($"/run /tn \"{TaskName}\"", out var o) != 0) return "the VPN helper could not be started: " + o.Trim();
             var until = DateTime.Now.AddSeconds(seconds);
             while (DateTime.Now < until)
@@ -139,8 +140,8 @@ $def.RegistrationInfo.Description = 'Nova Enhance: presses Connect / Disconnect 
 $def.Principal.UserId = $user
 $def.Principal.LogonType = 3
 $def.Principal.RunLevel = 1
-$def.Settings.ExecutionTimeLimit = 'PT2M'
-$def.Settings.MultipleInstances = 2
+$def.Settings.ExecutionTimeLimit = 'PT0S'
+$def.Settings.MultipleInstances = 0
 $def.Settings.DisallowStartIfOnBatteries = $false
 $def.Settings.StopIfGoingOnBatteries = $false
 $def.Settings.Hidden = $true
@@ -153,7 +154,7 @@ $svc.GetFolder('\').RegisterTaskDefinition('__TASK__', $def, 6, $user, $null, 3,
 
     // ------------------------------------------------------------------ the helper script (installed in Program Files)
 
-    const string Script = @"# nova-vpn-helper v1
+    const string Script = @"# nova-vpn-helper v2
 param([string]$Dir)
 $ErrorActionPreference = 'Stop'
 $res = Join-Path $Dir 'res.txt'
@@ -163,9 +164,10 @@ try {
   if (-not (Test-Path $req)) { exit 0 }
   if (((Get-Date) - (Get-Item $req).LastWriteTime).TotalSeconds -gt 90) { exit 0 }
   $l = (Get-Content $req -Raw) -split ""`n""
+  Remove-Item $req -Force
   $id = $l[0].Trim(); $act = $l[1].Trim(); $prof = $l[2].Trim()
   if ($id -notmatch '^[0-9a-f]{12}$') { exit 0 }
-  if ($act -notin @('oc-connect','oc-disconnect','forti-connect','forti-disconnect','look')) { throw 'unknown job' }
+  if ($act -notin @('oc-connect','oc-disconnect','forti-connect','forti-disconnect','cli-connect','cli-disconnect','look')) { throw 'unknown job' }
   if ($prof -notmatch '^[\w .\-]{0,64}$') { throw 'bad server name' }
   Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
   Add-Type -ReferencedAssemblies UIAutomationClient, UIAutomationTypes, WindowsBase -TypeDefinition @'
@@ -201,18 +203,42 @@ public static class NovaVpn {
   static AutomationElement Btn(AutomationElement w, string name) {
     return All(w, ControlType.Button).FirstOrDefault(b => N(b).Replace(""&"", """").Equals(name, StringComparison.OrdinalIgnoreCase));
   }
+  [DllImport(""user32.dll"")] static extern bool IsWindowVisible(IntPtr h);
+  static List<IntPtr> Handles(string pre, string title) {
+    var ids = Pids(pre); var list = new List<IntPtr>();
+    EnumWindows(delegate (IntPtr h, IntPtr l) {
+      uint pid; GetWindowThreadProcessId(h, out pid);
+      if (!ids.Contains((int)pid) || !IsWindowVisible(h) || GetWindow(h, 4) != IntPtr.Zero) return true;
+      var sb = new StringBuilder(256); GetWindowText(h, sb, 256);
+      if (sb.ToString().IndexOf(title, StringComparison.OrdinalIgnoreCase) >= 0) list.Add(h);
+      return true;
+    }, IntPtr.Zero);
+    return list;
+  }
   public static AutomationElement Win(string pre, string title, int seconds) {
     for (int i = 0; i < seconds; i++) {
-      var ids = Pids(pre); AutomationElement first = null;
-      foreach (AutomationElement w in AutomationElement.RootElement.FindAll(TreeScope.Children, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Window))) {
-        try { if (!ids.Contains(w.Current.ProcessId) || N(w).IndexOf(title, StringComparison.OrdinalIgnoreCase) < 0) continue; } catch { continue; }
+      AutomationElement first = null;
+      foreach (var h in Handles(pre, title)) {
+        AutomationElement w; try { w = AutomationElement.FromHandle(h); } catch { continue; }
+        if (w == null) continue;
         if (first == null) first = w;
         if (Btn(w, ""Connect"") != null || Btn(w, ""Disconnect"") != null) return w;
       }
-      if (first != null && i >= 3) return first;
+      if (first != null && (i >= 3 || i == seconds - 1)) return first;
       Thread.Sleep(1000);
     }
     return null;
+  }
+  static readonly object logGate = new object();
+  public static Process Cli(string exe, string args, string pw, string log) {
+    System.IO.File.WriteAllText(log, ""openconnect "" + args + ""\r\n"");
+    var psi = new ProcessStartInfo(exe, args) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, WorkingDirectory = System.IO.Path.GetDirectoryName(exe) };
+    var p = new Process { StartInfo = psi };
+    DataReceivedEventHandler h = delegate (object o, DataReceivedEventArgs e) { if (e.Data == null) return; lock (logGate) { try { System.IO.File.AppendAllText(log, DateTime.Now.ToString(""HH:mm:ss "") + e.Data + ""\r\n""); } catch { } } };
+    p.OutputDataReceived += h; p.ErrorDataReceived += h;
+    p.Start(); p.BeginOutputReadLine(); p.BeginErrorReadLine();
+    p.StandardInput.WriteLine(pw); p.StandardInput.Close();
+    return p;
   }
   static string Press(AutomationElement b) {
     object p; if (b.TryGetCurrentPattern(InvokePattern.Pattern, out p)) { ((InvokePattern)p).Invoke(); return """"; }
@@ -280,6 +306,35 @@ public static class NovaVpn {
     'forti-connect'    { $r = [NovaVpn]::Do('Forti', 'FortiClient', $fc, 'Connect', '') }
     'forti-disconnect' { $r = [NovaVpn]::Do('Forti', 'FortiClient', $fc, 'Disconnect', '') }
     'look'             { $r = ""ok`n"" + [NovaVpn]::Look() }
+    'cli-disconnect'   { Get-Process -Name openconnect -ErrorAction SilentlyContinue | Stop-Process -Force; $r = '' }
+    'cli-connect' {
+      # only openconnect.exe from Program Files (administrators only can change it there); every value checked before use
+      $exe = @(""$env:ProgramFiles\OpenConnect-GUI\openconnect.exe"", ""$env:ProgramFiles\OpenConnect\openconnect.exe"", ""${env:ProgramFiles(x86)}\OpenConnect-GUI\openconnect.exe"", ""${env:ProgramFiles(x86)}\OpenConnect\openconnect.exe"") | Where-Object { Test-Path $_ } | Select-Object -First 1
+      if (-not $exe) { throw 'openconnect.exe is not in Program Files\OpenConnect-GUI' }
+      $gw = $l[3].Trim(); $port = $l[4].Trim(); $user = $l[5].Trim(); $pin = $l[6].Trim(); $blob = $l[7].Trim()
+      if ($gw -notmatch '^[A-Za-z0-9.\-]{1,253}$' -or $port -notmatch '^\d{1,5}$' -or $user -notmatch '^[\w.@\-]{1,64}$' -or $pin -notmatch '^(pin-sha256:[A-Za-z0-9+/=]{20,90})?$' -or $blob -notmatch '^[A-Za-z0-9+/=]+$') { throw 'bad connection values' }
+      if (Get-Process -Name openconnect -ErrorAction SilentlyContinue) { $r = '' } else {
+        Add-Type -AssemblyName System.Security
+        $pw = [Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String($blob), $null, 'CurrentUser'))
+        $a = '--protocol=fortinet --user=' + $user + ' --passwd-on-stdin --non-inter --no-dtls --reconnect-timeout 300 --interface ""Nova VPN""'
+        if ($pin) { $a += ' --servercert ' + $pin }
+        $vs = @('vpnc-script-win.js','vpnc-script.js') | ForEach-Object { Join-Path (Split-Path $exe) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if ($vs) { $a += ' --script ""' + $vs + '""' }
+        $a += ' ' + $gw + ':' + $port
+        $log = Join-Path $Dir 'openconnect.log'
+        $p = [NovaVpn]::Cli($exe, $a, $pw, $log)
+        $pw = $null
+        Start-Sleep -Seconds 12
+        if ($p.HasExited) {
+          $tail = (Get-Content $log -Tail 6 | Where-Object { $_ -notmatch 'cookie|passw|SVPN' }) -join ' / '
+          $r = 'openconnect stopped: ' + $tail
+        } else {
+          Set-Content -Path $res -Value ($id + ""`n"" + 'ok') -Encoding UTF8
+          $p.WaitForExit()
+          exit 0
+        }
+      }
+    }
   }
   if ($r -eq '') { $r = 'ok' }
   Set-Content -Path $res -Value ($id + ""`n"" + $r) -Encoding UTF8

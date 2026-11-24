@@ -45,8 +45,22 @@ static class OfficeVpn
     /// <summary>🔓 OpenConnect VPN (open source, “Fortinet SSL VPN” protocol): its program and the server name saved in it.</summary>
     public static string OcPath { get => Store.Str("win_vpn_oc", ""); set => Store.Set("win_vpn_oc", value); }
     public static string OcProfile { get => Store.Str("win_vpn_oc_profile", "AHMED-MZA"); set => Store.Set("win_vpn_oc_profile", value); }
-    /// <summary>"oc" = OpenConnect first, FortiClient if it fails · "forti" = the other way round.</summary>
+    /// <summary>Which way first: "cli" = OpenConnect command line · "oc" = OpenConnect window · "forti" = FortiClient; then the others.</summary>
     public static string Order { get => Store.Str("win_vpn_order", "oc"); set => Store.Set("win_vpn_order", value); }
+    /// <summary>The office firewall's certificate as OpenConnect pins it (pin-sha256:…) — only this server is accepted by the command line.</summary>
+    public static string Pin { get => Store.Str("win_vpn_pin", ""); set => Store.Set("win_vpn_pin", value); }
+
+    /// <summary>openconnect.exe — only from Program Files (only administrators can change it there; the admin helper runs nothing else).</summary>
+    public static string Cli()
+    {
+        foreach (var d in new[] { Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86) })
+            foreach (var sub in new[] { "OpenConnect-GUI", "OpenConnect", "openconnect" })
+            {
+                var f = Path.Combine(d, sub, "openconnect.exe");
+                if (File.Exists(f)) return f;
+            }
+        return null;
+    }
     public static string ToolPath { get => Store.Str("win_vpn_tool", ""); set => Store.Set("win_vpn_tool", value); }
     public static string Password { get => Store.Secret("win_vpn_pw"); set => Store.SetSecret("win_vpn_pw", value ?? ""); }
 
@@ -128,22 +142,39 @@ static class OfficeVpn
         }, IntPtr.Zero);
     }
 
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+
+    /// <summary>The program's visible windows, from Windows' own window list (UI Automation's top-level list can miss Electron / Qt windows).</summary>
+    static List<IntPtr> Handles(HashSet<int> ids)
+    {
+        var list = new List<IntPtr>();
+        EnumWindows((h, _) =>
+        {
+            GetWindowThreadProcessId(h, out var pid);
+            if (!ids.Contains((int)pid) || !IsWindowVisible(h) || GetWindow(h, 4) != IntPtr.Zero) return true;
+            var sb = new StringBuilder(256); GetWindowText(h, sb, 256);
+            if (Regex.IsMatch(sb.ToString(), "Forti|OpenConnect", RegexOptions.IgnoreCase)) list.Add(h);
+            return true;
+        }, IntPtr.Zero);
+        return list;
+    }
+
     static System.Windows.Automation.AutomationElement AppWindow(string[] names, int seconds, Func<System.Windows.Automation.AutomationElement, bool> good = null)
     {
-        var root = System.Windows.Automation.AutomationElement.RootElement;
-        var cond = new System.Windows.Automation.PropertyCondition(System.Windows.Automation.AutomationElement.ControlTypeProperty, System.Windows.Automation.ControlType.Window);
         for (int i = 0; i < Math.Max(1, seconds); i++)
         {
             var ids = Pids(names);
             System.Windows.Automation.AutomationElement first = null;
             if (ids.Count > 0)
-                foreach (System.Windows.Automation.AutomationElement w in root.FindAll(System.Windows.Automation.TreeScope.Children, cond))
+                foreach (var h in Handles(ids))
                 {
-                    try { if (!ids.Contains(w.Current.ProcessId)) continue; } catch { continue; }
+                    System.Windows.Automation.AutomationElement w;
+                    try { w = System.Windows.Automation.AutomationElement.FromHandle(h); } catch { continue; }
+                    if (w == null) continue;
                     first ??= w;
-                    if (good == null || good(w)) return w;
+                    try { if (good == null || good(w)) return w; } catch { }
                 }
-            if (i == seconds - 1 && first != null) return first;
+            if (i >= Math.Min(3, seconds - 1) && first != null && (good == null || i == seconds - 1)) return first;
             if (seconds > 1) Thread.Sleep(1000);
         }
         return null;
@@ -154,7 +185,7 @@ static class OfficeVpn
 
     // ------------------------------------------------------------------ status
 
-    static bool VpnAdapter(NetworkInterface n) => Regex.IsMatch(n.Description + " " + n.Name, "Forti|OpenConnect|Wintun|TAP-Windows|" + Regex.Escape(OcProfile), RegexOptions.IgnoreCase);
+    static bool VpnAdapter(NetworkInterface n) => Regex.IsMatch(n.Description + " " + n.Name, "Forti|OpenConnect|Wintun|TAP-Windows|Nova VPN|" + Regex.Escape(OcProfile), RegexOptions.IgnoreCase);
 
     static bool AdapterUp()
     {
@@ -231,6 +262,7 @@ static class OfficeVpn
         {
             try
             {
+                if (Process.GetProcessesByName("openconnect").Any() && VpnHelper.Installed) VpnHelper.Run("cli-disconnect", "");
                 if (Pids(OcProcs).Count > 0) { if (VpnHelper.Installed) VpnHelper.Run("oc-disconnect", ""); else GuiButton(OcProcs, "Disconnect"); }
                 if (Tool() is { } t) Run(t, "disconnect", 20000);
                 else if (Pids(FortiProcs).Count > 0) GuiButton(FortiProcs, "Disconnect");
@@ -255,19 +287,35 @@ static class OfficeVpn
         Set(State.Connecting, $"🟡 Connecting to {Host}…" + (tries > 1 ? $" try {tries}" : ""));
         // A · both: OpenConnect first and FortiClient if it fails (or the other way round); after a failed try the other one goes first
         var ways = new List<string>();
+        if (Cli() != null && VpnHelper.Installed && Password.Length > 0) ways.Add("cli");
         if (Oc() != null) ways.Add("oc");
         if (Tool() != null || Gui() != null) ways.Add("forti");
         if (ways.Count == 0) { Set(State.Down, "🔴 Neither OpenConnect nor FortiClient is installed on this PC"); Want = false; return; }
-        if (Order == "forti") ways.Reverse();
-        if (ways.Count == 2 && tries % 2 == 0) ways.Reverse();
+        if (ways.Remove(Order)) ways.Insert(0, Order);
+        // after a failed try the next one goes first
+        if (ways.Count > 1) { var k = (tries - 1) % ways.Count; ways = ways.Skip(k).Concat(ways.Take(k)).ToList(); }
         var why = new List<string>();
         foreach (var way in ways)
         {
-            var r = way == "oc" ? ConnectOc() : ConnectForti();
+            var r = way == "cli" ? ConnectCli() : way == "oc" ? ConnectOc() : ConnectForti();
             if (r.Length == 0) return;
             why.Add(r); Log.Warn("office vpn", r);
         }
         Set(State.Down, "🔴 " + string.Join(" · ", why));
+    }
+
+    /// <summary>⌨ OpenConnect's command line, started hidden by the 🛡 helper (it needs administrator rights): it connects with your password
+    /// (passed to the helper encrypted for your Windows account), accepts only the pinned office certificate, and stays running while connected.</summary>
+    static string ConnectCli()
+    {
+        Way = "OpenConnect command line";
+        try
+        {
+            var blob = Convert.ToBase64String(System.Security.Cryptography.ProtectedData.Protect(Encoding.UTF8.GetBytes(Password), null, System.Security.Cryptography.DataProtectionScope.CurrentUser));
+            var r = VpnHelper.Run("cli-connect", "", 45, Gateway, Port.ToString(), User, Pin, blob);
+            return r.Length == 0 ? "" : "OpenConnect command line: " + r;
+        }
+        catch (Exception e) { return "OpenConnect command line: " + e.Message; }
     }
 
     static string ConnectOc()
@@ -433,8 +481,18 @@ static class OfficeVpn
         }
         catch { }
         if (hs.StartsWith("set up (")) L(null, "Seen by the helper: " + VpnHelper.Run("look", "", 30).Replace("\n", "\n   "));
+        var cli = Cli();
+        L(cli != null ? true : null, cli != null ? $"OpenConnect command line: {cli} · office certificate pin {(Pin.Length > 0 ? "set" : "NOT set (paste it from OpenConnect ▸ Edit ▸ Server Certificate)")}" : "OpenConnect command line (openconnect.exe) not in Program Files\\OpenConnect-GUI — the command-line way is off");
+        try
+        {
+            var lf = Path.Combine(VpnHelper.Dir, "openconnect.log");
+            if (File.Exists(lf))
+                foreach (var ln in File.ReadAllLines(lf).Where(x => x.Trim().Length > 0 && !Regex.IsMatch(x, "cookie|passw|SVPN", RegexOptions.IgnoreCase)).TakeLast(8))
+                    sb.Append("   openconnect: ").Append(ln.Length > 220 ? ln[..220] : ln).Append('\n');
+        }
+        catch { }
         var oc = Oc();
-        L(oc != null ? true : null, oc != null ? $"OpenConnect {Ver(oc)} installed · {(Pids(OcProcs).Count > 0 ? "running" : "not running")} · server “{OcProfile}” · order: {(Order == "forti" ? "FortiClient first, then OpenConnect" : "OpenConnect first, then FortiClient")}" : "OpenConnect-GUI not found (choose openconnect-gui.exe in Settings if it is installed elsewhere)");
+        L(oc != null ? true : null, oc != null ? $"OpenConnect {Ver(oc)} installed · {(Pids(OcProcs).Count > 0 ? "running" : "not running")} · server “{OcProfile}” · first: {(Order == "cli" ? "command line" : Order == "forti" ? "FortiClient" : "OpenConnect window")}" : "OpenConnect-GUI not found (choose openconnect-gui.exe in Settings if it is installed elsewhere)");
         if (oc != null && Pids(OcProcs).Count > 0)
             try
             {
