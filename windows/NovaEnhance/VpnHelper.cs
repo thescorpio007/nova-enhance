@@ -17,9 +17,12 @@ namespace NovaEnhance;
 static class VpnHelper
 {
     public const string TaskName = "Nova Enhance VPN helper";
-    public const int Version = 3;
+    public const int Version = 4;
     static string HelperDir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Nova Enhance VPN Helper");
     static string HelperExe => Path.Combine(HelperDir, "NovaEnhance.exe");
+    /// <summary>🌐 Nova's own VPN engine (OpenConnect), copied here by the set-up: only administrators can change it.</summary>
+    public static string EngineDir => Path.Combine(HelperDir, "openconnect");
+    public static string EngineExe => Path.Combine(EngineDir, "openconnect.exe");
     public static string Dir
     {
         get
@@ -105,6 +108,16 @@ static class VpnHelper
             Directory.CreateDirectory(HelperDir);
             Directory.CreateDirectory(Path.Combine(HelperDir, "x"));
             File.Copy(Environment.ProcessPath!, HelperExe, true);
+            // 🌐 the VPN engine shipped with Nova (official OpenConnect release) → Program Files, beside the helper
+            var eng = Path.Combine(Path.GetDirectoryName(Environment.ProcessPath!)!, "openconnect");
+            if (Directory.Exists(eng))
+            {
+                foreach (var p in Process.GetProcessesByName("openconnect"))
+                    try { if (string.Equals(p.MainModule?.FileName, EngineExe, StringComparison.OrdinalIgnoreCase)) { p.Kill(); p.WaitForExit(5000); } } catch { }
+                Directory.CreateDirectory(EngineDir);
+                foreach (var f in Directory.GetFiles(EngineDir)) try { File.Delete(f); } catch { }
+                foreach (var f in Directory.GetFiles(eng)) File.Copy(f, Path.Combine(EngineDir, Path.GetFileName(f)), true);
+            }
             File.WriteAllText(Path.Combine(HelperDir, "version.txt"), Version.ToString());
             // the helper unpacks its native parts into Program Files (not your Temp folder, which any program could change)
             static string X(string s) => System.Security.SecurityElement.Escape(s);
@@ -238,7 +251,7 @@ static class VpnHelper
                     foreach (var p in Process.GetProcessesByName("openconnect")) try { p.Kill(); } catch { }
                     Answer("");
                     break;
-                case "cli-connect": return Cli(At(3), At(4), At(5), At(6), At(7), dir, Answer);
+                case "cli-connect": return Cli(At(3), dir, Answer);
                 case "look": Answer("ok\n" + Look()); break;
             }
         }
@@ -248,39 +261,86 @@ static class VpnHelper
 
     static readonly object logGate = new();
 
-    /// <summary>⌨ openconnect.exe (only from Program Files), every value checked; it keeps running while connected and this helper waits with it.</summary>
-    static int Cli(string gw, string port, string user, string pin, string blob, string dir, Action<string> answer)
+    /// <summary>⌨ openconnect.exe (Nova's engine or OpenConnect-GUI's, only from Program Files); every option checked; it keeps running while
+    /// connected and this helper waits with it.</summary>
+    static int Cli(string b64, string dir, Action<string> answer)
     {
         var exe = OfficeVpn.Cli();
-        if (exe == null) { answer("openconnect.exe is not in Program Files\\OpenConnect-GUI"); return 0; }
-        if (!Regex.IsMatch(gw, @"^[A-Za-z0-9.\-]{1,253}$") || !Regex.IsMatch(port, @"^\d{1,5}$") || !Regex.IsMatch(user, @"^[\w.@\-]{1,64}$")
-            || !Regex.IsMatch(pin, @"^(pin-sha256:[A-Za-z0-9+/=]{20,90})?$") || !Regex.IsMatch(blob, @"^[A-Za-z0-9+/=]+$")) { answer("bad connection values"); return 0; }
+        if (exe == null) { answer("the VPN engine is not installed — press 🛡 Set up the VPN helper again"); return 0; }
+        System.Text.Json.Nodes.JsonObject o;
+        try { o = System.Text.Json.Nodes.JsonNode.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(b64)))!.AsObject(); }
+        catch { answer("bad connection values"); return 0; }
+        string S(string k) => o[k]?.ToString()?.Trim() ?? "";
+        bool Ok(string v, string rx) => Regex.IsMatch(v, rx);
+        string Dec(string blob)
+        {
+            if (blob.Length == 0) return "";
+            if (!Ok(blob, @"^[A-Za-z0-9+/=]+$")) throw new Exception("bad secret");
+            return Encoding.UTF8.GetString(System.Security.Cryptography.ProtectedData.Unprotect(Convert.FromBase64String(blob), null, System.Security.Cryptography.DataProtectionScope.CurrentUser));
+        }
+        var proto = S("proto"); var gw = S("gw"); var port = S("port"); var user = S("user"); var pin = S("pin"); var group = S("group");
+        var otp = S("otp"); var iface = S("iface"); var log = S("log"); var proxy = S("proxy");
+        int.TryParse(S("rto"), out var rto); rto = Math.Clamp(rto == 0 ? 300 : rto, 10, 3600);
+        var dtls = !string.Equals(S("dtls"), "false", StringComparison.OrdinalIgnoreCase);
+        if (!OfficeVpn.Protocols.Any(p => p.Id == proto) || !Ok(gw, @"^[A-Za-z0-9.\-]{1,253}$") || !Ok(port, @"^\d{1,5}$") || !Ok(user, @"^[\w.@\\\-]{1,128}$")
+            || !Ok(pin, @"^(pin-sha256:[A-Za-z0-9+/=]{20,90})?$") || !Ok(group, @"^[\w .@\-]{0,64}$") || otp is not ("none" or "hotp" or "totp" or "")
+            || !Ok(iface, @"^[\w .\-]{1,40}$") || log is not ("normal" or "verbose" or "quiet" or "") || !Ok(proxy, @"^((https?|socks5?)://[\w.\-:@]+)?$"))
+        { answer("bad connection values"); return 0; }
+        // files the engine reads: must exist; a script it RUNS (as administrator) only from Program Files
+        string FileArg(string k) { var f = S(k); if (f.Length == 0) return ""; if (f.Contains('"') || !File.Exists(f)) throw new Exception(k + " file not found: " + f); return f; }
+        string ca, ucert, ukey, script;
+        try { ca = FileArg("cafile"); ucert = FileArg("ucert"); ukey = FileArg("ukey"); }
+        catch (Exception e) { answer(e.Message); return 0; }
+        var engDir = Path.GetDirectoryName(exe)!;
+        script = S("script");
+        var pf = new[] { Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86) };
+        if (script.Length > 0 && (!File.Exists(script) || script.Contains('"') || !pf.Any(d => Path.GetFullPath(script).StartsWith(d + "\\", StringComparison.OrdinalIgnoreCase))))
+        { answer("a custom vpnc script must be inside Program Files (it runs with administrator rights)"); return 0; }
+        if (script.Length == 0) script = new[] { "vpnc-script-win.js", "vpnc-script.js" }.Select(n => Path.Combine(engDir, n)).FirstOrDefault(File.Exists) ?? "";
         if (Process.GetProcessesByName("openconnect").Any()) { answer(""); return 0; }
-        string pw;
-        try { pw = Encoding.UTF8.GetString(System.Security.Cryptography.ProtectedData.Unprotect(Convert.FromBase64String(blob), null, System.Security.Cryptography.DataProtectionScope.CurrentUser)); }
+        string pw, otpSecret;
+        try { pw = Dec(S("pw")); otpSecret = otp is "hotp" or "totp" ? Dec(S("otpBlob")) : ""; }
         catch { answer("the password could not be read (another Windows account?)"); return 0; }
-        var a = $"--protocol=fortinet --user={user} --passwd-on-stdin --non-inter --no-dtls --reconnect-timeout 300 --interface \"Nova VPN\"";
-        if (pin.Length > 0) a += " --servercert " + pin;
-        var vs = new[] { "vpnc-script-win.js", "vpnc-script.js" }.Select(n => Path.Combine(Path.GetDirectoryName(exe)!, n)).FirstOrDefault(File.Exists);
-        if (vs != null) a += $" --script \"{vs}\"";
-        a += $" {gw}:{port}";
-        var log = Path.Combine(dir, "openconnect.log");
-        File.WriteAllText(log, $"{DateTime.Now:HH:mm:ss} openconnect {a}\r\n");
-        var p = new Process { StartInfo = new ProcessStartInfo(exe, a) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, WorkingDirectory = Path.GetDirectoryName(exe)! } };
-        DataReceivedEventHandler h = (_, e) => { if (e.Data == null) return; lock (logGate) try { File.AppendAllText(log, $"{DateTime.Now:HH:mm:ss} {e.Data}\r\n"); } catch { } };
+        if (otpSecret.Contains('"') || otpSecret.Contains(' ')) { answer("bad OTP secret"); return 0; }
+        var a = new StringBuilder($"--protocol={proto} --user=\"{user}\" --passwd-on-stdin --non-inter --reconnect-timeout {rto} --interface \"{iface}\"");
+        if (!dtls) a.Append(" --no-dtls");
+        if (pin.Length > 0) a.Append(" --servercert ").Append(pin);
+        if (group.Length > 0) a.Append($" --authgroup=\"{group}\"");
+        if (ca.Length > 0) a.Append($" --cafile=\"{ca}\"");
+        if (ucert.Length > 0) a.Append($" --certificate=\"{ucert}\"");
+        if (ukey.Length > 0) a.Append($" --sslkey=\"{ukey}\"");
+        if (otpSecret.Length > 0) a.Append($" --token-mode={otp} --token-secret={otpSecret}");
+        if (proxy.Length > 0) a.Append($" --proxy={proxy}");
+        if (log == "verbose") a.Append(" -v"); else if (log == "quiet") a.Append(" -q");
+        if (script.Length > 0) a.Append($" --script \"{script}\"");
+        a.Append($" {gw}:{port}");
+        var args = a.ToString();
+        var logf = Path.Combine(dir, "openconnect.log");
+        var shown = Regex.Replace(args, @"--token-secret=\S+", "--token-secret=••••");
+        File.WriteAllText(logf, $"{DateTime.Now:HH:mm:ss} openconnect {shown}\r\n");
+        var p = new Process { StartInfo = new ProcessStartInfo(exe, args) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, WorkingDirectory = engDir } };
+        DataReceivedEventHandler h = (_, e) =>
+        {
+            if (e.Data == null) return;
+            // session codes and passwords never reach the log
+            var line = Regex.IsMatch(e.Data, "cookie|passw|SVPN|token-secret", RegexOptions.IgnoreCase) && !e.Data.StartsWith("Password:") ? Regex.Replace(e.Data, @"(=|:)\s*\S+", "$1 ••••") : e.Data;
+            lock (logGate) try { File.AppendAllText(logf, $"{DateTime.Now:HH:mm:ss} {line}\r\n"); } catch { }
+        };
         p.OutputDataReceived += h; p.ErrorDataReceived += h;
         p.Start(); p.BeginOutputReadLine(); p.BeginErrorReadLine();
         p.StandardInput.WriteLine(pw); p.StandardInput.Close();
-        pw = null;
+        pw = null; otpSecret = null;
         if (p.WaitForExit(12000))
         {
             string tail;
-            lock (logGate) tail = string.Join(" / ", File.ReadAllLines(log).Where(x => !Regex.IsMatch(x, "cookie|passw|SVPN", RegexOptions.IgnoreCase)).TakeLast(6));
-            answer("openconnect stopped: " + tail);
+            lock (logGate) tail = string.Join(" / ", File.ReadAllLines(logf).Where(x => !Regex.IsMatch(x, "cookie|passw|SVPN", RegexOptions.IgnoreCase)).TakeLast(6));
+            var why = OfficeVpn.ReadEngineLog().Reason;
+            answer((why.Length > 0 ? why + " — " : "") + "engine stopped: " + tail);
             return 0;
         }
         answer("");
         p.WaitForExit();
+        lock (logGate) try { File.AppendAllText(logf, $"{DateTime.Now:HH:mm:ss} — engine stopped (code {p.ExitCode})\r\n"); } catch { }
         return 0;
     }
 

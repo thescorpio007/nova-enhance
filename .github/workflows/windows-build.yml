@@ -78,6 +78,24 @@ jobs:
           $f = Get-Item out\NovaEnhance.exe
           Write-Host ("::notice title=App::NovaEnhance.exe {0:N1} MB" -f ($f.Length / 1MB))
 
+      - name: 🌐 Nova VPN engine (OpenConnect, official release, checked by its SHA-256 before use)
+        run: |
+          $url = "https://www.infradead.org/openconnect-gui/download/openconnect-gui-1.6.2-win64.exe"
+          $want = "de08d8968e40e219932d01025521f879178ec99246802db488c0fdac9fcef11a"
+          $f = "$env:RUNNER_TEMP\oc-setup.exe"
+          for ($i = 1; $i -le 3; $i++) { try { Invoke-WebRequest -Uri $url -OutFile $f -UseBasicParsing; break } catch { Write-Host "download try $i failed: $_"; Start-Sleep 20 } }
+          $got = (Get-FileHash $f -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $want) { Write-Host "::error title=VPN engine::SHA-256 does not match the official release ($got) — not used"; exit 1 }
+          $x = "$env:RUNNER_TEMP\oc-x"
+          & 7z x $f "-o$x" -y | Out-Null
+          $exe = Get-ChildItem $x -Recurse -Filter openconnect.exe | Select-Object -First 1
+          if (-not $exe) { Write-Host "::error title=VPN engine::openconnect.exe not found in the release"; exit 1 }
+          $d = New-Item -ItemType Directory -Force -Path out\openconnect
+          Get-ChildItem $exe.DirectoryName -File | Where-Object { $_.Name -notmatch '^(Qt6|openconnect-gui|Uninstall|qt\.conf)' } | Copy-Item -Destination $d
+          $v = & "$d\openconnect.exe" --version 2>&1 | Select-Object -First 1
+          if ($LASTEXITCODE -ne 0 -and -not "$v") { Write-Host "::error title=VPN engine::openconnect.exe does not start"; exit 1 }
+          Write-Host ("::notice title=VPN engine::{0} · {1} files · {2:N1} MB" -f "$v", (Get-ChildItem $d).Count, ((Get-ChildItem $d | Measure-Object Length -Sum).Sum / 1MB))
+
       - name: ✦ Nova tab for Office (native add-in, 64-bit and 32-bit)
         run: |
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath

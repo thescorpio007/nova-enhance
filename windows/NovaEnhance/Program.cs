@@ -58,13 +58,22 @@ static class Program
         var officeAct = officeIdx >= 0 && officeIdx + 1 < args.Length ? args[officeIdx + 1] : null;
         // 🔗 nova:mail/123 — a ✉ Open link clicked in an Excel / Word export.
         var openLink = args.FirstOrDefault(x => x.StartsWith("nova:", StringComparison.OrdinalIgnoreCase));
+        // 📦 Explorer ▸ Nova transfer: NovaEnhance.exe --xfer <copy|cut|paste|…> "<path>" (Explorer starts one per selected item)
+        var xferIdx = Array.IndexOf(args, "--xfer");
+        var xferVerb = xferIdx >= 0 && xferIdx + 1 < args.Length ? args[xferIdx + 1] : null;
+        var xferPath = xferIdx >= 0 && xferIdx + 2 < args.Length ? args[xferIdx + 2] : "";
+        if (xferVerb != null)
+        {
+            try { File.WriteAllText(Path.Combine(Transfer.RequestDir, Guid.NewGuid().ToString("N") + ".req"), xferVerb + "\n" + xferPath); } catch { }
+        }
 
         using var mutex = new Mutex(true, "NovaEnhanceWindows-single", out bool first);
         if (!first)
         {
             try
             {
-                if (openLink != null)
+                if (xferVerb != null) EventWaitHandle.OpenExisting("NovaEnhanceWindows-xfer").Set();
+                else if (openLink != null)
                 {
                     File.WriteAllText(Path.Combine(Paths.Cache, "open-request.txt"), openLink);
                     EventWaitHandle.OpenExisting("NovaEnhanceWindows-open").Set();
@@ -94,7 +103,7 @@ static class Program
         Microsoft.Win32.SystemEvents.SessionEnding += (_, _) => Guard.CleanExit();
         TaskScheduler.UnobservedTaskException += (_, e) => { Log.Error("task", e.Exception); e.SetObserved(); };
 
-        Application.Run(new NovaContext(args.Contains("--tray") || StartSearch != null || StartOffice != null || StartOpen != null));
+        Application.Run(new NovaContext(args.Contains("--tray") || xferVerb != null || StartSearch != null || StartOffice != null || StartOpen != null));
         return 0;
     }
 
@@ -113,7 +122,7 @@ class NovaContext : ApplicationContext
     readonly NotifyIcon tray;
     readonly HotkeyWindow hot;
     readonly System.Windows.Forms.Timer timer;
-    readonly EventWaitHandle showEvt, searchEvt, openEvt;
+    readonly EventWaitHandle showEvt, searchEvt, openEvt, xferEvt;
     readonly List<EventWaitHandle> officeEvts = new();
     int ticks;
 
@@ -150,6 +159,8 @@ class NovaContext : ApplicationContext
         vm.Items.Add("■  Disconnect", null, (_, _) => OfficeVpn.Disconnect());
         vm.Items.Add("🔁  Reconnect automatically", null, (s2, _) => { OfficeVpn.Auto = !OfficeVpn.Auto; });
         vm.Items.Add(new ToolStripSeparator());
+        vm.Items.Add("🌐  Nova VPN window…", null, (_, _) => Screens.Vpn());
+        vm.Items.Add("📦  Transfers…", null, (_, _) => Screens.Transfers());
         vm.Items.Add("🗂  Project sources (office folders)…", null, (_, _) => Screens.Sources());
         vm.Items.Add("🛡  Open FortiClient", null, (_, _) => { if (OfficeVpn.Gui() is { } g) Shell.Open(g); });
         vm.Items.Add("⚙  VPN settings", null, (_, _) => Screens.Settings("🌐 Office VPN"));
@@ -275,6 +286,13 @@ class NovaContext : ApplicationContext
             try { var f = Path.Combine(Paths.Cache, "search-request.txt"); p = File.ReadAllText(f); File.Delete(f); } catch { }
             Program.UiContext.Post(_ => Screens.FolderSearch(p), null);
         }, null, -1, false);
+        // 📦 Nova transfer: requests from Explorer's right-click menu
+        Transfer.Start();
+        XferMenu.Apply();
+        PasteHook.Apply();
+        xferEvt = new EventWaitHandle(false, EventResetMode.AutoReset, "NovaEnhanceWindows-xfer");
+        ThreadPool.RegisterWaitForSingleObject(xferEvt, (_, _) => Transfer.ReadRequests(), null, -1, false);
+        Transfer.ReadRequests();   // Nova was started by the menu itself
         openEvt = new EventWaitHandle(false, EventResetMode.AutoReset, "NovaEnhanceWindows-open");
         ThreadPool.RegisterWaitForSingleObject(openEvt, (_, _) =>
         {
@@ -625,6 +643,24 @@ static class Screens
     static SourcesForm sources;
 
     /// <summary>🗂 The project sources explorer (office and local folders per project).</summary>
+    static VpnForm vpnWin;
+    /// <summary>🌐 Nova VPN window (Nova's own engine).</summary>
+    public static void Vpn()
+    {
+        if (Program.OffUi(Vpn)) return;
+        if (vpnWin == null || vpnWin.IsDisposed) vpnWin = new VpnForm();
+        Show(vpnWin);
+    }
+
+    static TransferForm xferWin;
+    /// <summary>📦 Nova transfer window (queue, progress, history).</summary>
+    public static void Transfers()
+    {
+        if (Program.OffUi(Transfers)) return;
+        if (xferWin == null || xferWin.IsDisposed) xferWin = new TransferForm();
+        Show(xferWin);
+    }
+
     public static void Sources()
     {
         if (Program.OffUi(Sources)) return;

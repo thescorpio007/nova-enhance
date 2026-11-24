@@ -57,6 +57,8 @@ static class OfficeVpn
     /// <summary>openconnect.exe — only from Program Files (only administrators can change it there; the admin helper runs nothing else).</summary>
     public static string Cli()
     {
+        // 🌐 Nova's own engine first (copied into Program Files by the 🛡 helper set-up), then an OpenConnect-GUI install
+        if (File.Exists(VpnHelper.EngineExe)) return VpnHelper.EngineExe;
         foreach (var d in new[] { Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86) })
             foreach (var sub in new[] { "OpenConnect-GUI", "OpenConnect", "openconnect" })
             {
@@ -68,8 +70,68 @@ static class OfficeVpn
     public static string ToolPath { get => Store.Str("win_vpn_tool", ""); set => Store.Set("win_vpn_tool", value); }
     public static string Password { get => Store.Secret("win_vpn_pw"); set => Store.SetSecret("win_vpn_pw", value ?? ""); }
 
+    // ------------------------------------------------------------------ 🌐 Nova VPN engine options (as in OpenConnect's Edit window)
+    public static readonly (string Id, string Name)[] Protocols =
+    {
+        ("anyconnect", "Cisco AnyConnect or OpenConnect"), ("nc", "Juniper Network Connect"), ("gp", "Palo Alto Networks GlobalProtect"),
+        ("pulse", "Pulse Connect Secure"), ("f5", "F5 BIG-IP SSL VPN"), ("fortinet", "Fortinet SSL VPN"), ("array", "Array SSL VPN"),
+    };
+    public static string Proto { get => Store.Str("win_vpn_proto", "fortinet"); set => Store.Set("win_vpn_proto", value); }
+    public static string Group { get => Store.Str("win_vpn_group", ""); set => Store.Set("win_vpn_group", value); }
+    public static string CaFile { get => Store.Str("win_vpn_cafile", ""); set => Store.Set("win_vpn_cafile", value); }
+    public static string OtpMode { get => Store.Str("win_vpn_otpmode", "none"); set => Store.Set("win_vpn_otpmode", value); }
+    /// <summary>The OTP token secret: like the password, encrypted on this PC and never in a backup.</summary>
+    public static string OtpSecret { get => Store.Secret("win_vpn_otp"); set => Store.SetSecret("win_vpn_otp", value ?? ""); }
+    public static string UserCert { get => Store.Str("win_vpn_ucert", ""); set => Store.Set("win_vpn_ucert", value); }
+    public static string UserKey { get => Store.Str("win_vpn_ukey", ""); set => Store.Set("win_vpn_ukey", value); }
+    public static string Iface { get => Store.Str("win_vpn_iface", "Nova VPN"); set => Store.Set("win_vpn_iface", value); }
+    public static string Script { get => Store.Str("win_vpn_script", ""); set => Store.Set("win_vpn_script", value); }
+    public static string LogLevel { get => Store.Str("win_vpn_loglevel", "normal"); set => Store.Set("win_vpn_loglevel", value); }
+    public static int ReconnectTimeout { get => Math.Clamp(Store.Int("win_vpn_rto", 300), 10, 3600); set => Store.SetInt("win_vpn_rto", value); }
+    /// <summary>Try the fast UDP channel (DTLS); OpenConnect falls back to SSL by itself when the firewall does not offer it.</summary>
+    public static bool Dtls { get => Store.Bool("win_vpn_dtls", true); set => Store.SetBool("win_vpn_dtls", value); }
+    public static int DtlsWait { get => Math.Clamp(Store.Int("win_vpn_dtlswait", 25), 5, 120); set => Store.SetInt("win_vpn_dtlswait", value); }
+    public static string Proxy { get => Store.Str("win_vpn_proxy", ""); set => Store.Set("win_vpn_proxy", value); }
+    public static bool StartWithWindows { get => Store.Bool("win_vpn_boot", true); set => Store.SetBool("win_vpn_boot", value); }
+    public static int IdleHours { get => Store.Int("win_vpn_idle", 0); set => Store.SetInt("win_vpn_idle", value); }
+    public static string EngineLog => Path.Combine(VpnHelper.Dir, "openconnect.log");
+
+    /// <summary>What the engine log says, in plain words: why it failed, the office IP, the fast channel, when the session ends.</summary>
+    public static (string Reason, string Ip, string Route, bool? Dtls, string Ends, string Firewall) ReadEngineLog()
+    {
+        string reason = "", ip = "", route = "", ends = "", fw = ""; bool? dtls = null;
+        try
+        {
+            if (!File.Exists(EngineLog)) return (reason, ip, route, dtls, ends, fw);
+            string[] lines;
+            using (var fs = new FileStream(EngineLog, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)) using (var sr = new StreamReader(fs)) lines = sr.ReadToEnd().Split('\n');
+            foreach (var raw in lines)
+            {
+                var l = raw.Trim();
+                Match m;
+                if ((m = Regex.Match(l, @"Got Legacy IP address (\S+)")).Success) ip = m.Groups[1].Value;
+                else if ((m = Regex.Match(l, @"Got IPv4 route (\S+)")).Success) route = m.Groups[1].Value;
+                else if ((m = Regex.Match(l, @"Configured as (\S+?),")).Success && ip.Length == 0) ip = m.Groups[1].Value;
+                else if ((m = Regex.Match(l, @"Session authentication will expire at (.+)$")).Success) ends = m.Groups[1].Value;
+                else if ((m = Regex.Match(l, @"Reported platform is (.+)$")).Success) fw = m.Groups[1].Value;
+                if (Regex.IsMatch(l, @"DTLS (connected|established|initiali[sz]ed)|Established DTLS", RegexOptions.IgnoreCase)) dtls = true;
+                else if (Regex.IsMatch(l, @"DTLS disabled|DTLS.*(fail|not support)|No DTLS", RegexOptions.IgnoreCase)) dtls ??= false;
+                if (Regex.IsMatch(l, @"Invalid credentials|Login failed|authentication fail|Failed to authenticate", RegexOptions.IgnoreCase)) reason = "The firewall refused the login (wrong password?)";
+                else if (Regex.IsMatch(l, @"certificate.*(verify failed|does not match)|Server certificate.*fail", RegexOptions.IgnoreCase) && !Regex.IsMatch(l, "signer not found")) reason = "The firewall's certificate is not the saved one — check with IT before trusting it";
+                else if (Regex.IsMatch(l, @"Failed to connect|Connection refused|timed out|getaddrinfo|resolve", RegexOptions.IgnoreCase)) reason = "Cannot reach the gateway (internet down?)";
+                else if (Regex.IsMatch(l, @"Cookie was rejected|session.*expired", RegexOptions.IgnoreCase)) reason = "The session ended at the firewall — logging in again";
+                else if (Regex.IsMatch(l, @"Got CONNECT response|Connected as|Configured as|SSL connected", RegexOptions.IgnoreCase)) reason = "";
+            }
+        }
+        catch { }
+        return (reason, ip, route, dtls, ends, fw);
+    }
+
     public static volatile State Now = State.Off;
     public static DateTime Since = DateTime.Now;
+    public static int DropsToday; static DateTime dropDay = DateTime.Today;
+    /// <summary>When it came back after the last drop (seconds), for the 🌐 Nova VPN window.</summary>
+    public static int LastBackSeconds = -1;
     public static volatile string Line = "🌐 Office VPN is off (Settings ▸ 🌐 Office VPN)";
     public static volatile string Way = "";
     public static event Action Changed;
@@ -190,7 +252,7 @@ static class OfficeVpn
 
     // ------------------------------------------------------------------ status
 
-    static bool VpnAdapter(NetworkInterface n) => Regex.IsMatch(n.Description + " " + n.Name, "Forti|OpenConnect|Wintun|TAP-Windows|Nova VPN|" + Regex.Escape(OcProfile), RegexOptions.IgnoreCase);
+    static bool VpnAdapter(NetworkInterface n) => Regex.IsMatch(n.Description + " " + n.Name, "Forti|OpenConnect|Wintun|TAP-Windows|Nova VPN|" + Regex.Escape(OcProfile) + "|" + Regex.Escape(Iface) + "|" + Regex.Escape(Gateway), RegexOptions.IgnoreCase);
 
     static bool AdapterUp()
     {
@@ -239,6 +301,7 @@ static class OfficeVpn
         if (s is State.Up && was is State.Connecting or State.Down && Want)
         {
             var took = droppedAt > DateTime.MinValue ? $" in {(int)(DateTime.Now - droppedAt).TotalSeconds} s" : "";
+            if (droppedAt > DateTime.MinValue) LastBackSeconds = (int)(DateTime.Now - droppedAt).TotalSeconds;
             if (droppedAt > DateTime.MinValue) Program.Balloon("🟢 Office VPN", "Reconnected" + took + " — your office folders are back.");
             droppedAt = DateTime.MinValue; tries = 0;
             // the office folders are reachable again: Nova refreshes their lists and the ⚡ offline copies
@@ -247,6 +310,8 @@ static class OfficeVpn
         if (s is State.Down && was is State.Up or State.UpNoServer && Want)
         {
             droppedAt = DateTime.Now;
+            if (dropDay != DateTime.Today) { dropDay = DateTime.Today; DropsToday = 0; }
+            DropsToday++;
             Program.Balloon("🔴 Office VPN dropped", Auto ? "Nova is reconnecting…" : "Click the 🌐 icon to connect again.");
         }
     }
@@ -255,7 +320,9 @@ static class OfficeVpn
 
     public static void Connect()
     {
+        // a press of Connect always tries now — even with “reconnect automatically” off and earlier failed tries
         Want = true;
+        tries = 0;
         lastTry = DateTime.MinValue;
         wake.Set();
     }
@@ -312,7 +379,7 @@ static class OfficeVpn
         foreach (var way in ways)
         {
             if (way == "cli" && (Cli() == null || !VpnHelper.Installed || Password.Length == 0))
-            { why.Add("⌨ command line not ready — " + (Cli() == null ? "openconnect.exe is not in Program Files\\OpenConnect-GUI" : !VpnHelper.Installed ? "set up the 🛡 VPN helper" : "add your password")); continue; }
+            { why.Add("⌨ command line not ready — " + (Cli() == null || !VpnHelper.Installed ? "press 🛡 Set up the VPN helper (it installs the engine)" : "add your password in 🌐 Nova VPN")); continue; }
             if (way == "oc" && Oc() == null) { why.Add("OpenConnect-GUI is not installed"); continue; }
             if (way == "forti" && Tool() == null && Gui() == null) { why.Add("FortiClient is not installed"); continue; }
             var r = way == "cli" ? ConnectCli() : way == "oc" ? ConnectOc() : ConnectForti();
@@ -330,8 +397,15 @@ static class OfficeVpn
         Way = "OpenConnect command line";
         try
         {
-            var blob = Convert.ToBase64String(System.Security.Cryptography.ProtectedData.Protect(Encoding.UTF8.GetBytes(Password), null, System.Security.Cryptography.DataProtectionScope.CurrentUser));
-            var r = VpnHelper.Run("cli-connect", "", 45, Gateway, Port.ToString(), User, Pin, blob);
+            string Enc(string v) => v.Length == 0 ? "" : Convert.ToBase64String(System.Security.Cryptography.ProtectedData.Protect(Encoding.UTF8.GetBytes(v), null, System.Security.Cryptography.DataProtectionScope.CurrentUser));
+            // every option goes to the helper as one line; it checks each value again before use
+            var o = new System.Text.Json.Nodes.JsonObject
+            {
+                ["proto"] = Proto, ["gw"] = Gateway, ["port"] = Port, ["user"] = User, ["pin"] = Pin, ["group"] = Group, ["cafile"] = CaFile,
+                ["otp"] = OtpMode, ["otpBlob"] = OtpMode == "none" ? "" : Enc(OtpSecret), ["ucert"] = UserCert, ["ukey"] = UserKey, ["iface"] = Iface,
+                ["script"] = Script, ["log"] = LogLevel, ["rto"] = ReconnectTimeout, ["dtls"] = Dtls, ["proxy"] = Proxy, ["pw"] = Enc(Password),
+            };
+            var r = VpnHelper.Run("cli-connect", "", 45, Convert.ToBase64String(Encoding.UTF8.GetBytes(o.ToJsonString())));
             return r.Length == 0 ? "" : "OpenConnect command line: " + r;
         }
         catch (Exception e) { return "OpenConnect command line: " + e.Message; }
@@ -592,6 +666,8 @@ static class OfficeVpn
     public static void Start()
     {
         if (thread != null) return;
+        // “Connect when Windows starts” (Nova starts with Windows)
+        if (On && StartWithWindows) { Want = true; tries = 0; }
         thread = new Thread(() => Guard.Run("office vpn", Loop)) { IsBackground = true, Name = "Nova office VPN" };
         thread.Start();
         try
@@ -605,6 +681,28 @@ static class OfficeVpn
     /// <summary>Waiting between tries after a drop: at once, then 5 s, 15 s, 30 s, then every minute.</summary>
     static TimeSpan Backoff() => tries switch { 0 => TimeSpan.Zero, 1 => TimeSpan.FromSeconds(5), 2 => TimeSpan.FromSeconds(15), 3 => TimeSpan.FromSeconds(30), _ => TimeSpan.FromSeconds(60) };
 
+    static long idleBytes = -1; static DateTime idleSince = DateTime.Now;
+
+    /// <summary>“Disconnect when idle”: no traffic through the VPN (under 1 MB) for the chosen hours.</summary>
+    static void IdleCheck()
+    {
+        if (IdleHours <= 0) { idleBytes = -1; return; }
+        try
+        {
+            var n = NetworkInterface.GetAllNetworkInterfaces().FirstOrDefault(x => x.OperationalStatus == OperationalStatus.Up && VpnAdapter(x) && !x.Description.Contains("Fortinet Virtual Ethernet Adapter (NDIS", StringComparison.OrdinalIgnoreCase));
+            if (n == null) return;
+            var st = n.GetIPStatistics(); var b = st.BytesReceived + st.BytesSent;
+            if (idleBytes < 0 || b - idleBytes > 1 << 20) { idleBytes = b; idleSince = DateTime.Now; return; }
+            if (DateTime.Now - idleSince > TimeSpan.FromHours(IdleHours))
+            {
+                idleBytes = -1;
+                Program.Balloon("🌐 Office VPN", $"Disconnected — no office traffic for {IdleHours} h.");
+                Disconnect();
+            }
+        }
+        catch { }
+    }
+
     static void Loop()
     {
         while (true)
@@ -616,7 +714,7 @@ static class OfficeVpn
                 var server = ServerOk();
                 var up = adapter || server;
                 if (server && !adapter) Set(State.Up, $"🟢 Office network reachable since {Since:HH:mm} (in the office, or a VPN Nova does not know)");
-                else if (up && server) Set(State.Up, $"🟢 Connected since {Since:HH:mm} · office server answers" + (Way.Length > 0 ? $" · via {Way}" : ""));
+                else if (up && server) { Set(State.Up, $"🟢 Connected since {Since:HH:mm} · office server answers" + (Way.Length > 0 ? $" · via {Way}" : "")); IdleCheck(); }
                 else if (up) Set(State.UpNoServer, $"🟡 Connected, but the office server ({Probe}) does not answer");
                 else if (trying == 0 && (Now != State.Connecting || DateTime.Now - lastTry > TimeSpan.FromSeconds(45))) Set(State.Down, Want ? "🔴 Not connected — " + (Auto ? "reconnecting…" : "click to connect") : "🔴 Not connected — click the 🌐 icon to connect");
                 // the connection is tried in the background: the watch goes on, so 🟢 shows as soon as the VPN is up

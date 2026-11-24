@@ -47,6 +47,8 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 
 [Files]
 Source: "{#SourceDir}\NovaEnhance.exe"; DestDir: "{app}"; Flags: ignoreversion
+; 🌐 Nova VPN engine: OpenConnect (LGPL, official release, unchanged; licence included)
+Source: "{#SourceDir}\openconnect\*"; DestDir: "{app}\openconnect"; Flags: ignoreversion recursesubdirs
 ; ✦ The Nova tab for every Office program (Office loads its own copy per build, so these are never locked).
 ; Copied in [Code] after the install: if an antivirus holds one, Setup still finishes (only the Office tab waits).
 Source: "{#SourceDir}\NovaRibbon64.dll"; Flags: dontcopy

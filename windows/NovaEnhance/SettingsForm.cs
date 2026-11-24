@@ -3,7 +3,7 @@ namespace NovaEnhance;
 /// <summary>Settings, split into sections like the phone app.</summary>
 class SettingsForm : NovaForm
 {
-    static readonly string[] AllSections = { "🧠 Nova Brain", "🔐 Admin", "AI & API keys", "⚙ AI for each feature", "About me", "Enhancement", "Email & AI", "📥 Email index", "🗂 Mailboxes & archives", "📂 Folders in the index", "📁 Email projects", "Folder search", "📁 Projects", "🌐 Office VPN", "🗂 Project sources", "✦ Prompts", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "🧪 Activity history", "🔌 Test connector", "📱 Phone link", "About" };
+    static readonly string[] AllSections = { "🧠 Nova Brain", "🔐 Admin", "AI & API keys", "⚙ AI for each feature", "About me", "Enhancement", "Email & AI", "📥 Email index", "🗂 Mailboxes & archives", "📂 Folders in the index", "📁 Email projects", "Folder search", "📁 Projects", "🌐 Office VPN", "🗂 Project sources", "📦 Transfer engine", "✦ Prompts", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "🧪 Activity history", "🔌 Test connector", "📱 Phone link", "About" };
     /// <summary>🧪 Activity history and 🔌 Test connector are advanced tools: shown only when switched on (About → Advanced tools).</summary>
     static readonly string[] AdvancedSections = { "🧪 Activity history", "🔌 Test connector" };
     static string[] Sections = Visible();
@@ -94,6 +94,7 @@ class SettingsForm : NovaForm
                 case "📁 Projects": ProjectsPage(); break;
                 case "🌐 Office VPN": VpnPage(); break;
                 case "🗂 Project sources": SourcesPage(); break;
+                case "📦 Transfer engine": TransferPage(); break;
                 case "Google Drive": GoogleDrive(); break;
                 case "Shortcuts": Shortcuts(); break;
                 case "🔐 Admin": AdminPage(); break;
@@ -1709,6 +1710,83 @@ class SettingsForm : NovaForm
     /// <summary>📱 Phone link (2.0): the phone gets Nova's data from this PC, encrypted with the key in the QR code.</summary>
     // ------------------------------------------------------------------ 🌐 Office VPN
 
+    /// <summary>📦 Transfer engine (Robocopy): SuperCopier-style choices for errors and collisions, speed, checks, Explorer.</summary>
+    void TransferPage()
+    {
+        Note("Copy, move and mirror folders with Windows' Robocopy, many files at once. Explorer right-click ▸ 🚀 Nova transfer (in Windows 11: “Show more options”, or Shift + right-click). " +
+             "Long paths (over 260 characters), Arabic names and network drives work. 🔒 Private folders are never copied; nothing is deleted without asking.");
+        ComboBox Pick(string label, (string Id, string Text)[] items, string cur, Action<string> set)
+        {
+            var r = page.Add(Th.Row(false));
+            r.Controls.Add(new Label { Text = label, AutoSize = false, Width = 230, ForeColor = Th.Muted, Font = Th.F(9.5f), TextAlign = ContentAlignment.MiddleLeft, Height = 28 });
+            var c = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 300, BackColor = Th.Card2, ForeColor = Th.Text, FlatStyle = FlatStyle.Flat };
+            c.Items.AddRange(items.Select(i => (object)i.Text).ToArray());
+            c.SelectedIndex = Math.Max(0, Array.FindIndex(items, i => i.Id == cur));
+            c.SelectedIndexChanged += (_, _) => set(items[c.SelectedIndex].Id);
+            r.Controls.Add(c);
+            return c;
+        }
+        NumericUpDown Num(FlowLayoutPanel r, int v, int max, string unit, Action<int> set)
+        {
+            var n = new NumericUpDown { Minimum = 0, Maximum = max, Value = Math.Clamp(v, 0, max), Width = 70, BackColor = Th.Card2, ForeColor = Th.Text };
+            n.ValueChanged += (_, _) => set((int)n.Value);
+            r.Controls.Add(n); r.Controls.Add(Th.L(unit, 9.5f, Th.Muted));
+            return n;
+        }
+        page.Add(Th.Section("Error and collision"));
+        Pick("When file error", new[] { ("end", "Put at the end (retry once)"), ("retry", "Retry now (below)"), ("skip", "Skip"), ("ask", "Ask"), ("stop", "Stop the transfer") }, Transfer.FileError, v => Transfer.FileError = v);
+        Pick("When file collision", new[] { ("different", "Overwrite if different"), ("newer", "Overwrite if newer"), ("skip", "Skip"), ("rename", "Rename (renaming rules)"), ("ask", "Ask"), ("always", "Overwrite always") }, Transfer.FileCollision, v => Transfer.FileCollision = v);
+        Pick("When folder error", new[] { ("ask", "Ask"), ("skip", "Skip"), ("stop", "Stop the transfer") }, Transfer.FolderError, v => Transfer.FolderError = v);
+        Pick("When folder collision", new[] { ("merge", "Merge"), ("rename", "Rename"), ("skip", "Skip"), ("ask", "Ask") }, Transfer.FolderCollision, v => Transfer.FolderCollision = v);
+        var rr = page.Add(Th.Row(false));
+        rr.Controls.Add(new Label { Text = "Retries · wait", AutoSize = false, Width = 230, ForeColor = Th.Muted, Font = Th.F(9.5f), TextAlign = ContentAlignment.MiddleLeft, Height = 28 });
+        Num(rr, Transfer.Retries, 20, "times", v => Transfer.Retries = v); Num(rr, Transfer.Wait, 120, "s", v => Transfer.Wait = v);
+        page.Add(Th.Check("Check if destination folder exists", Transfer.CheckDest, v => Transfer.CheckDest = v));
+        page.Add(Th.Check("Delete partially transferred files", Transfer.DeletePartial, v => Transfer.DeletePartial = v));
+        page.Add(Th.Check("Rename the original destination", Transfer.RenameOriginal, v => Transfer.RenameOriginal = v));
+        page.Add(Th.Check("Ask before any delete (Mirror / Move)", Transfer.AskDelete, v => Transfer.AskDelete = v));
+        var rn = page.Add(Th.Row(false));
+        rn.Controls.Add(new Label { Text = "✎ Renaming rule", AutoSize = false, Width = 230, ForeColor = Th.Muted, Font = Th.F(9.5f), TextAlign = ContentAlignment.MiddleLeft, Height = 28 });
+        var rule = new TextBox { Text = Transfer.RenameRule, Width = 220, BackColor = Th.Card2, ForeColor = Th.Text, BorderStyle = BorderStyle.FixedSingle };
+        rule.TextChanged += (_, _) => { if (rule.Text.Contains("{n}")) Transfer.RenameRule = rule.Text; };
+        rn.Controls.Add(rule); rn.Controls.Add(Th.L("{name} {n} {ext} {date} — e.g. “{name} ({n}){ext}” or “{name} - copy {n}{ext}”", 9, Th.Muted));
+
+        page.Add(Th.Section("Speed"));
+        Pick("Threads", new[] { ("auto", "Auto (32 small files · 8 big)"), ("8", "8"), ("16", "16"), ("32", "32"), ("64", "64"), ("128", "128") }, Transfer.Threads, v => Transfer.Threads = v);
+        Pick("Big files (≥ 100 MB)", new[] { ("1", "Unbuffered (/J) — faster for big files"), ("0", "Normal") }, Transfer.Unbuffered ? "1" : "0", v => Transfer.Unbuffered = v == "1");
+        Pick("Compression", new[] { ("auto", "Auto (if Windows and the server support it)"), ("off", "Off") }, Transfer.Compress, v => Transfer.Compress = v);
+        Pick("Speed limit", new[] { ("none", "None"), ("gentle", "Gentle (leaves room for Outlook / Teams)"), ("low", "Low") }, Transfer.SpeedLimit, v => Transfer.SpeedLimit = v);
+        page.Add(Th.Check("🌐 Over the VPN: pause when it drops, resume after", Transfer.PauseOnVpn, v => Transfer.PauseOnVpn = v));
+
+        page.Add(Th.Section("Keep and check"));
+        page.Add(Th.Check("Keep dates and attributes", Transfer.KeepAttr, v => Transfer.KeepAttr = v));
+        page.Add(Th.Check("Keep security (NTFS permissions)", Transfer.KeepSecurity, v => Transfer.KeepSecurity = v));
+        page.Add(Th.Check("Verify after copy (fast compare)", Transfer.Verify, v => Transfer.Verify = v));
+        page.Add(Th.Check("Same drive: move instantly (rename, no copy)", Transfer.SameDriveRename, v => Transfer.SameDriveRename = v));
+        var pv = page.Add(Th.Check("Skip 🔒 private folders (always)", true, _ => { })); pv.Enabled = false;
+        var ex = page.Add(Th.Row(false));
+        ex.Controls.Add(new Label { Text = "Exclude", AutoSize = false, Width = 230, ForeColor = Th.Muted, Font = Th.F(9.5f), TextAlign = ContentAlignment.MiddleLeft, Height = 28 });
+        var exb = new TextBox { Text = Transfer.Exclude, Width = 420, BackColor = Th.Card2, ForeColor = Th.Text, BorderStyle = BorderStyle.FixedSingle };
+        exb.TextChanged += (_, _) => Transfer.Exclude = exb.Text;
+        ex.Controls.Add(exb);
+
+        page.Add(Th.Section("Explorer"));
+        page.Add(Th.Check("“🚀 Nova transfer” in the right-click menu (files, folders, folder background)", Transfer.Menu, v => Transfer.Menu = v));
+        page.Add(Th.Check("Use Nova for Explorer's Ctrl+V when files were copied (text and renaming keep Windows' paste)", Transfer.TakeOverPaste, v => Transfer.TakeOverPaste = v));
+
+        var res = page.Add(Th.Wrap("", 9.5f, Th.AccentText), true);
+        var br = page.Add(Th.Row(false));
+        br.Controls.Add(Th.B("🧪 Test on a sample folder", async () =>
+        {
+            res.Text = "🧪 Copying 200 test files (long path, Arabic names)…"; res.ForeColor = Th.AccentText;
+            var r = await Task.Run(Transfer.SelfTest);
+            if (res.IsDisposed) return;
+            res.Text = r; res.ForeColor = r.StartsWith("✅") ? Th.Good : Th.Warn;
+        }, true));
+        br.Controls.Add(Th.B("📊 Transfers…", Screens.Transfers));
+        br.Controls.Add(Th.B("↺ Defaults", () => { Transfer.Defaults(); res.Text = "✓ Defaults restored — open this page again to see them."; }));
+    }
+
     void VpnPage()
     {
         Note("Nova keeps your office VPN up: its own icon beside the clock (🟢 connected · 🟡 connecting · 🔴 not connected), one click to connect, and a watchdog that reconnects by itself after a drop, sleep or a Wi-Fi change. " +
@@ -1740,6 +1818,8 @@ class SettingsForm : NovaForm
         var cert = Field("Client Certificate (subject:issuer, empty = None)", OfficeVpn.Cert, 320);
         var dualRow = page.Add(Th.Row(false));
         var dual = Th.Check("Enable Dual-stack IPv4/IPv6 address", OfficeVpn.DualStack, _ => { }); dualRow.Controls.Add(dual);
+        var nv = page.Add(Th.Row(false));
+        nv.Controls.Add(Th.B("🌐 Open the Nova VPN window (built-in engine, all protocols and options)", Screens.Vpn, true));
         page.Add(Th.Section("🔓 OpenConnect VPN (open source · Fortinet SSL VPN)"));
         var ocProf = Field("Server name in OpenConnect", OfficeVpn.OcProfile);
         var ocRow = page.Add(Th.Row(false));

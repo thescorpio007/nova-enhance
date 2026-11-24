@@ -198,6 +198,7 @@ static class Store
     }
 
     public static void Set(string k, string v) { lock (L) D[k] = v ?? ""; Save(); }
+    public static void Remove(string k) { lock (L) D.Remove(k); Save(); }
 
     public static bool Bool(string k, bool def)
     {
