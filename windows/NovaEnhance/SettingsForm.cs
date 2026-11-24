@@ -1737,18 +1737,26 @@ class SettingsForm : NovaForm
         authRow.Controls.Add(rbPrompt); authRow.Controls.Add(rbSave);
         var user = Field("Username", OfficeVpn.User);
         var pw = Field("Password (kept encrypted here)", OfficeVpn.Password.Length > 0 ? "••••••••" : "", 220, true);
-        var certRow = page.Add(Th.Row(false));
-        certRow.Controls.Add(new Label { Text = "Client Certificate", AutoSize = false, Width = 190, ForeColor = Th.Muted, Font = Th.F(9.5f), TextAlign = ContentAlignment.MiddleLeft, Height = 28 });
-        var certLbl = Th.L(OfficeVpn.Cert.Length > 0 ? OfficeVpn.Cert : "None", 9.5f, Th.Text);
-        certRow.Controls.Add(certLbl);
-        certRow.Controls.Add(Th.B("📁 Choose…", () =>
-        {
-            using var d = new OpenFileDialog { Filter = "Certificates|*.pfx;*.p12|All files|*.*", Title = "Client certificate (only if IT gave you one)" };
-            if (d.ShowDialog(this) == DialogResult.OK) certLbl.Text = d.FileName;
-        }));
-        certRow.Controls.Add(Th.B("None", () => certLbl.Text = "None"));
+        var cert = Field("Client Certificate (subject:issuer, empty = None)", OfficeVpn.Cert, 320);
         var dualRow = page.Add(Th.Row(false));
         var dual = Th.Check("Enable Dual-stack IPv4/IPv6 address", OfficeVpn.DualStack, _ => { }); dualRow.Controls.Add(dual);
+        page.Add(Th.Section("🔓 OpenConnect VPN (open source · Fortinet SSL VPN)"));
+        var ocProf = Field("Server name in OpenConnect", OfficeVpn.OcProfile);
+        var ocRow = page.Add(Th.Row(false));
+        var ocExe = OfficeVpn.Oc();
+        var ocLbl = Th.L(ocExe != null ? "✓ OpenConnect found: " + ocExe : "OpenConnect-GUI not found", 9.5f, ocExe != null ? Th.Good : Th.Muted);
+        ocRow.Controls.Add(Th.B("📁 openconnect-gui.exe…", () =>
+        {
+            using var d = new OpenFileDialog { Filter = "openconnect-gui.exe|openconnect-gui.exe|Programs|*.exe", Title = "OpenConnect-GUI" };
+            if (d.ShowDialog(this) == DialogResult.OK) { OfficeVpn.OcPath = d.FileName; ocLbl.Text = "✓ OpenConnect: " + d.FileName; ocLbl.ForeColor = Th.Good; }
+        }));
+        ocRow.Controls.Add(ocLbl);
+        var ordRow = page.Add(Th.Row(false));
+        ordRow.Controls.Add(new Label { Text = "Which first", AutoSize = false, Width = 190, ForeColor = Th.Muted, Font = Th.F(9.5f), TextAlign = ContentAlignment.MiddleLeft, Height = 28 });
+        var rbOcFirst = new RadioButton { Text = "OpenConnect, then FortiClient", AutoSize = true, ForeColor = Th.Text, Font = Th.F(9.5f), Checked = OfficeVpn.Order != "forti", Margin = new Padding(0, 5, 16, 0) };
+        var rbFortiFirst = new RadioButton { Text = "FortiClient, then OpenConnect", AutoSize = true, ForeColor = Th.Text, Font = Th.F(9.5f), Checked = OfficeVpn.Order == "forti", Margin = new Padding(0, 5, 0, 0) };
+        ordRow.Controls.Add(rbOcFirst); ordRow.Controls.Add(rbFortiFirst);
+        page.Add(Th.L("In OpenConnect keep the password saved and “Batch mode” ticked — Nova chooses the server and presses Connect; if it fails, Nova tries the other one.", 9, Th.Muted));
         page.Add(Th.Section("Checking that it works"));
         var probe = Field("Office server to check", OfficeVpn.Probe, 220);
         page.Add(Th.L("An office computer that answers only through the VPN — e.g. 192.168.1.12 (the O: N: S: server). Not the gateway.", 9, Th.Muted));
@@ -1770,7 +1778,8 @@ class SettingsForm : NovaForm
             if (g.Contains(':') && int.TryParse(g[(g.LastIndexOf(':') + 1)..], out var gp)) { g = g[..g.LastIndexOf(':')]; port.Text = gp.ToString(); gw.Text = g; }
             OfficeVpn.Host = g + (int.TryParse(port.Text.Trim(), out var pn) && pn > 0 && pn != 443 ? ":" + pn : "");
             OfficeVpn.SaveLogin = rbSave.Checked; OfficeVpn.Sso = sso.Checked; OfficeVpn.DualStack = dual.Checked;
-            OfficeVpn.Cert = certLbl.Text == "None" ? "" : certLbl.Text;
+            OfficeVpn.Cert = cert.Text.Trim().Equals("None", StringComparison.OrdinalIgnoreCase) ? "" : cert.Text.Trim();
+            OfficeVpn.OcProfile = ocProf.Text.Trim(); OfficeVpn.Order = rbOcFirst.Checked ? "oc" : "forti";
             if (pw.Text.Length > 0 && pw.Text != "••••••••") OfficeVpn.Password = pw.Text;
             savedAt = DateTime.Now;
         }
@@ -1780,7 +1789,7 @@ class SettingsForm : NovaForm
         br.Controls.Add(Th.B("■ Disconnect", OfficeVpn.Disconnect));
         br.Controls.Add(Th.B("🗂 Project sources…", Screens.Sources));
         page.Add(Th.Section("🧪 Test"));
-        var testOut = page.Add(Th.Wrap("Checks FortiClient, the gateway, the Fortinet adapter, the office server and FortiClient's window — it does not connect.", 9.5f, Th.Muted), true);
+        var testOut = page.Add(Th.Wrap("Checks OpenConnect, FortiClient, the gateway, the VPN adapters, the office server and the two windows — it does not connect.", 9.5f, Th.Muted), true);
         var tr = page.Add(Th.Row(false));
         tr.Controls.Add(Th.B("🧪 Test the VPN setup", async () =>
         {

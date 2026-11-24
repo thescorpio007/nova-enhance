@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using System.Text;
 using System.Diagnostics;
 using System.Drawing.Drawing2D;
@@ -41,6 +42,11 @@ static class OfficeVpn
     public static string Cert { get => Store.Str("win_vpn_cert", ""); set => Store.Set("win_vpn_cert", value); }
     public static bool Sso { get => Store.Bool("win_vpn_sso", false); set => Store.SetBool("win_vpn_sso", value); }
     public static bool DualStack { get => Store.Bool("win_vpn_dual", false); set => Store.SetBool("win_vpn_dual", value); }
+    /// <summary>🔓 OpenConnect VPN (open source, “Fortinet SSL VPN” protocol): its program and the server name saved in it.</summary>
+    public static string OcPath { get => Store.Str("win_vpn_oc", ""); set => Store.Set("win_vpn_oc", value); }
+    public static string OcProfile { get => Store.Str("win_vpn_oc_profile", "AHMED-MZA"); set => Store.Set("win_vpn_oc_profile", value); }
+    /// <summary>"oc" = OpenConnect first, FortiClient if it fails · "forti" = the other way round.</summary>
+    public static string Order { get => Store.Str("win_vpn_order", "oc"); set => Store.Set("win_vpn_order", value); }
     public static string ToolPath { get => Store.Str("win_vpn_tool", ""); set => Store.Set("win_vpn_tool", value); }
     public static string Password { get => Store.Secret("win_vpn_pw"); set => Store.SetSecret("win_vpn_pw", value ?? ""); }
 
@@ -75,14 +81,87 @@ static class OfficeVpn
     static readonly string[] GuiGuesses = { @"C:\Program Files\Fortinet\FortiClient\FortiClient.exe", @"C:\Program Files (x86)\Fortinet\FortiClient\FortiClient.exe" };
     public static string Gui() => GuiGuesses.FirstOrDefault(File.Exists);
 
+    static readonly string[] OcGuesses =
+    {
+        @"C:\Program Files\OpenConnect-GUI\openconnect-gui.exe", @"C:\Program Files (x86)\OpenConnect-GUI\openconnect-gui.exe",
+        @"C:\Program Files\OpenConnect GUI\openconnect-gui.exe", @"C:\Program Files\openconnect-gui\openconnect-gui.exe",
+    };
+    /// <summary>OpenConnect-GUI — set in Settings, found in the usual places, or taken from its running process.</summary>
+    public static string Oc()
+    {
+        if (OcPath.Length > 0 && File.Exists(OcPath)) return OcPath;
+        var g = OcGuesses.FirstOrDefault(File.Exists);
+        if (g != null) return g;
+        try { foreach (var p in Process.GetProcessesByName("openconnect-gui")) { var f = p.MainModule?.FileName; if (f != null) { OcPath = f; return f; } } } catch { }
+        return null;
+    }
+
+    static readonly string[] FortiProcs = { "FortiClient" };
+    static readonly string[] OcProcs = { "openconnect-gui" };
+
+    // ------------------------------------------------------------------ windows of a program (found by the program, never by the title)
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool EnumWindows(EnumProc f, IntPtr l);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder sb, int n);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h, uint cmd);
+    delegate bool EnumProc(IntPtr h, IntPtr l);
+
+    static HashSet<int> Pids(string[] names) => names.SelectMany(n => { try { return Process.GetProcessesByName(n); } catch { return Array.Empty<Process>(); } }).Select(p => p.Id).ToHashSet();
+
+    /// <summary>A window hidden in the tray has no buttons: its main window is shown again (restored), as clicking its tray icon would.</summary>
+    static void Reveal(string[] names)
+    {
+        var ids = Pids(names);
+        if (ids.Count == 0) return;
+        EnumWindows((h, _) =>
+        {
+            GetWindowThreadProcessId(h, out var pid);
+            if (!ids.Contains((int)pid) || GetWindow(h, 4) != IntPtr.Zero) return true;   // owned windows (pop-ups) are left alone
+            var sb = new StringBuilder(256); GetWindowText(h, sb, 256);
+            // only the app's own window (never the hidden helper windows: “Default IME”, “MSCTFIME UI”…)
+            if (!Regex.IsMatch(sb.ToString(), "Forti|OpenConnect", RegexOptions.IgnoreCase)) return true;
+            ShowWindow(h, 9); SetForegroundWindow(h);   // SW_RESTORE
+            return true;
+        }, IntPtr.Zero);
+    }
+
+    static System.Windows.Automation.AutomationElement AppWindow(string[] names, int seconds, Func<System.Windows.Automation.AutomationElement, bool> good = null)
+    {
+        var root = System.Windows.Automation.AutomationElement.RootElement;
+        var cond = new System.Windows.Automation.PropertyCondition(System.Windows.Automation.AutomationElement.ControlTypeProperty, System.Windows.Automation.ControlType.Window);
+        for (int i = 0; i < Math.Max(1, seconds); i++)
+        {
+            var ids = Pids(names);
+            System.Windows.Automation.AutomationElement first = null;
+            if (ids.Count > 0)
+                foreach (System.Windows.Automation.AutomationElement w in root.FindAll(System.Windows.Automation.TreeScope.Children, cond))
+                {
+                    try { if (!ids.Contains(w.Current.ProcessId)) continue; } catch { continue; }
+                    first ??= w;
+                    if (good == null || good(w)) return w;
+                }
+            if (i == seconds - 1 && first != null) return first;
+            if (seconds > 1) Thread.Sleep(1000);
+        }
+        return null;
+    }
+
+    static bool HasButton(System.Windows.Automation.AutomationElement w, string name) =>
+        All(w, System.Windows.Automation.ControlType.Button).Any(b => NameOf(b).Trim().Equals(name, StringComparison.OrdinalIgnoreCase));
+
     // ------------------------------------------------------------------ status
+
+    static bool VpnAdapter(NetworkInterface n) => Regex.IsMatch(n.Description + " " + n.Name, "Forti|OpenConnect|Wintun|TAP-Windows|" + Regex.Escape(OcProfile), RegexOptions.IgnoreCase);
 
     static bool AdapterUp()
     {
         try
         {
             return NetworkInterface.GetAllNetworkInterfaces().Any(n => n.OperationalStatus == OperationalStatus.Up &&
-                (n.Description.Contains("Fortinet", StringComparison.OrdinalIgnoreCase) || n.Name.Contains("Fortinet", StringComparison.OrdinalIgnoreCase) || n.Description.Contains("FortiSSL", StringComparison.OrdinalIgnoreCase)));
+                VpnAdapter(n));
         }
         catch { return false; }
     }
@@ -152,8 +231,9 @@ static class OfficeVpn
         {
             try
             {
+                if (Pids(OcProcs).Count > 0) GuiButton(OcProcs, "Disconnect");
                 if (Tool() is { } t) Run(t, "disconnect", 20000);
-                else GuiButton("Disconnect");
+                else if (Pids(FortiProcs).Count > 0) GuiButton(FortiProcs, "Disconnect");
             }
             catch (Exception e) { Log.Warn("office vpn", "disconnect: " + e.Message); }
         });
@@ -172,47 +252,58 @@ static class OfficeVpn
     static void TryConnect()
     {
         lastTry = DateTime.Now; tries++;
-        Set(State.Connecting, $"🟡 Connecting to {Host} ({Profile})…" + (tries > 1 ? $" try {tries}" : ""));
+        Set(State.Connecting, $"🟡 Connecting to {Host}…" + (tries > 1 ? $" try {tries}" : ""));
+        // A · both: OpenConnect first and FortiClient if it fails (or the other way round); after a failed try the other one goes first
+        var ways = new List<string>();
+        if (Oc() != null) ways.Add("oc");
+        if (Tool() != null || Gui() != null) ways.Add("forti");
+        if (ways.Count == 0) { Set(State.Down, "🔴 Neither OpenConnect nor FortiClient is installed on this PC"); Want = false; return; }
+        if (Order == "forti") ways.Reverse();
+        if (ways.Count == 2 && tries % 2 == 0) ways.Reverse();
+        var why = new List<string>();
+        foreach (var way in ways)
+        {
+            var r = way == "oc" ? ConnectOc() : ConnectForti();
+            if (r.Length == 0) return;
+            why.Add(r); Log.Warn("office vpn", r);
+        }
+        Set(State.Down, "🔴 " + string.Join(" · ", why));
+    }
+
+    static string ConnectOc()
+    {
+        Way = $"OpenConnect ({OcProfile})";
+        try { return OcConnect(Oc()); } catch (Exception e) { return "OpenConnect: " + e.Message; }
+    }
+
+    static string ConnectForti()
+    {
         try
         {
             if (Tool() is { } t)
             {
                 Way = "FortiClientTools (command line)";
                 var pw = Password;
-                if (pw.Length == 0) { Set(State.Down, "🔴 Not connected — add your VPN password in Settings ▸ 🌐 Office VPN (kept encrypted on this PC)"); Want = false; return; }
-                // -i ignore the certificate warning · -m minimized · -q no message boxes
-                var args = $"connect -s {Q("Nova " + Profile)} -h {Q(Host)} -u {Q(User + ":" + pw)}" + (Cert.Length > 0 && File.Exists(Cert) ? $" -c {Q(Cert)}" : "") + " -i -m -q";
+                if (pw.Length == 0) return "add your VPN password in Settings ▸ 🌐 Office VPN for the FortiClientTools command line";
+                // -c takes the certificate's subject[:issuer] · -i ignore the certificate warning · -m minimized · -q no message boxes
+                var args = $"connect -s {Q("Nova " + Profile)} -h {Q(Host)} -u {Q(User + ":" + pw)}" + (Cert.Length > 0 && !File.Exists(Cert) ? $" -c {Q(Cert)}" : "") + " -i -m -q";
                 _ = Task.Run(() => { try { Run(t, args, 90000); } catch (Exception e) { Log.Warn("office vpn", "connect: " + e.Message); } });
+                return "";
             }
-            else if (Gui() is { } g)
+            if (Gui() is { } g)
             {
-                Way = "your FortiClient window";
-                // started again even when it runs in the tray: FortiClient then shows its window (a hidden window has no buttons)
-                var running = Process.GetProcessesByName("FortiClient").Any();
-                Process.Start(new ProcessStartInfo(g) { UseShellExecute = true });
-                Thread.Sleep(running ? 2500 : 6000);
-                var r = GuiConnect();
-                if (r.Length > 0) { Log.Warn("office vpn", r); Set(State.Down, "🔴 " + r); }
+                Way = $"FortiClient ({Profile})";
+                if (Pids(FortiProcs).Count == 0) { Process.Start(new ProcessStartInfo(g) { UseShellExecute = true }); Thread.Sleep(6000); }
+                Reveal(FortiProcs);
+                return GuiConnect();
             }
-            else { Set(State.Down, "🔴 FortiClient is not installed on this PC"); Want = false; return; }
+            return "FortiClient is not installed";
         }
-        catch (Exception e) { Log.Warn("office vpn", "connect: " + e.Message); }
+        catch (Exception e) { return "FortiClient: " + e.Message; }
     }
 
-    static System.Windows.Automation.AutomationElement FortiWindow(int seconds)
-    {
-        var root = System.Windows.Automation.AutomationElement.RootElement;
-        var cond = new System.Windows.Automation.PropertyCondition(System.Windows.Automation.AutomationElement.ControlTypeProperty, System.Windows.Automation.ControlType.Window);
-        for (int i = 0; i < seconds; i++)
-        {
-            foreach (System.Windows.Automation.AutomationElement w in root.FindAll(System.Windows.Automation.TreeScope.Children, cond))
-            {
-                try { if ((w.Current.Name ?? "").Contains("FortiClient", StringComparison.OrdinalIgnoreCase)) return w; } catch { }
-            }
-            Thread.Sleep(1000);
-        }
-        return null;
-    }
+    static System.Windows.Automation.AutomationElement FortiWindow(int seconds) =>
+        AppWindow(FortiProcs, seconds, w => HasButton(w, "Connect") || HasButton(w, "Disconnect"));
 
     static List<System.Windows.Automation.AutomationElement> All(System.Windows.Automation.AutomationElement w, System.Windows.Automation.ControlType t) =>
         w.FindAll(System.Windows.Automation.TreeScope.Descendants, new System.Windows.Automation.PropertyCondition(System.Windows.Automation.AutomationElement.ControlTypeProperty, t))
@@ -254,30 +345,58 @@ static class OfficeVpn
         catch (Exception e) { return "FortiClient window: " + e.Message; }
     }
 
-    /// <summary>Your free FortiClient: its window is found and the button pressed (Windows UI Automation — as a screen reader would).</summary>
-    static bool GuiButton(string name)
+    /// <summary>A button in the program's window (FortiClient or OpenConnect), pressed through Windows UI Automation — as a screen reader would.</summary>
+    static bool GuiButton(string[] procs, string name)
     {
         try
         {
-            var root = System.Windows.Automation.AutomationElement.RootElement;
-            var cond = new System.Windows.Automation.PropertyCondition(System.Windows.Automation.AutomationElement.ControlTypeProperty, System.Windows.Automation.ControlType.Window);
-            for (int i = 0; i < 20; i++)
-            {
-                foreach (System.Windows.Automation.AutomationElement w in root.FindAll(System.Windows.Automation.TreeScope.Children, cond))
-                {
-                    string title;
-                    try { title = w.Current.Name ?? ""; } catch { continue; }
-                    if (!title.Contains("FortiClient", StringComparison.OrdinalIgnoreCase)) continue;
-                    var btn = w.FindFirst(System.Windows.Automation.TreeScope.Descendants, new System.Windows.Automation.AndCondition(
-                        new System.Windows.Automation.PropertyCondition(System.Windows.Automation.AutomationElement.ControlTypeProperty, System.Windows.Automation.ControlType.Button),
-                        new System.Windows.Automation.PropertyCondition(System.Windows.Automation.AutomationElement.NameProperty, name, System.Windows.Automation.PropertyConditionFlags.IgnoreCase)));
-                    if (btn != null && btn.TryGetCurrentPattern(System.Windows.Automation.InvokePattern.Pattern, out var pat)) { ((System.Windows.Automation.InvokePattern)pat).Invoke(); return true; }
-                }
-                Thread.Sleep(1000);
-            }
+            Reveal(procs);
+            var w = AppWindow(procs, 8, x => HasButton(x, name));
+            var btn = w == null ? null : All(w, System.Windows.Automation.ControlType.Button).FirstOrDefault(b => NameOf(b).Trim().Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (btn != null && btn.TryGetCurrentPattern(System.Windows.Automation.InvokePattern.Pattern, out var pat)) { ((System.Windows.Automation.InvokePattern)pat).Invoke(); return true; }
         }
-        catch (Exception e) { Log.Warn("office vpn", "FortiClient window: " + e.Message); }
+        catch (Exception e) { Log.Warn("office vpn", "window: " + e.Message); }
         return false;
+    }
+
+    /// <summary>🔓 OpenConnect: its window is shown, the server “AHMED-MZA” chosen, Connect pressed (its saved password and Batch mode do the rest).
+    /// Returns "" when Connect was pressed (or it is already connected), otherwise what went wrong.</summary>
+    static string OcConnect(string exe)
+    {
+        try
+        {
+            if (Pids(OcProcs).Count == 0) { Process.Start(new ProcessStartInfo(exe) { UseShellExecute = true }); Thread.Sleep(5000); }
+            Reveal(OcProcs);
+            var w = AppWindow(OcProcs, 12, x => HasButton(x, "Connect") || HasButton(x, "Disconnect"));
+            if (w == null) return "OpenConnect's window did not open";
+            if (HasButton(w, "Disconnect")) return "";
+            var combo = All(w, System.Windows.Automation.ControlType.ComboBox).FirstOrDefault();
+            if (combo != null)
+            {
+                string cur = NameOf(combo);
+                try { if (combo.TryGetCurrentPattern(System.Windows.Automation.ValuePattern.Pattern, out var vp)) cur = ((System.Windows.Automation.ValuePattern)vp).Current.Value ?? cur; } catch { }
+                if (!cur.Trim().Equals(OcProfile, StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        if (combo.TryGetCurrentPattern(System.Windows.Automation.ExpandCollapsePattern.Pattern, out var ec)) { ((System.Windows.Automation.ExpandCollapsePattern)ec).Expand(); Thread.Sleep(600); }
+                        var item = combo.FindAll(System.Windows.Automation.TreeScope.Descendants, new System.Windows.Automation.PropertyCondition(System.Windows.Automation.AutomationElement.ControlTypeProperty, System.Windows.Automation.ControlType.ListItem))
+                            .Cast<System.Windows.Automation.AutomationElement>().FirstOrDefault(x => NameOf(x).Trim().Equals(OcProfile, StringComparison.OrdinalIgnoreCase));
+                        if (item != null && item.TryGetCurrentPattern(System.Windows.Automation.SelectionItemPattern.Pattern, out var si)) ((System.Windows.Automation.SelectionItemPattern)si).Select();
+                        else if (item == null) return $"OpenConnect has no server named “{OcProfile}” — check the name in Settings ▸ 🌐 Office VPN";
+                        if (combo.TryGetCurrentPattern(System.Windows.Automation.ExpandCollapsePattern.Pattern, out var ec2)) ((System.Windows.Automation.ExpandCollapsePattern)ec2).Collapse();
+                    }
+                    catch (Exception e) { Log.Warn("office vpn", "OpenConnect server list: " + e.Message); }
+                }
+            }
+            var connect = All(w, System.Windows.Automation.ControlType.Button).FirstOrDefault(b => NameOf(b).Trim().Equals("Connect", StringComparison.OrdinalIgnoreCase));
+            if (connect == null) return "OpenConnect's Connect button was not found";
+            if (!connect.TryGetCurrentPattern(System.Windows.Automation.InvokePattern.Pattern, out var ip)) return "OpenConnect's Connect button could not be pressed";
+            ((System.Windows.Automation.InvokePattern)ip).Invoke();
+            return "";
+        }
+        catch (UnauthorizedAccessException) { return "OpenConnect runs as administrator — Windows does not let Nova press its buttons (run OpenConnect normally, or Nova as administrator)"; }
+        catch (Exception e) { return "OpenConnect window: " + e.Message; }
     }
 
     // ------------------------------------------------------------------ 🧪 the test (Settings and Claude's nova.vpn) — read only, it never connects
@@ -292,6 +411,23 @@ static class OfficeVpn
         string Ver(string f) { try { return FileVersionInfo.GetVersionInfo(f).ProductVersion ?? ""; } catch { return ""; } }
         L(g != null, g != null ? $"FortiClient {Ver(g)} installed · {(Process.GetProcessesByName("FortiClient").Any() ? "running" : "not running")}" : "FortiClient not found in Program Files");
         L(t != null ? true : null, t != null ? "FortiClientTools command line: " + t : "FortiClientTools not on this PC — Nova uses the FortiClient window");
+        var oc = Oc();
+        L(oc != null ? true : null, oc != null ? $"OpenConnect {Ver(oc)} installed · {(Pids(OcProcs).Count > 0 ? "running" : "not running")} · server “{OcProfile}” · order: {(Order == "forti" ? "FortiClient first, then OpenConnect" : "OpenConnect first, then FortiClient")}" : "OpenConnect-GUI not found (choose openconnect-gui.exe in Settings if it is installed elsewhere)");
+        if (oc != null && Pids(OcProcs).Count > 0)
+            try
+            {
+                var w = AppWindow(OcProcs, 1);
+                if (w == null) L(null, "OpenConnect window hidden in the tray (Nova shows it when connecting)");
+                else
+                {
+                    var combo = All(w, System.Windows.Automation.ControlType.ComboBox).FirstOrDefault();
+                    string cur = combo == null ? "" : NameOf(combo);
+                    try { if (combo != null && combo.TryGetCurrentPattern(System.Windows.Automation.ValuePattern.Pattern, out var vp)) cur = ((System.Windows.Automation.ValuePattern)vp).Current.Value ?? cur; } catch { }
+                    var isUp = HasButton(w, "Disconnect"); var can = HasButton(w, "Connect");
+                    L(isUp || can, $"OpenConnect window “{NameOf(w)}”: server shown “{cur}” · {(isUp ? "connected (Disconnect shown)" : can ? "Connect button found — Nova can press it" : "no Connect button visible")}");
+                }
+            }
+            catch (Exception e) { L(false, "OpenConnect window: " + e.Message); }
         try
         {
             var ips = System.Net.Dns.GetHostAddresses(Gateway);
@@ -302,9 +438,9 @@ static class OfficeVpn
         catch (Exception e) { L(false, $"Gateway {Gateway} cannot be found (DNS): {e.Message}"); }
         try
         {
-            var ad = NetworkInterface.GetAllNetworkInterfaces().Where(n => (n.Description + n.Name).Contains("Forti", StringComparison.OrdinalIgnoreCase)).ToList();
-            if (ad.Count == 0) L(false, "No Fortinet network adapter — reinstall FortiClient VPN (its virtual adapter is missing)");
-            foreach (var n in ad) L(n.OperationalStatus == OperationalStatus.Up ? true : null, $"Adapter “{n.Description}”: {n.OperationalStatus}" + (n.OperationalStatus == OperationalStatus.Up ? " · " + string.Join(", ", n.GetIPProperties().UnicastAddresses.Where(u => u.Address.AddressFamily == AddressFamily.InterNetwork).Select(u => u.Address)) : ""));
+            var ad = NetworkInterface.GetAllNetworkInterfaces().Where(VpnAdapter).ToList();
+            if (ad.Count == 0) L(false, "No VPN network adapter (Fortinet / OpenConnect) found");
+            foreach (var n in ad) L(n.OperationalStatus == OperationalStatus.Up ? true : null, $"Adapter “{n.Name}” ({n.Description}): {n.OperationalStatus}" + (n.OperationalStatus == OperationalStatus.Up ? " · " + string.Join(", ", n.GetIPProperties().UnicastAddresses.Where(u => u.Address.AddressFamily == AddressFamily.InterNetwork).Select(u => u.Address)) : ""));
         }
         catch (Exception e) { L(false, "Adapters: " + e.Message); }
         var (ph, pp) = ProbeTarget();
@@ -361,9 +497,11 @@ static class OfficeVpn
             try
             {
                 if (!On) { Set(State.Off, "🌐 Office VPN is off (Settings ▸ 🌐 Office VPN)"); wake.WaitOne(TimeSpan.FromSeconds(30)); continue; }
-                var up = AdapterUp();
-                var server = up && ServerOk();
-                if (up && server) Set(State.Up, $"🟢 Connected ({Profile}) since {Since:HH:mm} · office server answers" + (Way.Length > 0 ? $" · via {Way}" : ""));
+                var adapter = AdapterUp();
+                var server = ServerOk();
+                var up = adapter || server;
+                if (server && !adapter) Set(State.Up, $"🟢 Office network reachable since {Since:HH:mm} (in the office, or a VPN Nova does not know)");
+                else if (up && server) Set(State.Up, $"🟢 Connected since {Since:HH:mm} · office server answers" + (Way.Length > 0 ? $" · via {Way}" : ""));
                 else if (up) Set(State.UpNoServer, $"🟡 Connected, but the office server ({Probe}) does not answer");
                 else if (Now != State.Connecting || DateTime.Now - lastTry > TimeSpan.FromSeconds(45)) Set(State.Down, Want ? "🔴 Not connected — " + (Auto ? "reconnecting…" : "click to connect") : "🔴 Not connected — click the 🌐 icon to connect");
                 if (!up && Want && (Auto || tries == 0) && DateTime.Now - lastTry > Backoff()) TryConnect();
