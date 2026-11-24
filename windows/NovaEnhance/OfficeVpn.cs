@@ -78,6 +78,7 @@ static class OfficeVpn
     static Thread thread;
     static DateTime lastTry = DateTime.MinValue, droppedAt = DateTime.MinValue;
     static int tries;
+    static int trying;
 
     // ------------------------------------------------------------------ the two ways to drive FortiClient
 
@@ -318,6 +319,7 @@ static class OfficeVpn
             if (r.Length == 0) return;
             why.Add(r); Log.Warn("office vpn", r);
         }
+        if (AdapterUp() && ServerOk()) return;   // it came up meanwhile (or you connected yourself)
         Set(State.Down, "🔴 " + string.Join(" · ", why));
     }
 
@@ -483,6 +485,7 @@ static class OfficeVpn
         void L(bool? ok, string t) => sb.Append(ok == true ? "✅ " : ok == false ? "❌ " : "• ").Append(t).Append('\n');
         L(On, "Companion " + (On ? "on" : "off — tick “Use the Office VPN companion”") + $" · reconnect automatically {(Auto ? "on" : "off")} · you want it up: {(Want ? "yes" : "no — press Connect")}");
         L(null, $"Connection “{Profile}” · SSL-VPN · gateway {Gateway} · port {Port} · user {User} · {(SaveLogin ? "Save login" : "Prompt on login")} · certificate {(Cert.Length > 0 ? Path.GetFileName(Cert) : "None")}{(Sso ? " · SSO" : "")}{(DualStack ? " · dual-stack" : "")} · password in Nova: {(Password.Length > 0 ? "yes (encrypted)" : "no")}");
+        var vpnUp = AdapterUp() && ServerOk();
         var useCli = Order == "cli" || Fallback; var useForti = Order == "forti" || Fallback; var useOc = Order is not ("cli" or "forti") || Fallback;
         L(null, $"Connection type tested: {WayName(Order)}" + (Fallback ? " · then the others (ticked)" : " only (the others are not used)"));
         var g = Gui(); var t = Tool();
@@ -505,7 +508,12 @@ static class OfficeVpn
             }
         }
         catch { }
-        if (hs.StartsWith("set up (") && useOc) L(null, "Seen by the helper: " + VpnHelper.Run("look", "", 30).Replace("\n", "\n   "));
+        if (hs.StartsWith("set up (") && useOc)
+        {
+            var seen = VpnHelper.Run("look", "", 30);
+            if (vpnUp) seen = Regex.Replace(seen, @"no Connect button( · buttons: )?$", "connected — OpenConnect minimises itself, no button to show", RegexOptions.Multiline);
+            L(vpnUp ? true : null, "Seen by the helper: " + seen.Replace("\n", "\n   "));
+        }
         var cli = Cli();
         if (useCli) L(cli != null ? true : false, cli != null ? $"OpenConnect command line: {cli} · office certificate pin {(Pin.Length > 0 ? "set" : "NOT set (paste it from OpenConnect ▸ Edit ▸ Server Certificate)")}" : "OpenConnect command line (openconnect.exe) not in Program Files\\OpenConnect-GUI — the command-line way is off");
         try
@@ -528,8 +536,9 @@ static class OfficeVpn
                     var combo = All(w, System.Windows.Automation.ControlType.ComboBox).FirstOrDefault();
                     string cur = combo == null ? "" : NameOf(combo);
                     try { if (combo != null && combo.TryGetCurrentPattern(System.Windows.Automation.ValuePattern.Pattern, out var vp)) cur = ((System.Windows.Automation.ValuePattern)vp).Current.Value ?? cur; } catch { }
-                    var isUp = HasButton(w, "Disconnect"); var can = HasButton(w, "Connect");
-                    L(isUp || can, $"OpenConnect window “{NameOf(w)}”: server shown “{cur}” · {(isUp ? "connected (Disconnect shown)" : can ? "Connect button found — Nova can press it" : "no Connect button visible")}");
+                    var isUp = HasButton(w, "Disconnect") || vpnUp; var can = HasButton(w, "Connect");
+                    if (vpnUp && !HasButton(w, "Disconnect")) { L(true, "OpenConnect: connected (its window is minimised — nothing to press)"); }
+                    else L(isUp || can, $"OpenConnect window “{NameOf(w)}”: server shown “{cur}” · {(isUp ? "connected (Disconnect shown)" : can ? "Connect button found — Nova can press it" : "no Connect button visible")}");
                 }
             }
             catch (Exception e) { L(false, "OpenConnect window: " + e.Message); }
@@ -609,8 +618,13 @@ static class OfficeVpn
                 if (server && !adapter) Set(State.Up, $"🟢 Office network reachable since {Since:HH:mm} (in the office, or a VPN Nova does not know)");
                 else if (up && server) Set(State.Up, $"🟢 Connected since {Since:HH:mm} · office server answers" + (Way.Length > 0 ? $" · via {Way}" : ""));
                 else if (up) Set(State.UpNoServer, $"🟡 Connected, but the office server ({Probe}) does not answer");
-                else if (Now != State.Connecting || DateTime.Now - lastTry > TimeSpan.FromSeconds(45)) Set(State.Down, Want ? "🔴 Not connected — " + (Auto ? "reconnecting…" : "click to connect") : "🔴 Not connected — click the 🌐 icon to connect");
-                if (!up && Want && (Auto || tries == 0) && DateTime.Now - lastTry > Backoff()) TryConnect();
+                else if (trying == 0 && (Now != State.Connecting || DateTime.Now - lastTry > TimeSpan.FromSeconds(45))) Set(State.Down, Want ? "🔴 Not connected — " + (Auto ? "reconnecting…" : "click to connect") : "🔴 Not connected — click the 🌐 icon to connect");
+                // the connection is tried in the background: the watch goes on, so 🟢 shows as soon as the VPN is up
+                if (!up && Want && (Auto || tries == 0) && DateTime.Now - lastTry > Backoff() && Interlocked.CompareExchange(ref trying, 1, 0) == 0)
+                {
+                    lastTry = DateTime.Now;
+                    _ = Task.Run(() => { try { TryConnect(); } catch (Exception e) { Log.Warn("office vpn", e.Message); } finally { Interlocked.Exchange(ref trying, 0); lastTry = DateTime.Now; wake.Set(); } });
+                }
             }
             catch (Exception e) { Log.Warn("office vpn", e.Message); }
             wake.WaitOne(TimeSpan.FromSeconds(Now == State.Connecting ? 2 : 5));
