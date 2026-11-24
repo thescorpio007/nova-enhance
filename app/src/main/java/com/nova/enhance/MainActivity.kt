@@ -18,11 +18,12 @@ class MainActivity : BaseActivity() {
         val c = this
         val root = Ui.col(c, 16).apply { setPadding(Ui.dp(c, 16), Ui.dp(c, 6), Ui.dp(c, 16), Ui.dp(c, 8)) }
 
-        val head = Ui.row(c)
+        // The name on its own line (never cut to “Nov”), the buttons below it — they scroll sideways on a narrow phone.
         val titles = Ui.col(c)
-        titles.addView(Ui.title(c, "Nova Enhance").apply { textSize = 20f; maxLines = 1; isSingleLine = true; setPadding(0, 0, 0, 0) })
-        titles.addView(Ui.text(c, "Project: ${Db.PROJECT}", 12f, Ui.MUTED))
-        head.addView(titles, Ui.lp(0, weight = 1f))
+        titles.addView(Ui.title(c, "Nova Enhance").apply { textSize = 22f; maxLines = 1; isSingleLine = true; setPadding(0, 0, 0, 0) })
+        titles.addView(Ui.text(c, "Project: ${Db.PROJECT}", 12f, Ui.MUTED).apply { maxLines = 1; isSingleLine = true; ellipsize = android.text.TextUtils.TruncateAt.END })
+        root.addView(titles)
+        val head = Ui.row(c)
         head.addView(Ui.smallButton(c, "📄 Word") { WordActivity.open(c) },
             Ui.lp(android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, Ui.dp(c, 32), end = Ui.dp(c, 8)))
         head.addView(Ui.smallButton(c, "🖥 My PC") { startActivity(Intent(c, MyPcActivity::class.java)) },
@@ -31,7 +32,7 @@ class MainActivity : BaseActivity() {
             Ui.lp(android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, Ui.dp(c, 32), end = Ui.dp(c, 8)))
         head.addView(Ui.smallButton(c, "⚙") { startActivity(Intent(c, SettingsActivity::class.java)) },
             Ui.lp(android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, Ui.dp(c, 32)))
-        root.addView(head)
+        root.addView(android.widget.HorizontalScrollView(c).apply { isHorizontalScrollBarEnabled = false; addView(head) }, Ui.lp(top = Ui.dp(c, 8)))
 
         setupCard = Ui.card(c)
         setupCard.addView(Ui.text(c, "Connect your AI", 16f, Ui.TEXT, true))
