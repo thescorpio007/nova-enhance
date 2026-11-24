@@ -1752,12 +1752,14 @@ class SettingsForm : NovaForm
         }));
         ocRow.Controls.Add(ocLbl);
         var ordRow = page.Add(Th.Row(false));
-        ordRow.Controls.Add(new Label { Text = "Which first", AutoSize = false, Width = 190, ForeColor = Th.Muted, Font = Th.F(9.5f), TextAlign = ContentAlignment.MiddleLeft, Height = 28 });
+        ordRow.Controls.Add(new Label { Text = "Connect with", AutoSize = false, Width = 190, ForeColor = Th.Muted, Font = Th.F(9.5f), TextAlign = ContentAlignment.MiddleLeft, Height = 28 });
         var rbCliFirst = new RadioButton { Text = "⌨ OpenConnect command line", AutoSize = true, ForeColor = Th.Text, Font = Th.F(9.5f), Checked = OfficeVpn.Order == "cli", Margin = new Padding(0, 5, 16, 0) };
         var rbOcFirst = new RadioButton { Text = "OpenConnect window", AutoSize = true, ForeColor = Th.Text, Font = Th.F(9.5f), Checked = OfficeVpn.Order is not ("cli" or "forti"), Margin = new Padding(0, 5, 16, 0) };
         var rbFortiFirst = new RadioButton { Text = "FortiClient", AutoSize = true, ForeColor = Th.Text, Font = Th.F(9.5f), Checked = OfficeVpn.Order == "forti", Margin = new Padding(0, 5, 0, 0) };
         ordRow.Controls.Add(rbCliFirst); ordRow.Controls.Add(rbOcFirst); ordRow.Controls.Add(rbFortiFirst);
-        page.Add(Th.L("If the first way fails, Nova tries the others at once.", 9, Th.Muted));
+        var fbRow = page.Add(Th.Row(false));
+        var fb = Th.Check("If it fails, also try the other ways (off = only the one chosen above, Nova never opens another program)", OfficeVpn.Fallback, _ => { });
+        fbRow.Controls.Add(fb);
         page.Add(Th.Section("⌨ OpenConnect command line (silent, no window)"));
         var cliExe = OfficeVpn.Cli();
         page.Add(Th.L(cliExe != null ? "✓ openconnect.exe found: " + cliExe : "openconnect.exe is not in Program Files\\OpenConnect-GUI — this way stays off (the helper runs it only from Program Files)", 9.5f, cliExe != null ? Th.Good : Th.Warn));
@@ -1775,7 +1777,7 @@ class SettingsForm : NovaForm
         hRow.Controls.Add(Th.B("Remove", async () => { var r = await Task.Run(VpnHelper.Remove); if (!hLbl.IsDisposed) hLbl.Text = r.Length == 0 ? "🛡 VPN helper: " + VpnHelper.State() : "⚠ " + r; }));
         hRow.Controls.Add(hLbl);
         page.Add(Th.L("OpenConnect always runs as administrator, and Windows does not let normal programs press its buttons. The helper does only that (connect / disconnect OpenConnect or FortiClient, and start / stop OpenConnect's command line) with administrator rights; Nova itself stays a normal program so it keeps reaching your Outlook. The helper is a copy of Nova in Program Files (no PowerShell, no script). Only the command line gets your password, encrypted for your Windows account.", 9, Th.Muted));
-        page.Add(Th.L("In OpenConnect keep the password saved and “Batch mode” ticked — Nova chooses the server and presses Connect; if it fails, Nova tries the other one.", 9, Th.Muted));
+        page.Add(Th.L("In OpenConnect keep the password saved and “Batch mode” ticked — Nova chooses the server and presses Connect.", 9, Th.Muted));
         page.Add(Th.Section("Checking that it works"));
         var probe = Field("Office server to check", OfficeVpn.Probe, 220);
         page.Add(Th.L("An office computer that answers only through the VPN — e.g. 192.168.1.12 (the O: N: S: server). Not the gateway.", 9, Th.Muted));
@@ -1798,7 +1800,7 @@ class SettingsForm : NovaForm
             OfficeVpn.Host = g + (int.TryParse(port.Text.Trim(), out var pn) && pn > 0 && pn != 443 ? ":" + pn : "");
             OfficeVpn.SaveLogin = rbSave.Checked; OfficeVpn.Sso = sso.Checked; OfficeVpn.DualStack = dual.Checked;
             OfficeVpn.Cert = cert.Text.Trim().Equals("None", StringComparison.OrdinalIgnoreCase) ? "" : cert.Text.Trim();
-            OfficeVpn.OcProfile = ocProf.Text.Trim(); OfficeVpn.Order = rbCliFirst.Checked ? "cli" : rbFortiFirst.Checked ? "forti" : "oc";
+            OfficeVpn.OcProfile = ocProf.Text.Trim(); OfficeVpn.Order = rbCliFirst.Checked ? "cli" : rbFortiFirst.Checked ? "forti" : "oc"; OfficeVpn.Fallback = fb.Checked;
             var pv = pin.Text.Trim(); if (pv.Length > 0 && !pv.StartsWith("pin-sha256:")) pv = "pin-sha256:" + pv; OfficeVpn.Pin = pv;
             if (pw.Text.Length > 0 && pw.Text != "••••••••") OfficeVpn.Password = pw.Text;
             savedAt = DateTime.Now;
@@ -1809,7 +1811,7 @@ class SettingsForm : NovaForm
         br.Controls.Add(Th.B("■ Disconnect", OfficeVpn.Disconnect));
         br.Controls.Add(Th.B("🗂 Project sources…", Screens.Sources));
         page.Add(Th.Section("🧪 Test"));
-        var testOut = page.Add(Th.Wrap("Checks OpenConnect, FortiClient, the gateway, the VPN adapters, the office server and the two windows — it does not connect.", 9.5f, Th.Muted), true);
+        var testOut = page.Add(Th.Wrap("Tests only the connection type chosen above (and the others only if “also try the other ways” is ticked), plus the gateway and the office server — it does not connect.", 9.5f, Th.Muted), true);
         var tr = page.Add(Th.Row(false));
         tr.Controls.Add(Th.B("🧪 Test the VPN setup", async () =>
         {
