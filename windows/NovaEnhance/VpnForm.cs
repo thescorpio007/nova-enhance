@@ -80,7 +80,7 @@ class VpnForm : NovaForm
         sig.Dock = DockStyle.Bottom; sig.Padding = new Padding(16, 4, 0, 6);
         Controls.Add(split); Controls.Add(sig); Controls.Add(stats); Controls.Add(hero);
         Shown += (_, _) => { try { split.SplitterDistance = Math.Max(440, Width * 46 / 100); } catch { } Refresh2(true); };
-        timer = new System.Windows.Forms.Timer { Interval = 1500 };
+        timer = new System.Windows.Forms.Timer { Interval = 1000 };
         timer.Tick += (_, _) => Refresh2(false);
         timer.Start();
         FormClosed += (_, _) => timer.Dispose();
@@ -224,7 +224,7 @@ class VpnForm : NovaForm
             state.Text = now switch
             {
                 OfficeVpn.State.Up => "🟢 Connected",
-                OfficeVpn.State.UpNoServer => "🟡 Connected — office server not answering",
+                OfficeVpn.State.UpNoServer => OfficeVpn.Since > DateTime.Now.AddSeconds(-20) ? "🟡 Connected — setting up the office routes…" : "🟡 Connected — office server not answering",
                 OfficeVpn.State.Connecting => "🟡 Connecting…",
                 OfficeVpn.State.Off => "⚪ Office VPN is off",
                 _ => "🔴 Not connected",
@@ -239,15 +239,16 @@ class VpnForm : NovaForm
             badges.Text = now == OfficeVpn.State.Up
                 ? (info.Dtls == true ? "⚡ fast UDP channel (DTLS)" : OfficeVpn.Dtls ? "SSL channel (the firewall did not offer UDP)" : "SSL channel (UDP off)") + (OfficeVpn.Pin.Length > 0 ? " · 🔐 certificate pinned" : "")
                 : (note.Length > 0 && DateTime.Now - noteAt < TimeSpan.FromSeconds(30) ? note : "");
-            if (now == OfficeVpn.State.Up && note.Length > 0 && DateTime.Now - noteAt < TimeSpan.FromSeconds(30)) badges.Text += "   " + note;
+            if (now == OfficeVpn.State.Up) note = "";
             ends.Text = info.Ends.Length > 0 && now == OfficeVpn.State.Up ? "Session ends at the firewall: " + info.Ends : "";
             connect.Enabled = now is not OfficeVpn.State.Up;
             shield.Invalidate();
 
             // traffic of the VPN adapter
-            var nic = NetworkInterface.GetAllNetworkInterfaces().FirstOrDefault(n => n.OperationalStatus == OperationalStatus.Up &&
-                (n.Name.Equals(OfficeVpn.Iface, StringComparison.OrdinalIgnoreCase) || n.Name.Contains(OfficeVpn.Gateway, StringComparison.OrdinalIgnoreCase) ||
-                 Regex.IsMatch(n.Description, "OpenConnect|Wintun|Fortinet SSL", RegexOptions.IgnoreCase)));
+            // Nova's own adapter first (by its name), then another VPN adapter
+            var nics = NetworkInterface.GetAllNetworkInterfaces().Where(n => n.OperationalStatus == OperationalStatus.Up).ToList();
+            var nic = nics.FirstOrDefault(n => n.Name.Equals(OfficeVpn.Iface, StringComparison.OrdinalIgnoreCase))
+                      ?? nics.FirstOrDefault(n => n.Name.Contains(OfficeVpn.Gateway, StringComparison.OrdinalIgnoreCase) || Regex.IsMatch(n.Description, "OpenConnect|Wintun|Fortinet SSL", RegexOptions.IgnoreCase));
             if (nic != null)
             {
                 var st = nic.GetIPStatistics();

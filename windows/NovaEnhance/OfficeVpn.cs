@@ -117,7 +117,12 @@ static class OfficeVpn
                 if (Regex.IsMatch(l, @"DTLS (connected|established|initiali[sz]ed)|Established DTLS", RegexOptions.IgnoreCase)) dtls = true;
                 else if (Regex.IsMatch(l, @"DTLS disabled|DTLS.*(fail|not support)|No DTLS", RegexOptions.IgnoreCase)) dtls ??= false;
                 if (Regex.IsMatch(l, @"Invalid credentials|Login failed|authentication fail|Failed to authenticate", RegexOptions.IgnoreCase)) reason = "The firewall refused the login (wrong password?)";
-                else if (Regex.IsMatch(l, @"certificate.*(verify failed|does not match)|Server certificate.*fail", RegexOptions.IgnoreCase) && !Regex.IsMatch(l, "signer not found")) reason = "The firewall's certificate is not the saved one — check with IT before trusting it";
+                else if ((m = Regex.Match(l, @"didn't match:?\s*(pin-sha256:\S+)?", RegexOptions.IgnoreCase)).Success && l.Contains("certificate", StringComparison.OrdinalIgnoreCase))
+                    reason = "⚠ The firewall's certificate is NOT the one saved in Nova (pin) — check with IT before trusting it" + (m.Groups[1].Success ? " · it now shows " + m.Groups[1].Value : "");
+                else if (Regex.IsMatch(l, @"does not match hostname|signer not found|failed verification", RegexOptions.IgnoreCase) && !reason.StartsWith("⚠"))
+                    reason = Pin.Length == 0
+                        ? "Your firewall uses its own certificate — paste the Server certificate pin (OpenConnect ▸ Edit ▸ Server Certificate) in 🌐 Nova VPN and press Save"
+                        : "";   // normal for your firewall: the saved pin is what makes it trusted
                 else if (Regex.IsMatch(l, @"Failed to connect|Connection refused|timed out|getaddrinfo|resolve", RegexOptions.IgnoreCase)) reason = "Cannot reach the gateway (internet down?)";
                 else if (Regex.IsMatch(l, @"Cookie was rejected|session.*expired", RegexOptions.IgnoreCase)) reason = "The session ended at the firewall — logging in again";
                 else if (Regex.IsMatch(l, @"Got CONNECT response|Connected as|Configured as|SSL connected", RegexOptions.IgnoreCase)) reason = "";
@@ -725,7 +730,7 @@ static class OfficeVpn
                 }
             }
             catch (Exception e) { Log.Warn("office vpn", e.Message); }
-            wake.WaitOne(TimeSpan.FromSeconds(Now == State.Connecting ? 2 : 5));
+            wake.WaitOne(TimeSpan.FromSeconds(Now is State.Connecting or State.UpNoServer || trying == 1 ? 1 : 5));
         }
     }
 
