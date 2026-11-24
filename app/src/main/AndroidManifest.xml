@@ -107,6 +107,25 @@
                 <data android:mimeType="text/x-vcard" />
             </intent-filter>
         </activity>
+        <!-- 📄 Nova Word: open / edit .docx and .doc, Arabic direction ¶→ ←¶ -->
+        <activity android:name=".WordActivity" android:exported="true" android:label="Nova Word" android:windowSoftInputMode="adjustResize">
+            <intent-filter android:label="Nova Word">
+                <action android:name="android.intent.action.VIEW" />
+                <action android:name="android.intent.action.EDIT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="application/msword" />
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+            </intent-filter>
+            <intent-filter android:label="Open in Nova Word">
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/msword" />
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+            </intent-filter>
+        </activity>
         <activity android:name=".QrScanActivity" android:exported="false" android:screenOrientation="portrait" />
         <provider android:name=".PcFiles" android:authorities="com.nova.enhance.pcfiles" android:exported="false" android:grantUriPermissions="true" />
         <service android:name=".PcSyncJob" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />

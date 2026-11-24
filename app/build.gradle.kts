@@ -57,6 +57,10 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
 
+    packaging {
+        resources { excludes += setOf("META-INF/DEPENDENCIES", "META-INF/LICENSE", "META-INF/LICENSE.txt", "META-INF/NOTICE", "META-INF/NOTICE.txt", "META-INF/*.kotlin_module") }
+    }
+
     lint {
         abortOnError = false
         checkReleaseBuilds = false
@@ -73,4 +77,6 @@ android {
 dependencies {
     implementation("org.jetbrains.kotlin:kotlin-stdlib:2.0.21")
     implementation("com.google.zxing:core:3.5.3")   // 📷 reading the pairing QR code (Apache 2.0)
+    // 📄 Word 97–2003 (.doc) on the phone: read and edit its text (Apache POI · Apache 2.0). 3.17 runs on Android without java.awt.
+    implementation("org.apache.poi:poi-scratchpad:3.17")
 }

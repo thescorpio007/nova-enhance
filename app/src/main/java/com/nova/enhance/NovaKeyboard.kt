@@ -98,6 +98,10 @@ class NovaKeyboard : InputMethodService() {
         // ⏭ Fix the next mistake · ✎ extra instruction (as the PC's Enhance window)
         val (tsv, trow) = Ui.chipRow(c)
         trow.addView(chip("⏭ Fix next mistake") { fixNext() }.apply { setTextColor(Color.WHITE); background = Ui.round(Ui.ACCENT, Ui.dp(c, 14).toFloat()) }, chipLp())
+        // ¶→ / ←¶ the direction of this paragraph (or the selected lines) · ⇄ every line in its own direction (Arabic / English)
+        trow.addView(chip("¶→") { direction('L') }.apply { contentDescription = "Left to right" }, chipLp())
+        trow.addView(chip("←¶") { direction('R') }.apply { contentDescription = "Right to left" }, chipLp())
+        trow.addView(chip("⇄ Fix direction") { direction(null) }, chipLp())
         for ((label, instr) in listOf("✎ To contractor" to "Write it as a firm, clear instruction to the contractor.",
                 "✎ To client" to "Write it in a respectful, reassuring tone for the client.", "✎ Firmer" to "Make it firmer and more direct.",
                 "✎ Polite" to "Make it more polite and diplomatic.", "✎ Shorter" to "Make it shorter.", "✎ Bullet points" to "Turn it into short bullet points.")) {
@@ -303,8 +307,10 @@ class NovaKeyboard : InputMethodService() {
     }
 
     /** False = not put (the message has pictures or tables and the paragraphs did not line up — said in the status line). */
-    private fun put(text: String, whole: Boolean): Boolean {
+    private fun put(text0: String, whole: Boolean): Boolean {
         val ic = currentInputConnection ?: return false
+        // ⇄ Arabic lines right-to-left, English lines left-to-right, references and numbers held in place (Settings ▸ keyboard).
+        val text = if (pref("kb_fix_dir") && Bidi.hasArabic(text0)) Bidi.fix(text0) else text0
         if (whole) {
             val cur = wholeText()
             // 🖼 Pictures and tables stay where they are: only the text of each paragraph is changed.
@@ -443,6 +449,35 @@ class NovaKeyboard : InputMethodService() {
                 }.onFailure { say(it.message ?: "Failed", Ui.BAD) }
             }
         }.start()
+    }
+
+    /** ¶→ 'L' / ←¶ 'R': the paragraph at the cursor or the selected lines · null = ⇄ every line in its own direction. */
+    private fun direction(dir: Char?) {
+        val ic = currentInputConnection ?: return
+        val sel = ic.getSelectedText(0)?.toString()
+        if (dir == null) {
+            val (t, whole) = grab() ?: run { say("Type or select some text first", Ui.BAD); return }
+            val fixed = Bidi.fix(t)
+            if (fixed == t) { say("✓ The direction is already right", Ui.GOOD); return }
+            if (!put(fixed, whole)) return
+            undoText = t; undoWhole = whole
+            say("⇄ Direction fixed — Arabic lines right-to-left, English lines left-to-right · ↶ to undo", Ui.GOOD)
+            return
+        }
+        if (!sel.isNullOrEmpty()) {
+            ic.commitText(Bidi.fix(sel, dir), 1)
+        } else {
+            val before = ic.getTextBeforeCursor(4000, 0)?.toString() ?: ""
+            val after = ic.getTextAfterCursor(4000, 0)?.toString() ?: ""
+            val pb = before.substring(before.lastIndexOf('\n') + 1)
+            val pa = after.substringBefore('\n')
+            if ((pb + pa).isBlank()) { say("Put the cursor in a line of text first", Ui.BAD); return }
+            ic.beginBatchEdit()
+            ic.deleteSurroundingText(pb.length, pa.length)
+            ic.commitText(Bidi.line(pb + pa, dir), 1)
+            ic.endBatchEdit()
+        }
+        say(if (dir == 'R') "←¶ Right-to-left" else "¶→ Left-to-right", Ui.GOOD)
     }
 
     private fun undo() {

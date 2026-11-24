@@ -225,6 +225,7 @@ class SettingsActivity : BaseActivity() {
         root.addView(Ui.section(c, "Keyboard panel"))
         check("Always start with ✦ Fix grammar", "kb_start_grammar")
         check("Show the changes (red → green) before Replace", "kb_preview")
+        check("⇄ Fix Arabic / English direction automatically (Fix grammar, Translate…)", "kb_fix_dir")
 
         root.addView(Ui.section(c, "My words (never marked)"))
         val words = Ui.input(c, "Words, names and codes — one per line or separated by commas", true, 4)

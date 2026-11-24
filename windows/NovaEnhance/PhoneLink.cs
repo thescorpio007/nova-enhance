@@ -653,6 +653,43 @@ static class PhoneLink
         return Convert.ToBase64String(Seal(Gzip(Encoding.UTF8.GetBytes(res.ToJsonString()))));
     }
 
+    /// <summary>📄 The phone's Word file converted by Word itself (.doc → .docx to edit it, .docx → .doc to give it back): the format
+    /// stays exactly right. Word runs hidden and is closed again if Nova started it; the copies are deleted.</summary>
+    [System.Runtime.InteropServices.DllImport("oleaut32.dll")] static extern int GetActiveObject(ref Guid clsid, IntPtr reserved, [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.IUnknown)] out object obj);
+    [System.Runtime.InteropServices.DllImport("ole32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)] static extern int CLSIDFromProgID(string progId, out Guid clsid);
+
+    static JsonObject WordConvert(JsonObject a)
+    {
+        var name = Path.GetFileName(a["name"]?.ToString() ?? "document.doc");
+        if (Private(name)) throw new Exception("🔒 private");
+        var toDoc = a["action"]?.ToString() == "todoc";
+        var data = Convert.FromBase64String(a["data"]?.ToString() ?? "");
+        var dir = Path.Combine(Paths.Cache, "word-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        var src = Path.Combine(dir, Path.GetFileNameWithoutExtension(name) + (toDoc ? ".docx" : ".doc"));
+        var dst = Path.Combine(dir, Path.GetFileNameWithoutExtension(name) + (toDoc ? ".doc" : ".docx"));
+        File.WriteAllBytes(src, data);
+        dynamic word = null; bool mine = false; dynamic d = null;
+        try
+        {
+            // Word already open (your documents): used, never closed. Otherwise Nova starts a hidden Word and closes it after.
+            try { if (CLSIDFromProgID("Word.Application", out var clsid) == 0 && GetActiveObject(ref clsid, IntPtr.Zero, out var running) == 0) word = running; } catch { }
+            if (word == null) { var t = Type.GetTypeFromProgID("Word.Application") ?? throw new Exception("Microsoft Word is not installed on this PC"); word = Activator.CreateInstance(t); mine = true; word.Visible = false; }
+            word.DisplayAlerts = 0;
+            d = word.Documents.Open(src, false, false, false);
+            d.SaveAs2(dst, toDoc ? 0 : 16);   // 0 = Word 97–2003 .doc · 16 = .docx
+            d.Close(false); d = null;
+            return new JsonObject { ["data"] = Convert.ToBase64String(File.ReadAllBytes(dst)), ["name"] = Path.GetFileName(dst) };
+        }
+        finally
+        {
+            try { if (d != null) d.Close(false); } catch { }
+            try { if (mine && word != null) word.Quit(false); } catch { }
+            try { if (word != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(word); } catch { }
+            try { Directory.Delete(dir, true); } catch { }
+        }
+    }
+
     static async Task<JsonNode> Exec(string op, JsonObject a)
     {
         JsonNode res;
@@ -760,6 +797,7 @@ static class PhoneLink
                 res = await Task.Run(() => ProjectFinder.Handle(m));
                 break;
             }
+            case "word": res = await Task.Run(() => WordConvert(a)); break;   // 📄 .doc ⇄ .docx by Word on this PC
             case "agent": res = await PhoneAgent.Handle(a); break;   // 🧭
             case "claude":
             {

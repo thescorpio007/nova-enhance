@@ -321,7 +321,7 @@ static class Smoke
                 catch { }
                 m.Dispose();
             }
-            catch (Exception e) { Ok(false, $"Talk about this email at {w}×{h}: {e.Message}"); }
+            catch (Exception ex) { Ok(false, $"Talk about this email at {w}×{h}: {ex.Message}"); }
         }
         Store.SetBool("win_mailask_top", false);
         var b = new BriefForm(); b.Show(); b.Reload(); Pump(1500); Ok(b.Visible, "Morning brief opens"); b.Dispose();
