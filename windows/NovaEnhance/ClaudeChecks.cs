@@ -252,13 +252,13 @@ static class ClaudeChecks
         var p = Proj(a);
         int depth = Math.Clamp(a["depth"]?.GetValue<int>() ?? 3, 1, 6), samples = Math.Clamp(a["samples"]?.GetValue<int>() ?? 5, 0, 20);
         var files = Names(p);
-        var roots = p.Folders.Concat((p.Sources ?? new()).Select(s => s.Path)).Select(f => f.TrimEnd('\') + "\").ToList();
+        var roots = p.Folders.Concat((p.Sources ?? new()).Select(s => s.Path)).Select(f => f.TrimEnd('\\') + "\\").ToList();
         var nodes = new SortedDictionary<string, (int Count, List<string> Samples)>(StringComparer.OrdinalIgnoreCase);
         foreach (var f in files)
         {
             var root = roots.FirstOrDefault(r => f.StartsWith(r, StringComparison.OrdinalIgnoreCase)) ?? "";
-            var parts = f[root.Length..].Split('\');
-            var key = root + string.Join("\", parts.Take(Math.Min(depth, parts.Length - 1)));
+            var parts = f[root.Length..].Split('\\');
+            var key = root + string.Join("\\", parts.Take(Math.Min(depth, parts.Length - 1)));
             if (!nodes.TryGetValue(key, out var n)) n = (0, new List<string>());
             n.Count++;
             if (n.Samples.Count < samples) n.Samples.Add(parts[^1]);
