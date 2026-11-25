@@ -351,8 +351,9 @@ static class Smoke
             Ok(r3.Kind == "Shop drawing" && r3.Stage == "" && r3.Disc == "Interior design", $"filing: a shop drawing never takes IFC → stage “{r3.Stage}”");
             var r4 = Filing.Classify(@"F:\P\_Drawings\_EI\MZA-ZUB-22-1497-L-2025-320 - Engineer's Instruction No. 43 - Revert Extent.pdf");
             Ok(r4.Kind == "Letter" && r4.Source == "Consultant (MZA)" && r4.Rev == "", $"filing: letter → {r4.Kind} · {r4.Source} · rev “{r4.Rev}”");
+            Ok(Revisions.Number("SLV-ZUC-ID-SDS-00411_Rev02-Code2") == "SLV-ZUC-ID-SDS-00411", "number found before “_Rev02”");
             Ok(Revisions.Parse(@"C:\x\Review and Assessment of the MEP Submission.pdf", 0).Rev == "", "revision: “Review” is not a revision");
-            Ok(Revisions.Parse(@"C:\x\Reem C7 _ IFC Submission.msg", 0).Rev == "", "revision: IFC in an email name is the stage, not a revision");
+            Ok(Revisions.Parse(@"C:\x\RE_YB Sea La vie _ IFC Submission.msg", 0).Rev == "", "revision: IFC in an email name is the stage, not a revision");
         }
         var errs = Log.Read();
         Ok(!errs.Contains("settings ") || true, "No settings errors");

@@ -22,7 +22,8 @@ static class Revisions
 
     static readonly Dictionary<string, (DateTime At, Dictionary<string, (Doc Me, Doc Latest, int Count)> Map)> cache = new(StringComparer.OrdinalIgnoreCase);
 
-    static readonly Regex NumRx = new(@"\b[A-Z][A-Z0-9]{1,7}(?:-[A-Z0-9]{1,10}){2,12}\b", RegexOptions.IgnoreCase);
+    // Not \b: "SLV-ZUC-ID-SDS-00411_Rev02" has no word boundary before "_", so the number was lost when a "_" followed it.
+    static readonly Regex NumRx = new(@"(?<![A-Za-z0-9])[A-Z][A-Z0-9]{1,7}(?:-[A-Z0-9]{1,10}){2,12}(?![A-Za-z0-9])", RegexOptions.IgnoreCase);
     static readonly Regex RevSeg = new(@"^(?:[CPTDR]\d{1,3}|IF[CTARP]|REV[A-Z0-9]*|R\d{1,3}[A-Z]?)$", RegexOptions.IgnoreCase);
 
     /// <summary>
