@@ -23,6 +23,7 @@ class GuidedSearchForm : NovaForm
         new("sub", "📦", "Submittals & approvals", new(@"submittal|transmittal|\bmas\b|\bmar\b|material (approval|submittal)|\brfi\b|\bw?ir\b|inspection|\bncr\b|method statement|\bms\b|pre-?qual|\bpq\b|sample|technical submit", I)),
         new("mail", "✉", "Emails", null),
         new("mom", "🗒", "Minutes of meeting", new(@"minute|\bmom\b|meeting", I)),
+        new("ltr", "📨", "Letters & instructions", new(@"letter|instruction|notice|\bltr\b", I)),
         new("boq", "💰", "BOQ & pricing", new(@"\bboq\b|bills? of quant|pricing|priced|quantit|\bvo\b|variation|valuation|payment cert|\bipc\b", I)),
         new("all", "🗂", "Everything", new(@".", I)),
     };
@@ -95,6 +96,7 @@ class GuidedSearchForm : NovaForm
         top.Controls.Add(timerBtn);
         top.Controls.Add(Th.B("💬 Free chat", () => Screens.Hub("")));
         top.Controls.Add(Th.B("📂 Classic finder", () => Screens.FindFile("")));
+        top.Controls.Add(Th.B("📐 Learn", () => Screens.FilingLearn(project?.Code)));
         top.Controls.Add(Th.B("⚙", () => Screens.Settings("🎯 Guided mode")));
         stopBtn = Th.B("■ Stop", () => { cts?.Cancel(); Working(false); note.Text = "■ Stopped — pick again, or ← Back."; });
         stopBtn.Visible = false;
@@ -285,14 +287,34 @@ class GuidedSearchForm : NovaForm
         var files = await Task.Run(() => Projects.Catalogue(folders));
         if (IsDisposed) return; Working(false); if (my.IsCancellationRequested) return;
         note.Text = $"{files.Count:N0} files in {whereLabel} · pick the kind (type its number).";
-        var groups = await Task.Run(() => Cats.ToDictionary(c => c.Key, c => c.Match == null ? new List<Projects.FileRow>() : files.Where(f => c.Match.IsMatch(Rel(f.Path))).ToList()));
+        // 📐 Each file's kind comes from the filing concept (🧠 Nova Brain codes: number → folders → words); the folder words only when it has none.
+        note.Text = $"📐 Nova labels {files.Count:N0} files (kind, source, discipline, stage)…";
+        Working(true);
+        var groups = await Task.Run(() =>
+        {
+            labels = new Dictionary<string, FileLabels>(StringComparer.OrdinalIgnoreCase);
+            var res = Cats.ToDictionary(c => c.Key, _ => new List<Projects.FileRow>());
+            foreach (var f in files)
+            {
+                if (my.IsCancellationRequested) break;
+                var lb = Filing.Classify(f.Path);
+                labels[f.Path] = lb;
+                var k = lb.Kind.Length > 0 && KindCat.TryGetValue(lb.Kind, out var kc) ? kc : null;
+                if (k != null) res[k].Add(f);
+                else foreach (var c in Cats) if (c.Match != null && c.Key != "all" && c.Match.IsMatch(Rel(f.Path))) { res[c.Key].Add(f); break; }
+                res["all"].Add(f);
+            }
+            return res;
+        });
+        note.Text = $"{files.Count:N0} files in {whereLabel} · pick the kind (type its number).";
         if (IsDisposed) return; Working(false); if (my.IsCancellationRequested) return;
         body.SuspendLayout();
         foreach (var c in Cats)
         {
             var list = groups[c.Key];
             if (c.Key == "mail") { Opt($"{c.Icon} {c.Label}", "search your emails of " + whereLabel, () => { cat = c; whatLabel = c.Label; inNarrow = new(); narrowLabel = ""; Go(3); }); continue; }
-            var ob = Opt($"{c.Icon} {c.Label}", $"{list.Count:N0} files", () =>
+            var bySrc = list.Select(x => labels.TryGetValue(x.Path, out var l) ? l.Source : "").Where(x => x.Length > 0).GroupBy(x => x).OrderByDescending(g => g.Count()).Take(3).Select(g => $"{g.Count():N0} {g.Key.ToLowerInvariant()}");
+            var ob = Opt($"{c.Icon} {c.Label}", $"{list.Count:N0} files" + (bySrc.Any() ? " · " + string.Join(" · ", bySrc) : ""), () =>
             {
                 cat = c; whatLabel = c.Label; inWhat = list;
                 if (list.Count <= 40 || c.Key == "all" && list.Count <= 80) { inNarrow = list; narrowLabel = ""; Go(3); }
@@ -335,6 +357,17 @@ class GuidedSearchForm : NovaForm
         body.ResumeLayout();
     }
 
+    /// <summary>📐 Filing kind → the "What" choice.</summary>
+    static readonly Dictionary<string, string> KindCat = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Contract document"] = "contract", ["Specification"] = "spec", ["Design drawing"] = "dwg", ["Model / CAD"] = "dwg", ["Sketch"] = "dwg",
+        ["Shop drawing"] = "sub", ["Material submittal"] = "sub", ["Prequalification"] = "sub", ["Request for information (RFI)"] = "sub", ["Inspection request"] = "sub",
+        ["Site MEP inspection clearance"] = "sub", ["Method statement"] = "sub", ["Non-conformance (NCR)"] = "sub", ["Site observation report (SOR)"] = "sub", ["Transmittal"] = "sub",
+        ["Minutes"] = "mom", ["BOQ"] = "boq", ["Variation"] = "boq", ["Payment"] = "boq", ["Letter"] = "ltr", ["Engineer's instruction"] = "ltr", ["Site instruction"] = "ltr",
+    };
+    Dictionary<string, FileLabels> labels = new(StringComparer.OrdinalIgnoreCase);
+    FileLabels Lab(Projects.FileRow f) => labels.TryGetValue(f.Path, out var l) ? l : labels[f.Path] = Filing.Classify(f.Path);
+
     List<(string Label, List<Projects.FileRow> Files)> Groups(string key, List<Projects.FileRow> files)
     {
         var res = new Dictionary<string, List<Projects.FileRow>>();
@@ -343,6 +376,12 @@ class GuidedSearchForm : NovaForm
         {
             var name = Path.GetFileNameWithoutExtension(f.Name);
             string g = null;
+            var lb = Lab(f);
+            // 📐 drawings: by discipline (+ stage when the set has one) · submittals and letters: by kind · contract: by stage
+            if (key == "dwg" && lb.Disc.Length > 0) g = lb.Disc;
+            else if (key is "sub" or "ltr" && lb.Kind.Length > 0) g = lb.Kind;
+            else if (key == "contract" && lb.Stage.Length > 0) g = "Stage " + lb.Stage;
+            if (g != null) { Add(g, f); continue; }
             if (key == "spec")
             {
                 var m = Regex.Match(name, @"(?<!\d)(\d{2})[ _\-]?(\d{2})[ _\-]?(\d{2})(?!\d)");
@@ -367,8 +406,8 @@ class GuidedSearchForm : NovaForm
         var known = key switch
         {
             "spec" => Divisions.Select(kv => $"Division {kv.Key} · {kv.Value}").ToList(),
-            "dwg" => Disciplines.Values.Distinct().Append("CAD files").ToList(),
-            "sub" => SubTypes.Select(s => s.Label).ToList(),
+            "dwg" => Filing.Disciplines.Append("CAD files").ToList(),
+            "sub" or "ltr" => KindCat.Where(kv => kv.Value == key).Select(kv => kv.Key).ToList(),
             _ => new List<string>(),
         };
         foreach (var k in known) if (!res.ContainsKey(k)) res[k] = new();
@@ -536,7 +575,10 @@ class GuidedSearchForm : NovaForm
         var p = Card(72);
         var t = Th.L($"📄 {h.Name}" + (h.Rev.Length > 0 ? $"  · rev {h.Rev}" : "") + (h.Status == "latest" ? "  ✓ latest" : h.Status == "superseded" ? "  ⚠ superseded" : ""), 10, h.Status == "superseded" ? Th.Warn : Th.Text, true);
         t.Location = new Point(10, 6); t.AutoSize = false; t.Width = p.Width - 20; t.AutoEllipsis = true; t.Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top;
-        var f = Th.L($"{Path.GetDirectoryName(Rel(h.Path))} · {(h.Modified > DateTime.MinValue ? h.Modified.ToString("dd MMM yyyy") : "")}", 8.5f, Th.Muted);
+        var lb = labels.TryGetValue(h.Path, out var l0) ? l0 : Filing.Classify(h.Path);
+        var tags = string.Join(" · ", new[] { lb.Kind, lb.Source, lb.Disc, lb.Stage, lb.Code, lb.State }.Where(x => x.Length > 0));
+        var f = Th.L((tags.Length > 0 ? "📐 " + tags + "  ·  " : "") + $"{Path.GetDirectoryName(Rel(h.Path))} · {(h.Modified > DateTime.MinValue ? h.Modified.ToString("dd MMM yyyy") : "")}", 8.5f, Th.Muted);
+        if (lb.Why.Count > 0) { var tip = new ToolTip { AutoPopDelay = 20000 }; tip.SetToolTip(t, "📐 Why:\n" + lb.WhyText); tip.SetToolTip(f, "📐 Why:\n" + lb.WhyText); }
         f.Location = new Point(10, 26); f.AutoSize = false; f.Width = p.Width - 20; f.AutoEllipsis = true; f.Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top;
         var bt = new FlowLayoutPanel { Location = new Point(6, 40), AutoSize = true, BackColor = Color.Transparent };
         bt.Controls.Add(Th.B("Open", () => Open(h.Path, null, "")));

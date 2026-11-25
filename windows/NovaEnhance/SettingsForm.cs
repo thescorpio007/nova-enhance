@@ -1516,6 +1516,7 @@ class SettingsForm : NovaForm
             : Brain.Exists ? "🔒 Locked — Nova uses its built-in rules until you open it." : "Not made yet — Nova uses its built-in rules. Make yours to change them and keep them backed up.", Th.AccentText);
         var row = page.Add(Th.Row(false));
         row.Controls.Add(Th.B("🧠 Open Nova Brain", Screens.Brain, true));
+        row.Controls.Add(Th.B("📐 Learn this project", () => Screens.FilingLearn()));
         row.Controls.Add(Th.B("📋 Submittal log", () => Screens.Submittal()));
         Note("💬 Talk to the brain in your own words: it proposes the exact change, tests it on your real emails, and nothing changes without ✓ Apply. A version is saved before every change (↩ undo). Daily backup at 03:00 (checked right after writing), a 💾 Back up now button, a copy inside the full Nova backup, and a safe restore that keeps your current brain first.", Th.Muted);
     }

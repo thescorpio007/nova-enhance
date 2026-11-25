@@ -289,6 +289,8 @@ class NovaContext : ApplicationContext
         }, null, -1, false);
         // 📦 Nova transfer: requests from Explorer's right-click menu
         Transfer.Start();
+        // 📐 once a day: how many document codes Nova does not know yet (names only, on this PC) — shown in the morning brief
+        Filing.Tick = new System.Threading.Timer(_ => { try { Filing.BackgroundCount(); } catch { } }, null, TimeSpan.FromMinutes(12), TimeSpan.FromHours(6));
         XferMenu.Apply();
         PasteHook.Apply();
         xferEvt = new EventWaitHandle(false, EventResetMode.AutoReset, "NovaEnhanceWindows-xfer");
@@ -488,6 +490,15 @@ static class Screens
     {
         if (Program.OffUi(BrainNudge)) return;
         try { if (brainForm != null && !brainForm.IsDisposed) brainForm.Flush(); } catch { }
+    }
+
+    static FilingLearnForm learnWin;
+    /// <summary>🧠 Learn this project: the codes of its document numbers, asked once and kept in Nova Brain.</summary>
+    public static void FilingLearn(string project = null)
+    {
+        if (Program.OffUi(() => FilingLearn(project))) return;
+        try { if (learnWin == null || learnWin.IsDisposed) learnWin = new FilingLearnForm(project); Show(learnWin); }
+        catch (Exception e) { Log.Error("learn this project", e); }
     }
 
     public static void Brain()

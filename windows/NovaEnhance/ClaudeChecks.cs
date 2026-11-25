@@ -211,5 +211,65 @@ static class ClaudeChecks
         }
     }
 
+    // ------------------------------------------------------------------ 📐 filing labels · 📁 folder tree (names only, read-only)
+
+    static Project Proj(JsonObject a)
+    {
+        var code = a["project"]?.ToString() ?? "";
+        return Projects.All().FirstOrDefault(p => p.Code.Equals(code, StringComparison.OrdinalIgnoreCase)) ?? throw new Exception("give project (one of: " + string.Join(", ", Projects.All().Select(p => p.Code)) + ")");
+    }
+
+    static List<string> Names(Project p) =>
+        Projects.Catalogue(p.Folders.Concat((p.Sources ?? new()).Select(s => s.Path)).Where(f => !Priv(f)), 150000).Select(x => x.Path).Where(x => !Priv(x)).ToList();
+
+    public static string FilingCheck(JsonObject a)
+    {
+        var p = Proj(a);
+        var q = (a["q"]?.ToString() ?? "").Trim().ToLowerInvariant();
+        var sw = Stopwatch.StartNew();
+        var files = Names(p);
+        var labs = files.Select(f => (f, l: Filing.Classify(f))).ToList();
+        var sb = new StringBuilder($"📐 Filing labels · {p.Code} · {files.Count:N0} files · {sw.ElapsedMilliseconds} ms · {Program.Shown}\n");
+        void Count(string title, Func<FileLabels, string> k)
+        {
+            sb.Append($"\n{title}: ");
+            sb.Append(string.Join(" · ", labs.GroupBy(x => k(x.l) is { Length: > 0 } v ? v : "(none)").OrderByDescending(g => g.Count()).Take(18).Select(g => $"{g.Key} {g.Count():N0}")));
+        }
+        Count("Kind", l => l.Kind); Count("Source", l => l.Source); Count("Discipline", l => l.Disc); Count("Stage", l => Regex.Replace(l.Stage, " · .*", "")); Count("Review", l => l.Code); Count("State", l => l.State);
+        var unk = Filing.Learn(p.Code, files);
+        sb.Append($"\n\n❓ Codes not known yet ({unk.Count}): ").Append(string.Join(" · ", unk.Take(30).Select(u => $"{u.Code} ({u.Role}, {u.Count}){(u.Suggest.Length > 0 ? " → " + u.Suggest : "")}")));
+        var tpl = Filing.TemplateOf(p.Code);
+        sb.Append("\nTemplate: ").Append(tpl != null ? string.Join(" ", tpl) : "(none)");
+        var sample = (q.Length > 0 ? labs.Where(x => x.f.ToLowerInvariant().Contains(q)) : labs.Where((_, i) => i % Math.Max(1, labs.Count / 25) == 0)).Take(25);
+        sb.Append("\n\nSamples:\n");
+        foreach (var (f, l) in sample)
+            sb.Append($"• {Cut(f, 170)}\n   → {string.Join(" · ", new[] { l.Kind, l.Source, l.Disc, l.Stage, l.Rev, l.Code, l.State }.Where(x => x.Length > 0))}\n   why: {string.Join(" | ", l.Why)}\n");
+        return sb.ToString();
+    }
+
+    public static string Tree(JsonObject a)
+    {
+        var p = Proj(a);
+        int depth = Math.Clamp(a["depth"]?.GetValue<int>() ?? 3, 1, 6), samples = Math.Clamp(a["samples"]?.GetValue<int>() ?? 5, 0, 20);
+        var files = Names(p);
+        var roots = p.Folders.Concat((p.Sources ?? new()).Select(s => s.Path)).Select(f => f.TrimEnd('\') + "\").ToList();
+        var nodes = new SortedDictionary<string, (int Count, List<string> Samples)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var f in files)
+        {
+            var root = roots.FirstOrDefault(r => f.StartsWith(r, StringComparison.OrdinalIgnoreCase)) ?? "";
+            var parts = f[root.Length..].Split('\');
+            var key = root + string.Join("\", parts.Take(Math.Min(depth, parts.Length - 1)));
+            if (!nodes.TryGetValue(key, out var n)) n = (0, new List<string>());
+            n.Count++;
+            if (n.Samples.Count < samples) n.Samples.Add(parts[^1]);
+            nodes[key] = n;
+        }
+        var sb = new StringBuilder($"📁 {p.Code} · {files.Count:N0} files · depth {depth}\n");
+        foreach (var (k, v) in nodes.Take(900))
+            sb.Append($"{k}  ({v.Count:N0})\n").Append(samples > 0 ? string.Concat(v.Samples.Select(x => "      · " + Cut(x, 120) + "\n")) : "");
+        if (nodes.Count > 900) sb.Append($"… {nodes.Count - 900} more folders — use a smaller depth");
+        return sb.ToString();
+    }
+
     static string Cut(string s, int n) => s == null ? "" : s.Length <= n ? s : s[..n] + "…";
 }

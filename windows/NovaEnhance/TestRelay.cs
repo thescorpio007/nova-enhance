@@ -106,7 +106,19 @@ static class Relay
             catch (Exception e) { answer = $"# {id} · ERROR {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n\n{e.Message}"; }
             var put = new JsonObject { ["message"] = "answer " + id, ["content"] = B64(answer) };
             var pr = await c.PutAsync($"repos/{Repo}/contents/responses/{id}.md", new StringContent(put.ToJsonString(), Encoding.UTF8, "application/json"));
-            if (!pr.IsSuccessStatusCode) throw new Exception($"GitHub {(int)pr.StatusCode} writing the answer (the key needs Contents: Read and write)");
+            if ((int)pr.StatusCode == 422)
+            {
+                // An answer with this name is already there (the request was answered before): replace it, never get stuck on it.
+                var old = await c.GetAsync($"repos/{Repo}/contents/responses/{id}.md");
+                var osha = old.IsSuccessStatusCode ? JsonNode.Parse(await old.Content.ReadAsStringAsync())?["sha"]?.ToString() : null;
+                if (osha != null) { put["sha"] = osha; pr = await c.PutAsync($"repos/{Repo}/contents/responses/{id}.md", new StringContent(put.ToJsonString(), Encoding.UTF8, "application/json")); }
+            }
+            if (!pr.IsSuccessStatusCode)
+            {
+                // One bad request must not block the others: note it, drop it, go on.
+                LastError = $"GitHub {(int)pr.StatusCode} writing the answer {id} (the key needs Contents: Read and write) — that request was skipped";
+                Log.Warn("test relay", LastError);
+            }
             var del = new HttpRequestMessage(HttpMethod.Delete, $"repos/{Repo}/contents/requests/{name}")
             { Content = new StringContent(new JsonObject { ["message"] = "done " + id, ["sha"] = sha }.ToJsonString(), Encoding.UTF8, "application/json") };
             await c.SendAsync(del);

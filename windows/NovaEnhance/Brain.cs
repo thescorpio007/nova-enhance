@@ -572,7 +572,10 @@ static class Brain
                 S("projects", "🏗", "Projects & document numbers", "PJ", new[] { "all" },
                     R("PJ-01", "SLV", "SLV = Sea La Vie, uses Thinkproject. Numbers like SLV-ZUC-<discipline>-<type>-<number>_RevNN (ZUC = Züblin)."),
                     R("PJ-02", "RS5", "RS5 = Outlook only (no Thinkproject). Numbers like RS5-C7-ACC-<discipline>-<type>-<number>-RNN (ACC = contractor)."),
-                    R("PJ-03", "Disciplines", "AR architecture · CW civil works · ST structure · ES electrical · MS mechanical/fire · PLB plumbing · ID interior design · LS landscape · MEP coordination.")),
+                    R("PJ-03", "Disciplines", "AR architecture · CW civil works · ST structure · ES electrical · MS mechanical/fire · PLB plumbing · ID interior design · LS landscape · MEP coordination."),
+                    Filing.ProjectRules(R)[0], Filing.ProjectRules(R)[1]),
+                // 📐 How every project file is labelled and filed (codes learned per project with 🧠 Learn this project).
+                S("filing", "📐", "Filing & document codes", "FC", new[] { "files" }, Filing.BuiltIn(R)),
                 S("meanings", "📖", "Meanings", "ME", new[] { "all" },
                     R("ME-01", "Codes", "Code 1 Approved · Code 2 Approved as noted / make corrections noted and proceed · Code 3 Revise and resubmit · Code 4 Rejected · Code 5 For information only."),
                     R("ME-02", "Other words", "DSR = contractor daily report · SOR = site observation report · NCR = non-conformance report · DC = document controller.")),

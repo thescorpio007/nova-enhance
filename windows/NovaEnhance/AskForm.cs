@@ -1919,6 +1919,8 @@ class BriefForm : NovaForm
         row.Controls.Add(Th.B("📏 Rules & instructions", () => BriefRules.Edit(this, Reload), true));
         row.Controls.Add(Th.B("💬 Talk with Nova", () => talk.FocusInput()));
         row.Controls.Add(Th.B("⚙ Settings", () => Screens.Settings("Email & AI")));
+        // 📐 Codes Nova met in your project files and does not know yet (counted once a day, on this PC).
+        if (Filing.Pending > 0) row.Controls.Add(Th.B($"📐 {Filing.Pending} new document code{(Filing.Pending == 1 ? "" : "s")} to confirm", () => Screens.FilingLearn(), true));
         message = top.Add(Th.Wrap("", 10, Th.Text), true);
         message.BackColor = Th.Card; message.Padding = new Padding(8); message.Visible = false;
         top.Add(talk.ChipBar);

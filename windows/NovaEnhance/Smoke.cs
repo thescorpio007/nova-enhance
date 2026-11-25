@@ -341,6 +341,19 @@ static class Smoke
             Ok(Guided.Pick("2", ans) == "Find the door schedule" && Guided.Pick("door?", ans) == "door?", "typing 2 picks option 2");
             Ok(Guided.KeepOptions(ans, "Rewritten answer.").Contains("3. Draft a reply"), "options kept after the technical check");
         }
+        {
+            // 📐 the filing concept: number → folders → words; a submittal never takes the folder's stage
+            var r1 = Filing.Classify(@"S:\P\7. Shop Drawings\01-Architectural\SLV-ZUC-AR-SDS-00125 - Prefab Wall\R1\Response\SLV-ZUC-AR-SDS-00125_Rev01_C2.pdf");
+            Ok(r1.Kind == "Shop drawing" && r1.Disc == "Architecture" && r1.State == "MZA reply" && r1.Source == "Consultant (MZA)" && r1.Code == "Code 2", $"filing: SDS reply → {r1.Kind} · {r1.Disc} · {r1.Source} · {r1.State} · {r1.Code}");
+            var r2 = Filing.Classify(@"F:\P\_Drawings\241002_IFC Submission (Flash D)-R00\05. MEP\Ground floor plan.pdf");
+            Ok(r2.Kind == "Design drawing" && r2.Disc == "MEP" && r2.Stage == "IFC · 02 Oct 2024 · R00", $"filing: IFC set → {r2.Kind} · {r2.Disc} · {r2.Stage}");
+            var r3 = Filing.Classify(@"F:\P\_Drawings\241002_IFC Submission (Flash D)-R00\02. Interior Design\SLV-ZUC-ID-SDS-00411_Rev02-Code2.pdf");
+            Ok(r3.Kind == "Shop drawing" && r3.Stage == "" && r3.Disc == "Interior design", $"filing: a shop drawing never takes IFC → stage “{r3.Stage}”");
+            var r4 = Filing.Classify(@"F:\P\_Drawings\_EI\MZA-ZUB-22-1497-L-2025-320 - Engineer's Instruction No. 43 - Revert Extent.pdf");
+            Ok(r4.Kind == "Letter" && r4.Source == "Consultant (MZA)" && r4.Rev == "", $"filing: letter → {r4.Kind} · {r4.Source} · rev “{r4.Rev}”");
+            Ok(Revisions.Parse(@"C:\x\Review and Assessment of the MEP Submission.pdf", 0).Rev == "", "revision: “Review” is not a revision");
+            Ok(Revisions.Parse(@"C:\x\Reem C7 _ IFC Submission.msg", 0).Rev == "", "revision: IFC in an email name is the stage, not a revision");
+        }
         var errs = Log.Read();
         Ok(!errs.Contains("settings ") || true, "No settings errors");
     }

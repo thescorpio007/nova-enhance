@@ -17,7 +17,7 @@ static class Revisions
     public class Doc { public string Key = "", Path = "", Rev = ""; public long MTime; public (int, string) Rank; }
 
     static readonly Regex RevRx = new(
-        @"(?:^|[\s_\-\.\(\[]+)(?:rev(?:ision)?[\s\.\-_]*(?<r>[A-Z]{0,2}\d{0,3}[A-Z]?)|(?<r>R\d{1,3})|(?<r>[CPTD]\d{1,3})|(?<r>IFC|IFT|IFA|IFR|IFP))(?=[\s_\-\.\)\]]|$)",
+        @"(?:^|[\s_\-\.\(\[]+)(?:rev(?:ision)?[\s\.\-_]*(?<r>[A-Z]{0,2}\d{1,3}[A-Z]?|[A-Z](?![A-Za-z]))|(?<r>R\d{1,3})|(?<r>[CPTD]\d{1,3})|(?<r>IFC|IFT|IFA|IFR|IFP))(?=[\s_\-\.\)\]]|$)",
         RegexOptions.IgnoreCase);
 
     static readonly Dictionary<string, (DateTime At, Dictionary<string, (Doc Me, Doc Latest, int Count)> Map)> cache = new(StringComparer.OrdinalIgnoreCase);
@@ -52,7 +52,14 @@ static class Revisions
     {
         var name = System.IO.Path.GetFileNameWithoutExtension(path);
         name = Regex.Replace(name, @"\s*\(\d\)$", "");                       // "… (1)" copies
-        var ms = RevRx.Matches(name);
+        // Not a revision: a project code (“Reem C7”, RS5-C7), or IFC / IFT in an email's name (that is the stage of the set).
+        var isMail = System.IO.Path.GetExtension(path).ToLowerInvariant() is ".msg" or ".eml";
+        var ms = RevRx.Matches(name).Cast<Match>().Where(x =>
+        {
+            var r = x.Groups["r"].Value;
+            if (isMail && Regex.IsMatch(r, "^IF[A-Z]$", RegexOptions.IgnoreCase)) return false;
+            return !ProjectTokens().Contains(r);
+        }).ToList();
         var d = new Doc { Path = path, MTime = mtime };
         var key = name;
         var num = Number(name);
@@ -79,6 +86,20 @@ static class Revisions
         };
         d.Rank = (cls + penalty, Regex.Replace(d.Rev, @"\d+", x => x.Value.PadLeft(4, '0')));
         return d;
+    }
+
+    static HashSet<string> projTokens;
+    static DateTime projAt;
+    /// <summary>The parts of the project codes (RS5-C7 → RS5, C7): never a revision.</summary>
+    static HashSet<string> ProjectTokens()
+    {
+        if (projTokens == null || DateTime.Now - projAt > TimeSpan.FromMinutes(5))
+        {
+            try { projTokens = Projects.All().SelectMany(p => p.Code.Split('-', ' ')).Where(t => t.Length > 0).ToHashSet(StringComparer.OrdinalIgnoreCase); }
+            catch { projTokens = new(StringComparer.OrdinalIgnoreCase); }
+            projAt = DateTime.Now;
+        }
+        return projTokens;
     }
 
     static int Cmp(Doc a, Doc b)

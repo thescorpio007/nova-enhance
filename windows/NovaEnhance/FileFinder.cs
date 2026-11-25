@@ -8,6 +8,8 @@ namespace NovaEnhance;
 class FileMeta
 {
     public string Number = "", Title = "", Doc = "", Disc = "", Level = "", Type = "";
+    /// <summary>📐 Filing labels (Nova Brain codes): who issued it, its stage, its review code, reply / withdrawn / open, and why.</summary>
+    public string Source = "", Stage = "", Code = "", State = "", Why = "";
 
     static readonly Dictionary<string, string> Docs = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -28,8 +30,11 @@ class FileMeta
 
     /// <summary>☑ Every choice of the filters, even those not in the results.</summary>
     public static readonly string[] AllTypes = { "PDF", "Word", "Excel", "PowerPoint", "CAD / BIM", "Image", "Email", "Text", "Zip" };
-    public static IEnumerable<string> AllDocs => Docs.Values.Concat(new[] { "Contract", "Model / CAD" }).Distinct().OrderBy(x => x);
-    public static IEnumerable<string> AllDiscs => Discs.Values.Distinct().OrderBy(x => x);
+    public static IEnumerable<string> AllDocs => Filing.Kinds;
+    public static IEnumerable<string> AllDiscs => Filing.Disciplines;
+    public static IEnumerable<string> AllSources => Filing.Sources;
+    public static IEnumerable<string> AllStages => Filing.Stages;
+    public static readonly string[] AllCodes = { "Code 1", "Code 2", "Code 3", "Code 4", "Code 5" };
     public static IEnumerable<string> AllLevels =>
         new[] { "Basement 3", "Basement 2", "Basement 1", "Lower ground", "Ground", "Upper ground", "Mezzanine", "Podium" }
         .Concat(Enumerable.Range(1, 20).Select(i => "Level " + i.ToString("00"))).Concat(new[] { "Roof", "All levels" });
@@ -69,6 +74,15 @@ class FileMeta
                   : low.Contains("boq") || low.Contains("bill of quantit") ? "BOQ" : low.Contains("schedule") ? "Schedule"
                   : low.Contains("contract") || low.Contains("agreement") || low.Contains("conditions of") ? "Contract" : m.Type == "CAD / BIM" ? "Model / CAD" : "";
         }
+        // 📐 The filing concept (🧠 Nova Brain codes) wins: number → folders → words, with the reason.
+        try
+        {
+            var fl = Filing.Classify(path);
+            if (fl.Kind.Length > 0) m.Doc = fl.Kind;
+            if (fl.Disc.Length > 0) m.Disc = fl.Disc;
+            m.Source = fl.Source; m.Stage = fl.Stage; m.Code = fl.Code; m.State = fl.State; m.Why = fl.WhyText;
+        }
+        catch { }
         return m;
     }
 }
@@ -76,14 +90,15 @@ class FileMeta
 /// <summary>The filters of the finder (from the bar or from your words).</summary>
 class FinderFilter
 {
-    public HashSet<string> Types = new(StringComparer.OrdinalIgnoreCase), Docs = new(StringComparer.OrdinalIgnoreCase), Discs = new(StringComparer.OrdinalIgnoreCase), Levels = new(StringComparer.OrdinalIgnoreCase);
+    public HashSet<string> Types = new(StringComparer.OrdinalIgnoreCase), Docs = new(StringComparer.OrdinalIgnoreCase), Discs = new(StringComparer.OrdinalIgnoreCase), Levels = new(StringComparer.OrdinalIgnoreCase),
+        Sources = new(StringComparer.OrdinalIgnoreCase), Stages = new(StringComparer.OrdinalIgnoreCase), Codes = new(StringComparer.OrdinalIgnoreCase);
     public string Rev = "", Status = "latest", GroupBy = "", Sort = "";
     public bool SortDesc;
     public DateTime? From, To;
     public List<string> FolderHas = new(), Exclude = new();
     public bool Backups;
 
-    public bool Any => Types.Count + Docs.Count + Discs.Count + Levels.Count + FolderHas.Count + Exclude.Count > 0 || Rev.Length > 0 || From != null || To != null;
+    public bool Any => Types.Count + Docs.Count + Discs.Count + Levels.Count + Sources.Count + Stages.Count + Codes.Count + FolderHas.Count + Exclude.Count > 0 || Rev.Length > 0 || From != null || To != null;
 
     static readonly (string Rx, string Val)[] TypeWords =
     {
@@ -92,16 +107,18 @@ class FinderFilter
     };
     static readonly (string Rx, string Val)[] DocWords =
     {
-        (@"\bshop drawings?\b", "Shop drawing submittal"), (@"\bmaterial submittals?\b", "Material submittal"), (@"\b(drawings?|plans?|elevations?|sections?|details?|layouts?)\b", "Drawing"),
-        (@"\bletters?\b", "Letter"), (@"\brfis?\b", "RFI"), (@"\b(minutes|mom)\b", "Minutes"), (@"\btransmittals?\b", "Transmittal"), (@"\bspec(ification)?s?\b", "Specification"),
-        (@"\breports?\b", "Report"), (@"\bregisters?\b", "Register"), (@"\bcalc(ulation)?s?\b", "Calculation"), (@"\bncrs?\b", "NCR"), (@"\bsite instructions?\b", "Site instruction"),
+        (@"\b(shop drawings?|sds|shd)\b", "Shop drawing"), (@"\b(material submittals?|mar|mas)\b", "Material submittal"), (@"\b(drawings?|plans?|elevations?|sections?|details?|layouts?)\b", "Design drawing"),
+        (@"\bletters?\b", "Letter"), (@"\brfis?\b", "Request for information (RFI)"), (@"\b(minutes|mom)\b", "Minutes"), (@"\btransmittals?\b", "Transmittal"), (@"\bspec(ification)?s?\b", "Specification"),
+        (@"\breports?\b", "Report"), (@"\bregisters?\b", "Register"), (@"\bcalc(ulation)?s?\b", "Calculation"), (@"\bncrs?\b", "Non-conformance (NCR)"), (@"\bsite instructions?\b", "Site instruction"),
+        (@"\b(prequalifications?|pqs)\b", "Prequalification"), (@"\b(clearances?|dsh)\b", "Site MEP inspection clearance"), (@"\b(sors?|site observations?)\b", "Site observation report (SOR)"), (@"\bcontract (documents?|set)\b", "Contract document"),
         (@"\b(inspection requests?|wirs?|mirs?)\b", "Inspection request"), (@"\bvariations?\b", "Variation"), (@"\bboqs?\b|bill of quantit", "BOQ"), (@"\bschedules?\b", "Schedule"), (@"\bsketch(es)?\b", "Sketch")
     };
     static readonly (string Rx, string Val)[] DiscWords =
     {
-        (@"\barchitectur(e|al)\b|\barch\b", "Architecture"), (@"\bstructur(e|al)\b", "Structure"), (@"\bmep\b", "MEP"), (@"\b(mechanical|hvac)\b", "Mechanical"), (@"\belectrical\b", "Electrical"),
-        (@"\b(plumbing|drainage)\b", "Plumbing"), (@"\b(fire|fls|fire fighting|fire alarm)\b", "Fire"), (@"\b(fa[cç]ade|curtain wall|cladding|glazing)\b", "Façade"), (@"\blandscap(e|ing)\b", "Landscape"),
-        (@"\binterior\b", "Interior"), (@"\b(civil|infrastructure)\b", "Civil"), (@"\b(ict|telecom)\b", "ICT"), (@"\b(lifts?|elevators?|escalators?)\b", "Vertical transport"), (@"\bbmu\b|fa[cç]ade access", "Façade access")
+        (@"\barchitectur(e|al)\b|\barch\b", "Architecture"), (@"\bstructur(e|al)\b", "Structure"), (@"\bmep\b", "MEP"), (@"\b(mechanical|hvac)\b", "Mechanical services"), (@"\belectrical\b", "Electrical services"),
+        (@"\b(plumbing|drainage)\b", "Plumbing"), (@"\b(fire|fls|fire fighting|fire alarm|adcd)\b", "Fire & life safety"), (@"\b(fa[cç]ade|curtain wall|cladding|glazing)\b", "Façade"), (@"\blandscap(e|ing)\b", "Landscape"),
+        (@"\binterior\b", "Interior design"), (@"\bcivil\b", "Civil works"), (@"\binfrastructure\b", "Infrastructure"), (@"\b(ict|telecom)\b", "ICT"), (@"\b(lifts?|elevators?|escalators?)\b", "Vertical transport"),
+        (@"\bacoustic\b", "Acoustic"), (@"\blighting\b", "Lighting"), (@"\bsignage\b", "Signage"), (@"\b(hse|health (and|&) safety)\b", "Health & safety")
     };
 
     /// <summary>Your words → filters (and the words left to search in the names). Read on this PC, nothing is sent.</summary>
@@ -144,6 +161,15 @@ class FinderFilter
         t = Take(@"\b(ifc|ift|for construction|for tender|tender|for approval|as[\s\-]?built)\b", m => f.FolderHas.Add(m.Value.Trim() switch { "for construction" => "IFC", "for tender" or "tender" => "tender", "as built" or "as-built" or "asbuilt" => "built", var x => x.ToUpperInvariant() }));
         foreach (var (rx, v) in DocWords) t = Take(rx, _ => f.Docs.Add(v));
         foreach (var (rx, v) in DiscWords) t = Take(rx, _ => f.Discs.Add(v));
+        // 📐 who issued it · which stage · which review code
+        t = Take(@"\b(contractor'?s?|zuc|zub|acc)\b", _ => f.Sources.Add("Contractor"));
+        t = Take(@"\b(consultant|mza)\b", _ => f.Sources.Add("Consultant (MZA)"));
+        t = Take(@"\b(client|employer|nine yard)\b", _ => f.Sources.Add("Client"));
+        t = Take(@"\bifc\s*0?([1-9])\b", m => f.Stages.Add("IFC 0" + m.Groups[1].Value));
+        t = Take(@"\b(ifc|issued for construction)\b", _ => f.Stages.Add("IFC"));
+        t = Take(@"\b(ift|issued for tender)\b", _ => f.Stages.Add("IFT"));
+        t = Take(@"\bas[ -]?built\b", _ => f.Stages.Add("As-built"));
+        t = Take(@"\bcode\s?([1-5])\b", m => f.Codes.Add("Code " + m.Groups[1].Value));
         foreach (var (rx, v) in TypeWords) t = Take(rx, _ => f.Types.Add(v));
         t = Take(@"\blevels?\s+(\d{1,2})\b|\bl(\d{2})\b", m => f.Levels.Add("Level " + int.Parse(m.Groups[1].Success && m.Groups[1].Value.Length > 0 ? m.Groups[1].Value : m.Groups[2].Value).ToString("00")));
         t = Take(@"\bpodium\b", _ => f.Levels.Add("Podium"));
@@ -177,7 +203,7 @@ class FileFinderForm : NovaForm
 {
     readonly TextBox box, req;
     readonly ComboBox proj, cStatus, cGroup;
-    readonly FacetButton cType, cDoc, cDisc, cLevel;
+    readonly FacetButton cType, cDoc, cDisc, cLevel, cSource, cStage, cCode;
     readonly Button stopBtn;
     readonly TextBox tRev, tFolder, tExclude;
     readonly DateTimePicker dFrom, dTo;
@@ -226,6 +252,7 @@ class FileFinderForm : NovaForm
         new ToolTip().SetToolTip(aiSearch, "When nothing matches every word, Nova adds the short forms (FHC = fire hose cabinet, SS = stainless steel…) and keeps the files that match most of your ideas.");
         top.Controls.Add(aiSearch);
         top.Controls.Add(SearchSyntax.HelpButton(box, false, () => Find()));
+        top.Controls.Add(Th.B("📐 Learn this project", () => Screens.FilingLearn(proj.SelectedIndex > 0 && proj.SelectedIndex <= Projects.All().Count ? Projects.All()[proj.SelectedIndex - 1].Code : null)));
 
         // Row 2 — ✦ Requirements in your own words.
         var rrow = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(10, 2, 10, 2), BackColor = Th.Bg, WrapContents = false };
@@ -248,13 +275,16 @@ class FileFinderForm : NovaForm
         cDoc = new FacetButton("Document", 170, () => FileMeta.AllDocs, () => Count(r => r.M.Doc));
         cDisc = new FacetButton("Discipline", 140, () => FileMeta.AllDiscs, () => Count(r => r.M.Disc));
         cLevel = new FacetButton("Level", 120, () => FileMeta.AllLevels, () => Count(r => r.M.Level));
+        cSource = new FacetButton("Source", 130, () => FileMeta.AllSources, () => Count(r => r.M.Source));
+        cStage = new FacetButton("Stage", 110, () => FileMeta.AllStages, () => Count(r => Regex.Replace(r.M.Stage, @" · .*$", "")));
+        cCode = new FacetButton("Review code", 90, () => FileMeta.AllCodes, () => Count(r => r.M.Code));
         cStatus = Combo(110); cGroup = Combo(110);
         cStatus.Items.AddRange(new object[] { "Latest", "Any revision", "Superseded" }); cStatus.SelectedIndex = 0;
-        cGroup.Items.AddRange(new object[] { "No groups", "Document", "Discipline", "Level", "Type", "Project", "Folder" }); cGroup.SelectedIndex = 0;
+        cGroup.Items.AddRange(new object[] { "No groups", "Document", "Discipline", "Level", "Type", "Project", "Folder", "Source", "Stage" }); cGroup.SelectedIndex = 0;
         tRev = Tb(55); tFolder = Tb(110); tExclude = Tb(120);
         dFrom = new DateTimePicker { Width = 125, Format = DateTimePickerFormat.Custom, CustomFormat = "dd MMM yyyy", ShowCheckBox = true, Checked = false, Margin = new Padding(2, 4, 2, 2) };
         dTo = new DateTimePicker { Width = 125, Format = DateTimePickerFormat.Custom, CustomFormat = "dd MMM yyyy", ShowCheckBox = true, Checked = false, Margin = new Padding(2, 4, 8, 2) };
-        foreach (var (l, c) in new (string, Control)[] { ("Type", cType), ("Document", cDoc), ("Discipline", cDisc), ("Level", cLevel), ("Rev", tRev), ("Status", cStatus), ("Modified", dFrom), ("to", dTo), ("Folder has", tFolder), ("Exclude", tExclude), ("Group by", cGroup) })
+        foreach (var (l, c) in new (string, Control)[] { ("Type", cType), ("Document", cDoc), ("Discipline", cDisc), ("Level", cLevel), ("Source", cSource), ("Stage", cStage), ("Code", cCode), ("Rev", tRev), ("Status", cStatus), ("Modified", dFrom), ("to", dTo), ("Folder has", tFolder), ("Exclude", tExclude), ("Group by", cGroup) })
         { bar.Controls.Add(Lbl(l)); bar.Controls.Add(c); }
         bar.Controls.Add(Th.B("✗ Clear all", ClearAll));
 
@@ -263,14 +293,14 @@ class FileFinderForm : NovaForm
             Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, MultiSelect = true, BackColor = Th.Card, ForeColor = Th.Text,
             BorderStyle = BorderStyle.None, Font = Th.F(9.5f), HideSelection = false, ShowItemToolTips = true
         };
-        foreach (var (h, w) in new[] { ("Drawing no. / file", 300), ("Title", 300), ("Rev", 50), ("Status", 90), ("Document", 150), ("Discipline", 110), ("Level", 90), ("Type", 70), ("Project", 70), ("Modified", 100), ("Size", 70), ("Folder", 420) })
+        foreach (var (h, w) in new[] { ("Drawing no. / file", 300), ("Title", 300), ("Rev", 50), ("Status", 90), ("Document", 150), ("Discipline", 110), ("Source", 120), ("Stage", 150), ("Review", 70), ("State", 80), ("Level", 90), ("Type", 70), ("Project", 70), ("Modified", 100), ("Size", 70), ("Folder", 420) })
             lv.Columns.Add(h, w);
-        GridCols.Remember(lv, "filefinder");
+        GridCols.Remember(lv, "filefinder2");
         lv.DoubleClick += (_, _) => OpenSel();
         int sortCol = -1; bool desc = false;
         lv.ColumnClick += (_, e) =>
         {
-            desc = sortCol == e.Column ? !desc : e.Column is 9 or 10; sortCol = e.Column;
+            desc = sortCol == e.Column ? !desc : e.Column is 13 or 14; sortCol = e.Column;
             lv.ListViewItemSorter = new Cmp(e.Column, desc);
             lv.Sort();
         };
@@ -305,7 +335,7 @@ class FileFinderForm : NovaForm
         proj.SelectedIndexChanged += (_, _) => Find();
         backups.CheckedChanged += (_, _) => Find();
         foreach (var c in new[] { cStatus, cGroup }) c.SelectedIndexChanged += (_, _) => { if (!quiet) { ReadBar(); Find(); } };
-        foreach (var c in new[] { cType, cDoc, cDisc, cLevel }) c.Changed += () => { if (!quiet) { ReadBar(); debounce.Stop(); debounce.Start(); } };
+        foreach (var c in new[] { cType, cDoc, cDisc, cLevel, cSource, cStage, cCode }) c.Changed += () => { if (!quiet) { ReadBar(); debounce.Stop(); debounce.Start(); } };
         foreach (var t in new[] { tRev, tFolder, tExclude }) t.TextChanged += (_, _) => { if (!quiet) { ReadBar(); Later(); } };
         dFrom.ValueChanged += (_, _) => { if (!quiet) { ReadBar(); Later(); } };
         dTo.ValueChanged += (_, _) => { if (!quiet) { ReadBar(); Later(); } };
@@ -359,6 +389,7 @@ class FileFinderForm : NovaForm
     {
         HashSet<string> Pick(FacetButton c) => new(c.Selected, StringComparer.OrdinalIgnoreCase);
         flt.Types = Pick(cType); flt.Docs = Pick(cDoc); flt.Discs = Pick(cDisc); flt.Levels = Pick(cLevel);
+        flt.Sources = Pick(cSource); flt.Stages = Pick(cStage); flt.Codes = Pick(cCode);
         flt.Status = cStatus.SelectedIndex switch { 1 => "any", 2 => "superseded", _ => "latest" };
         flt.GroupBy = cGroup.SelectedIndex <= 0 ? "" : ((string)cGroup.SelectedItem).ToLowerInvariant();
         flt.Rev = tRev.Text.Trim().ToUpperInvariant();
@@ -398,6 +429,9 @@ class FileFinderForm : NovaForm
         foreach (var x in flt.Docs.ToList()) Chip("Document", x, () => flt.Docs.Remove(x));
         foreach (var x in flt.Discs.ToList()) Chip("Discipline", x, () => flt.Discs.Remove(x));
         foreach (var x in flt.Levels.ToList()) Chip("Level", x, () => flt.Levels.Remove(x));
+        foreach (var x in flt.Sources.ToList()) Chip("Source", x, () => flt.Sources.Remove(x));
+        foreach (var x in flt.Stages.ToList()) Chip("Stage", x, () => flt.Stages.Remove(x));
+        foreach (var x in flt.Codes.ToList()) Chip("Review", x, () => flt.Codes.Remove(x));
         if (flt.Rev.Length > 0) Chip("Rev", flt.Rev, () => flt.Rev = "");
         if (flt.Status != "latest") Chip("Status", flt.Status == "any" ? "all revisions" : "superseded", () => flt.Status = "latest");
         foreach (var x in flt.FolderHas.ToList()) Chip("Folder has", x, () => flt.FolderHas.Remove(x));
@@ -493,6 +527,8 @@ class FileFinderForm : NovaForm
         bool In(HashSet<string> set, string v) => set.Count == 0 || set.Contains(v);
         var r = list.Where(x =>
             In(f.Types, x.M.Type) && In(f.Docs, x.M.Doc) && In(f.Discs, x.M.Disc) && In(f.Levels, x.M.Level) &&
+            (f.Status != "latest" || x.M.State != "Withdrawn") &&
+            In(f.Sources, x.M.Source) && (f.Stages.Count == 0 || f.Stages.Any(s => x.M.Stage.StartsWith(s, StringComparison.OrdinalIgnoreCase))) && In(f.Codes, x.M.Code) &&
             (f.Rev.Length == 0 || x.F.Rev.Equals(f.Rev, StringComparison.OrdinalIgnoreCase)) &&
             (f.Status == "any" || (f.Status == "superseded" ? x.F.Status == "superseded" : x.F.Status != "superseded")) &&
             (f.From == null || x.F.Modified.Date >= f.From) && (f.To == null || x.F.Modified.Date <= f.To) &&
@@ -524,6 +560,7 @@ class FileFinderForm : NovaForm
     {
         quiet = true;
         cType.Set(flt.Types); cDoc.Set(flt.Docs); cDisc.Set(flt.Discs); cLevel.Set(flt.Levels);
+        cSource.Set(flt.Sources); cStage.Set(flt.Stages); cCode.Set(flt.Codes);
         quiet = false;
     }
 
@@ -541,13 +578,14 @@ class FileFinderForm : NovaForm
             {
                 m.Number.Length > 0 ? m.Number : f.Name, m.Number.Length > 0 ? m.Title : "", f.Rev,
                 f.Status == "latest" ? "✓ latest" : f.Status == "superseded" ? "superseded" : f.Status,
-                m.Doc, m.Disc, m.Level, m.Type, f.Project,
+                m.Doc, m.Disc, m.Source, m.Stage, m.Code, m.State, m.Level, m.Type, f.Project,
                 f.Modified > DateTime.MinValue ? f.Modified.ToString("dd MMM yyyy") : "", Projects.Size(f.Size), Path.GetDirectoryName(f.Path) ?? ""
-            }) { Tag = r, ToolTipText = f.Path };
+            }) { Tag = r, ToolTipText = f.Path + (m.Why.Length > 0 ? "\n\n📐 Why:\n" + m.Why : "") };
+            if (m.State == "Withdrawn") it.ForeColor = Th.Muted;
             if (f.Status == "superseded" || f.Status.StartsWith("in an old")) it.ForeColor = Th.Muted;
             if (flt.GroupBy.Length > 0)
             {
-                var k = flt.GroupBy switch { "document" => m.Doc, "discipline" => m.Disc, "level" => m.Level, "type" => m.Type, "project" => f.Project, "folder" => Path.GetFileName(Path.GetDirectoryName(f.Path) ?? ""), _ => "" };
+                var k = flt.GroupBy switch { "document" => m.Doc, "discipline" => m.Disc, "level" => m.Level, "type" => m.Type, "project" => f.Project, "source" => m.Source, "stage" => m.Stage, "folder" => Path.GetFileName(Path.GetDirectoryName(f.Path) ?? ""), _ => "" };
                 if (k.Length == 0) k = "(other)";
                 if (!groups.TryGetValue(k, out var g)) { g = new ListViewGroup(k, k); groups[k] = g; lv.Groups.Add(g); }
                 it.Group = g;
@@ -572,10 +610,10 @@ class FileFinderForm : NovaForm
         try
         {
             var title = $"Drawing register — {(proj.SelectedIndex > 0 ? (string)proj.SelectedItem : "all projects")}" + (req.Text.Trim().Length > 0 ? " — " + req.Text.Trim() : "");
-            var head = new[] { "No.", "Drawing no. / file", "Title", "Rev", "Status", "Document", "Discipline", "Level", "Type", "Project", "Date", "Size", "Folder", "File" };
+            var head = new[] { "No.", "Drawing no. / file", "Title", "Rev", "Status", "Document", "Discipline", "Source", "Stage", "Review", "Level", "Type", "Project", "Date", "Size", "Folder", "File" };
             var data = list.Select((r, i) => new[]
             {
-                (i + 1).ToString(), r.M.Number.Length > 0 ? r.M.Number : r.F.Name, r.M.Title, r.F.Rev, r.F.Status, r.M.Doc, r.M.Disc, r.M.Level, r.M.Type, r.F.Project,
+                (i + 1).ToString(), r.M.Number.Length > 0 ? r.M.Number : r.F.Name, r.M.Title, r.F.Rev, r.F.Status, r.M.Doc, r.M.Disc, r.M.Source, r.M.Stage, r.M.Code, r.M.Level, r.M.Type, r.F.Project,
                 r.F.Modified > DateTime.MinValue ? r.F.Modified.ToString("dd MMM yyyy") : "", Projects.Size(r.F.Size), Path.GetDirectoryName(r.F.Path) ?? "", r.F.Name
             }).ToList();
             var safe = Regex.Replace(title, @"[\\/:*?""<>|]+", " ");
@@ -681,8 +719,8 @@ class FileFinderForm : NovaForm
             var fx = ((Row)x.Tag).F; var fy = ((Row)y.Tag).F;
             int r = col switch
             {
-                9 => fx.Modified.CompareTo(fy.Modified),
-                10 => fx.Size.CompareTo(fy.Size),
+                13 => fx.Modified.CompareTo(fy.Modified),
+                14 => fx.Size.CompareTo(fy.Size),
                 _ => string.Compare(x.SubItems[col].Text, y.SubItems[col].Text, StringComparison.OrdinalIgnoreCase)
             };
             if (r == 0) r = string.Compare(x.Text, y.Text, StringComparison.OrdinalIgnoreCase);
