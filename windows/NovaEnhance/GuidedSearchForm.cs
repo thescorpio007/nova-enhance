@@ -95,20 +95,27 @@ class GuidedSearchForm : NovaForm
         note = new Label { Dock = DockStyle.Top, Height = 22, Font = Th.F(9), ForeColor = Th.Muted, AutoEllipsis = true, UseMnemonic = false };
         crumbs.Controls.Add(note); crumbs.Controls.Add(crumb);
 
-        findBar = new Panel { Dock = DockStyle.Top, Height = 74, BackColor = Color.FromArgb(0x0E, 0x11, 0x17), Padding = new Padding(16, 8, 16, 6), Visible = false };
-        query = Th.Box(false);
-        query.PlaceholderText = "Number, words or a clause — e.g. 08 71 00 · fire rating · clause 14.2 · SLV-ZUC-AR-MAR-00092 (Enter = find)";
-        query.Dock = DockStyle.Top; query.Font = Th.F(11);
-        query.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; Find(); } };
+        findBar = new Panel { Dock = DockStyle.Top, Height = 120, BackColor = Color.FromArgb(0x0E, 0x11, 0x17), Padding = new Padding(16, 8, 16, 6), Visible = false };
+        // ✎ A real typing box: starts at the lines of Settings → 🎯 Guided mode, grows while you type; drag the bar under it to make it bigger.
+        query = Th.Box(true, TypeBox.Lines);
+        query.PlaceholderText = "Number, words or a clause — e.g. 08 71 00 · fire rating · clause 14.2 · SLV-ZUC-AR-MAR-00092   (Enter = find · Shift+Enter = new line)";
+        query.Dock = DockStyle.Fill; query.Font = TypeBox.Font; query.ScrollBars = ScrollBars.Vertical;
+        query.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter && !e.Shift) { e.SuppressKeyPress = true; Find(); } };
+        query.TextChanged += (_, _) => FitFind();
         var fr = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, BackColor = Color.Transparent, Padding = new Padding(0, 4, 0, 0) };
         fr.Controls.Add(Th.B("🔎 Find", Find, true));
         latestOnly = Th.Check("Latest revision only", Store.Bool("win_guided_latest", true), v => Store.SetBool("win_guided_latest", v));
         readMore = Th.Check("📖 Also read files not read yet (slower)", false, _ => { });
         fr.Controls.Add(latestOnly); fr.Controls.Add(readMore);
-        findBar.Controls.Add(fr); findBar.Controls.Add(query);
+        findBar.Controls.Add(query); findBar.Controls.Add(fr);
+        findGrip = new Splitter { Dock = DockStyle.Top, Height = 6, BackColor = Th.Line, MinSize = 70, MinExtra = 120, Cursor = Cursors.HSplit, Visible = false };
+        findGrip.SplitterMoved += (_, _) => { dragged = findBar.Height; Store.SetInt("win_guided_inh", dragged); };
+        findGrip.DoubleClick += (_, _) => { dragged = 0; Store.SetInt("win_guided_inh", 0); FitFind(); };
 
         body = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(14, 6, 14, 14), BackColor = Th.Bg };
-        Controls.Add(body); Controls.Add(findBar); Controls.Add(crumbs); Controls.Add(top);
+        Controls.Add(body); Controls.Add(findGrip); Controls.Add(findBar); Controls.Add(crumbs); Controls.Add(top);
+        dragged = Store.Int("win_guided_inh", 0);
+        findBar.Resize += (_, _) => FitFind();
         Resize += (_, _) => { foreach (Control c in body.Controls) c.Width = RowWidth; };
         ResizeEnd += (_, _) => { if (WindowState == FormWindowState.Normal) { Store.SetInt("win_guided_w", Width); Store.SetInt("win_guided_h", Height); } };
         KeyPreview = true;
@@ -122,6 +129,27 @@ class GuidedSearchForm : NovaForm
         };
         FormClosed += (_, _) => cts?.Cancel();
         Shown += (_, _) => Go(0);
+    }
+
+    readonly Splitter findGrip;
+    int dragged;
+    bool fitting;
+
+    /// <summary>The find bar: the typing box (start lines → grows with the text, or the height you dragged) + the Find row.</summary>
+    void FitFind()
+    {
+        if (fitting || findBar == null) return;
+        fitting = true;
+        try
+        {
+            var row = findBar.Controls.OfType<FlowLayoutPanel>().FirstOrDefault();
+            var rowH = row == null ? 40 : row.GetPreferredSize(new Size(Math.Max(200, findBar.ClientSize.Width - findBar.Padding.Horizontal), 0)).Height + 4;
+            var want = findBar.Padding.Vertical + rowH + query.Font.Height * TypeBox.Need(query) + 12;
+            var h = Math.Max(want, dragged);
+            h = Math.Min(h, Math.Max(want, ClientSize.Height - 220));
+            if (findBar.Height != h) findBar.Height = h;
+        }
+        finally { fitting = false; }
     }
 
     int RowWidth => Math.Max(420, body.ClientSize.Width - body.Padding.Horizontal - 22);
@@ -171,7 +199,8 @@ class GuidedSearchForm : NovaForm
     {
         cts?.Cancel();
         step = to;
-        findBar.Visible = step == 3;
+        findBar.Visible = step == 3; findGrip.Visible = step == 3;
+        if (step == 3) FitFind();
         if (step == 0) Where();
         else if (step == 1) What();
         else if (step == 2) Narrow();

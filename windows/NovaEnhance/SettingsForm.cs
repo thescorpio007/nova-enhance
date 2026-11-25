@@ -1735,6 +1735,21 @@ class SettingsForm : NovaForm
         r.Controls.Add(Th.L("  or exactly", 9.5f, Th.Muted)); r.Controls.Add(cu); r.Controls.Add(Th.L("min (0 = no limit)", 9.5f, Th.Muted));
         c.SelectedIndexChanged += (_, _) => { if (cu.Value != Guided.Minutes) cu.Value = Guided.Minutes; };
         page.Add(Th.Wrap("Each chat can change its own time with the ⏱ button (5, 10, 15, 30, 60 min or no limit, +10 min).", 9, Th.Muted));
+
+        page.Add(Th.Section("✎ Typing boxes (all chats and Guided search)"));
+        NumericUpDown N(string label, int v, int min, int max, string unit, Action<int> set)
+        {
+            var rr = page.Add(Th.Row(false));
+            rr.Controls.Add(new Label { Text = label, AutoSize = false, Width = 230, ForeColor = Th.Muted, Font = Th.F(9.5f), TextAlign = ContentAlignment.MiddleLeft, Height = 28 });
+            var n = new NumericUpDown { Minimum = min, Maximum = max, Value = Math.Clamp(v, min, max), Width = 70, BackColor = Th.Card2, ForeColor = Th.Text };
+            n.ValueChanged += (_, _) => set((int)n.Value);
+            rr.Controls.Add(n); rr.Controls.Add(Th.L(unit, 9.5f, Th.Muted));
+            return n;
+        }
+        N("Lines at the start", TypeBox.Lines, 2, 10, "lines", v => TypeBox.Lines = v);
+        N("Grows while you type, up to", TypeBox.MaxLines, 4, 20, "lines", v => TypeBox.MaxLines = v);
+        N("Letter size", TypeBox.FontSize, 9, 16, "pt (11 = default)", v => TypeBox.FontSize = v);
+        page.Add(Th.Wrap("Drag the bar above (or under) any typing box to make it bigger — the height is kept; double-click the bar to go back. New sizes apply to windows opened after the change.", 9, Th.Muted));
         var b = page.Add(Th.Row());
         b.Controls.Add(Th.B("🎯 Open Guided search", () => Screens.Guided(), true));
     }

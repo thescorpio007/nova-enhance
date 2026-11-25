@@ -67,7 +67,8 @@ class TalkPanel : Panel
         row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         // Three lines to type in · Enter = send · Shift+Enter = new line.
-        input = Th.Prose(Th.Box(true, 3));
+        input = Th.Prose(Th.Box(true, TypeBox.Lines));
+        input.Font = TypeBox.Font;   // ✎ Settings → 🎯 Guided mode
         input.Dock = DockStyle.Fill; input.Margin = new Padding(0, 0, 8, 0);
         input.PlaceholderText = "Ask Nova about this list or the emails you picked — e.g. which need my answer today? only one project, hide meeting recaps · is their proposal compliant? (Enter = send · Shift+Enter = new line · 📎 drop files)";
         input.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter && !e.Shift) { e.SuppressKeyPress = true; Ask(input.Text, false); } };
@@ -81,7 +82,12 @@ class TalkPanel : Panel
         bottom.Controls.Add(row);
         attach = new AttachBar { Dock = DockStyle.Top };
         bottom.Controls.Add(attach);
-        Controls.Add(webHost); Controls.Add(bottom); Controls.Add(status);
+        // ↕ drag the bar above the typing box to make it bigger (kept for this kind of window); double-click to go back
+        var grip = new Splitter { Dock = DockStyle.Bottom, Height = 5, BackColor = Color.FromArgb(0x2A, 0x30, 0x40), MinSize = 80, MinExtra = 120, Cursor = Cursors.HSplit };
+        grip.SplitterMoved += (_, _) => { dragged = bottom.Height; Store.SetInt("win_talk_inh_" + kind, dragged); };
+        grip.DoubleClick += (_, _) => { dragged = 0; Store.SetInt("win_talk_inh_" + kind, 0); Fit(); };
+        dragged = Store.Int("win_talk_inh_" + kind, 0);
+        Controls.Add(webHost); Controls.Add(grip); Controls.Add(bottom); Controls.Add(status);
         // The typing area sizes itself: the 📎 row + a full 3-line box + the buttons, at any window size.
         attach.Changed += Fit;
         Resize += (_, _) => Fit();
@@ -94,6 +100,7 @@ class TalkPanel : Panel
     public void FocusInput() => input.Focus();
 
     bool fitting;
+    int dragged;
     void Fit()
     {
         if (fitting || bottom.ClientSize.Width <= 0) return;
@@ -103,11 +110,11 @@ class TalkPanel : Panel
             var w = bottom.ClientSize.Width - bottom.Padding.Horizontal;
             attach.ShortHint = true;   // the 📎 hint on one line
             var ah = attach.GetPreferredSize(new Size(w, 0)).Height + attach.Margin.Vertical;
-            int n = 3;
-            try { n = Math.Clamp(input.GetLineFromCharIndex(Math.Max(0, input.TextLength - 1)) + 2, 3, 10); } catch { }   // grows with what you write
+            var n = TypeBox.Need(input);   // grows with what you write
             var lines = input.Font.Height * n + 14;
             var bh = btns.GetPreferredSize(Size.Empty).Height;
-            bottom.Height = bottom.Padding.Vertical + ah + Math.Max(lines, bh) + 4;
+            var want = bottom.Padding.Vertical + ah + Math.Max(lines, bh) + 4;
+            bottom.Height = Math.Min(Math.Max(want, dragged), Math.Max(want, Height - 160));
         }
         finally { fitting = false; }
     }

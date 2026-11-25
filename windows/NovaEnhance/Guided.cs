@@ -218,3 +218,18 @@ static class Flex
         };
     }
 }
+
+/// <summary>✎ The typing boxes of Nova (Talk about this email, the email lists, Nova Chat, 🎯 Guided search): how many lines they start with,
+/// how far they grow while you type, and the size of the letters — Settings → 🎯 Guided mode. A height you drag is kept.</summary>
+static class TypeBox
+{
+    public static int Lines { get => Math.Clamp(Store.Int("win_type_lines", 4), 2, 10); set => Store.SetInt("win_type_lines", Math.Clamp(value, 2, 10)); }
+    public static int MaxLines { get => Math.Clamp(Store.Int("win_type_max", 12), 4, 20); set => Store.SetInt("win_type_max", Math.Clamp(value, 4, 20)); }
+    public static int FontSize { get => Math.Clamp(Store.Int("win_type_font", 11), 9, 16); set => Store.SetInt("win_type_font", Math.Clamp(value, 9, 16)); }
+    public static Font Font => Th.F(FontSize);
+    /// <summary>The lines a box needs now: what is written + 1, between the start and the most.</summary>
+    public static int Need(TextBox t)
+    {
+        try { return Math.Clamp(t.GetLineFromCharIndex(Math.Max(0, t.TextLength - 1)) + 2, Lines, Math.Max(Lines, MaxLines)); } catch { return Lines; }
+    }
+}

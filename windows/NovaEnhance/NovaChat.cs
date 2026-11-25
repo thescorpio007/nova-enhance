@@ -250,7 +250,7 @@ class NovaChat
     {
         var items = new JsonArray(); foreach (var x in Guided.ChatMenu) items.Add(x);
         var wrap = new JsonArray(); foreach (var x in Guided.WrapUp) wrap.Add(x);
-        return new JsonObject { ["on"] = Guided.On, ["menu"] = Guided.MenuFirst, ["min"] = Guided.Minutes, ["items"] = items, ["wrap"] = wrap, ["summary"] = Guided.SummaryAsk };
+        return new JsonObject { ["on"] = Guided.On, ["menu"] = Guided.MenuFirst, ["min"] = Guided.Minutes, ["items"] = items, ["wrap"] = wrap, ["summary"] = Guided.SummaryAsk, ["lines"] = TypeBox.Lines, ["maxLines"] = TypeBox.MaxLines, ["font"] = TypeBox.FontSize };
     }
 
     async Task Send(JsonObject m, CancellationToken stop = default)

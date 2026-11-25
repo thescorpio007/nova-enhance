@@ -123,6 +123,7 @@ class MailAskForm : NovaForm
         // ↕ a divider above the typing area: drag it to give the conversation or the typing box more room
         var inSplit = new Splitter { Dock = DockStyle.Bottom, Height = 5, BackColor = Color.FromArgb(0x2A, 0x30, 0x40), MinExtra = 160, MinSize = 90, Cursor = Cursors.HSplit };
         inSplit.SplitterMoved += (_, _) => Store.SetInt("win_mailask_inh", bottom.Height);
+        inSplit.DoubleClick += (_, _) => { Store.SetInt("win_mailask_inh", 0); bottom.Height = 1; };   // back to the size of the text (FitBottom)
         Controls.Add(split); Controls.Add(inSplit); Controls.Add(bottom); Controls.Add(top);
 
         var hr = top.Add(Th.Row());
@@ -190,7 +191,8 @@ class MailAskForm : NovaForm
         var row = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = Color.Transparent };
         row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        prompt = Th.Prose(Th.Box(true, 4));
+        prompt = Th.Prose(Th.Box(true, TypeBox.Lines));
+        prompt.Font = TypeBox.Font;   // ✎ Settings → 🎯 Guided mode
         prompt.Dock = DockStyle.Fill; prompt.Margin = new Padding(0, 0, 8, 0);
         prompt.PlaceholderText = "✎ Write anything — what to check, focus on or leave out, the format, length, tone and language. This email stays the reference.   (Enter = send · Shift+Enter = new line)";
         prompt.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter && !e.Shift) { e.SuppressKeyPress = true; Ask(); } };
@@ -219,8 +221,7 @@ class MailAskForm : NovaForm
             try
             {
                 attach.ShortHint = true;   // the 📎 hint on one line
-                int lines = 4;
-                try { lines = Math.Clamp(prompt.GetLineFromCharIndex(Math.Max(0, prompt.TextLength - 1)) + 2, 4, 12); } catch { }
+                var lines = TypeBox.Need(prompt);
                 var want = bottom.Padding.Vertical + attach.GetPreferredSize(new Size(w, 0)).Height + attach.Margin.Vertical + Math.Max(prompt.Font.Height * lines + 14, 104);
                 var h = Math.Max(want, Store.Int("win_mailask_inh", 0));
                 h = Math.Min(h, Math.Max(want, ClientSize.Height - 260));

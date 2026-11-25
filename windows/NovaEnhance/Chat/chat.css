@@ -78,3 +78,4 @@ table.cmp tr.diff td{background:rgba(255,170,60,.10)}table.cmp tr.best td{backgr
 .opts a.opt:hover{background:#2B2550;color:#fff}.opts a.opt b{color:#9C8FFF;margin-right:5px}
 .optlab{color:#9AA3B5;font-size:12px;margin-top:8px}
 .chip.gclock{cursor:pointer}.chip.gclock.up{color:#FFC27A;border-color:#6B4A12}
+.grip{height:7px;margin:-4px 0 2px;cursor:ns-resize;border-radius:4px;background:linear-gradient(#2E3546,#2E3546) center/40px 3px no-repeat}.grip:hover{background:linear-gradient(#7C6CFF,#7C6CFF) center/60px 3px no-repeat}

@@ -272,7 +272,7 @@
     $("msgs").scrollTop = 1e9;
     setBusy(true);
     post({ t: "send", id: cur.id, text: text, ctx: ctx, detailed: d, again: !!moreDetail, deep: !!deep, resume: resume || "" });
-    $("input").value = "";
+    $("input").value = ""; fitInput();
   }
 
   // ● ● ● the thinking card: a step (✓ when the next one starts) or a line inside the step
@@ -287,9 +287,9 @@
     if (m.t === "init") {
       chats = m.chats || []; $("ai").textContent = m.ai ? "AI: " + m.ai : "No AI key — add one in Settings";
       $("sign").textContent = m.sign;
-      if (m.guided) { G = m.guided; newClock(); }
+      if (m.guided) { G = m.guided; newClock(); fitInput(); }
       drawList(); drawChips(); drawChat();
-      if (m.text) { $("input").value = m.text; $("input").focus(); }
+      if (m.text) { $("input").value = m.text; $("input").focus(); fitInput(); }
     } else if (m.t === "chats") { chats = m.chats || []; drawList(); }
     else if (m.t === "chat") { cur = m.chat; ctx = m.chat.ctx || newCtx(); newClock(); drawList(); drawChips(); drawChat(); }
     else if (m.t === "progress") thinking(m.text, !!m.step);
@@ -314,9 +314,9 @@
       });
     } else if (m.t === "mic") {
       recording = m.on; $("mic").className = m.on ? "rec" : ""; $("mic").textContent = m.on ? "■ Stop" : "🎤";
-      if (m.text) { $("input").value = ($("input").value ? $("input").value + " " : "") + m.text; $("input").focus(); }
+      if (m.text) { $("input").value = ($("input").value ? $("input").value + " " : "") + m.text; $("input").focus(); fitInput(); }
       if (m.error) { var x2 = el("div", "thinking err", "⚠ " + m.error); $("msgs").appendChild(x2); }
-    } else if (m.t === "insert") { $("input").value = ($("input").value ? $("input").value + "\n" : "") + m.text; $("input").focus(); }
+    } else if (m.t === "insert") { $("input").value = ($("input").value ? $("input").value + "\n" : "") + m.text; $("input").focus(); fitInput(); }
     else if (m.t === "askNow") send(m.text);
     else if (m.t === "ag.confirm") agConfirm(m);
     else if (m.t === "continueDeep") { if (busy) return; newChat(); send(m.text, false, true, m.resume); }
@@ -357,6 +357,31 @@
   $("newchat").onclick = newChat;
   $("find").oninput = drawList;
   $("send").onclick = function () { send($("input").value); };
+  // ✎ the typing box: starts at N lines, grows while you type (Settings → 🎯 Guided mode), drag its top edge to make it bigger
+  var dragH = 0;
+  try { dragH = parseInt(localStorage.getItem("nova_input_h") || "0", 10) || 0; } catch (e) { }
+  function fitInput() {
+    var t = $("input"); if (!t) return;
+    var px = Math.round((G.font || 11) * 1.33), lh = Math.round(px * 1.45);
+    t.style.fontSize = px + "px"; t.style.lineHeight = lh + "px";
+    t.style.height = "auto";
+    var min = (G.lines || 4) * lh + 12, max = (G.maxLines || 12) * lh + 12;
+    var h = Math.min(Math.max(t.scrollHeight, min), max);
+    t.style.height = Math.max(h, Math.min(dragH, window.innerHeight * 0.6)) + "px";
+    t.style.overflowY = t.scrollHeight > max ? "auto" : "hidden";
+  }
+  $("input").addEventListener("input", fitInput);
+  (function () {
+    var t = $("input"), grip = document.createElement("div");
+    grip.className = "grip"; grip.title = "Drag to make the typing box bigger · double-click to reset";
+    t.parentNode.insertBefore(grip, t);
+    var y0 = 0, h0 = 0;
+    grip.onmousedown = function (e) { y0 = e.clientY; h0 = t.offsetHeight; e.preventDefault();
+      document.onmousemove = function (ev) { dragH = Math.max(40, h0 + (y0 - ev.clientY)); fitInput(); };
+      document.onmouseup = function () { document.onmousemove = document.onmouseup = null; try { localStorage.setItem("nova_input_h", String(dragH)); } catch (x) { } }; };
+    grip.ondblclick = function () { dragH = 0; try { localStorage.removeItem("nova_input_h"); } catch (x) { } fitInput(); };
+  })();
+  fitInput();
   $("input").onkeydown = function (e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send($("input").value); } };
   $("deep").onclick = function () { send($("input").value || "Check in my records whether this system, or parts of it, was submitted or approved earlier.", false, true); };
   $("stop").onclick = function () { post({ t: "stop" }); thinking("Stopping…"); };
