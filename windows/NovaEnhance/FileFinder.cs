@@ -26,6 +26,14 @@ class FileMeta
         ["PM"] = "Project management", ["GN"] = "General", ["GE"] = "General", ["ICT"] = "ICT", ["IT"] = "ICT", ["EV"] = "Vertical transport", ["LF"] = "Vertical transport", ["BMU"] = "Façade access"
     };
 
+    /// <summary>☑ Every choice of the filters, even those not in the results.</summary>
+    public static readonly string[] AllTypes = { "PDF", "Word", "Excel", "PowerPoint", "CAD / BIM", "Image", "Email", "Text", "Zip" };
+    public static IEnumerable<string> AllDocs => Docs.Values.Concat(new[] { "Contract", "Model / CAD" }).Distinct().OrderBy(x => x);
+    public static IEnumerable<string> AllDiscs => Discs.Values.Distinct().OrderBy(x => x);
+    public static IEnumerable<string> AllLevels =>
+        new[] { "Basement 3", "Basement 2", "Basement 1", "Lower ground", "Ground", "Upper ground", "Mezzanine", "Podium" }
+        .Concat(Enumerable.Range(1, 20).Select(i => "Level " + i.ToString("00"))).Concat(new[] { "Roof", "All levels" });
+
     static string LevelOf(string s)
     {
         s = s.ToUpperInvariant();
@@ -58,7 +66,8 @@ class FileMeta
             var low = name.ToLowerInvariant();
             m.Doc = low.Contains("minutes") || low.Contains(" mom") ? "Minutes" : low.Contains("letter") ? "Letter" : low.Contains("transmittal") ? "Transmittal"
                   : low.Contains("specification") ? "Specification" : low.Contains("report") ? "Report" : low.Contains("register") ? "Register" : low.Contains("rfi") ? "RFI"
-                  : low.Contains("boq") || low.Contains("bill of quantit") ? "BOQ" : low.Contains("schedule") ? "Schedule" : m.Type == "CAD / BIM" ? "Model / CAD" : "";
+                  : low.Contains("boq") || low.Contains("bill of quantit") ? "BOQ" : low.Contains("schedule") ? "Schedule"
+                  : low.Contains("contract") || low.Contains("agreement") || low.Contains("conditions of") ? "Contract" : m.Type == "CAD / BIM" ? "Model / CAD" : "";
         }
         return m;
     }
@@ -167,7 +176,9 @@ class FinderFilter
 class FileFinderForm : NovaForm
 {
     readonly TextBox box, req;
-    readonly ComboBox proj, cType, cDoc, cDisc, cLevel, cStatus, cGroup;
+    readonly ComboBox proj, cStatus, cGroup;
+    readonly FacetButton cType, cDoc, cDisc, cLevel;
+    readonly Button stopBtn;
     readonly TextBox tRev, tFolder, tExclude;
     readonly DateTimePicker dFrom, dTo;
     readonly CheckBox backups;
@@ -231,7 +242,13 @@ class FileFinderForm : NovaForm
 
         // Row 4 — the filter bar.
         var bar = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(8, 2, 10, 4), BackColor = Th.Bg, WrapContents = true };
-        cType = Combo(110); cDoc = Combo(170); cDisc = Combo(140); cLevel = Combo(120); cStatus = Combo(110); cGroup = Combo(110);
+        // ☑ All the choices always open, with their counts; tick several; 🔎 filter the list.
+        Dictionary<string, int> Count(Func<Row, string> key) => lastAll.GroupBy(key).Where(g => g.Key.Length > 0).ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+        cType = new FacetButton("Type", 110, () => FileMeta.AllTypes, () => Count(r => r.M.Type));
+        cDoc = new FacetButton("Document", 170, () => FileMeta.AllDocs, () => Count(r => r.M.Doc));
+        cDisc = new FacetButton("Discipline", 140, () => FileMeta.AllDiscs, () => Count(r => r.M.Disc));
+        cLevel = new FacetButton("Level", 120, () => FileMeta.AllLevels, () => Count(r => r.M.Level));
+        cStatus = Combo(110); cGroup = Combo(110);
         cStatus.Items.AddRange(new object[] { "Latest", "Any revision", "Superseded" }); cStatus.SelectedIndex = 0;
         cGroup.Items.AddRange(new object[] { "No groups", "Document", "Discipline", "Level", "Type", "Project", "Folder" }); cGroup.SelectedIndex = 0;
         tRev = Tb(55); tFolder = Tb(110); tExclude = Tb(120);
@@ -264,10 +281,15 @@ class FileFinderForm : NovaForm
         var bottom = new Panel { Dock = DockStyle.Bottom, Height = 44, BackColor = Color.FromArgb(0x0E, 0x11, 0x16) };
         info = new Label { Dock = DockStyle.Fill, ForeColor = Th.Muted, Font = Th.F(9.5f), Padding = new Padding(10, 12, 10, 0) };
         var acts = new FlowLayoutPanel { Dock = DockStyle.Right, AutoSize = true, WrapContents = false, Padding = new Padding(4, 6, 8, 0) };
+        // ⏱ while Nova searches: the time counts in the line on the left, and ■ Stop is here
+        stopBtn = Th.B("■ Stop", () => { run++; info.Text = "■ Stopped — change the words or a filter to search again."; stopBtn.Visible = false; });
+        stopBtn.Visible = false;
+        acts.Controls.Add(stopBtn);
         acts.Controls.Add(Th.B("📊 Export as drawing register", ExportRegister, true));
         acts.Controls.Add(Th.B("📎 Attach all to an email", AttachAll));
         acts.Controls.Add(Th.B("✦ Ask Nova about these files", AskNova));
         bottom.Controls.Add(info); bottom.Controls.Add(acts);
+        Thinking.Watch(info);
 
         Controls.Add(lv);
         Controls.Add(bar);
@@ -282,7 +304,8 @@ class FileFinderForm : NovaForm
         box.TextChanged += (_, _) => Later();
         proj.SelectedIndexChanged += (_, _) => Find();
         backups.CheckedChanged += (_, _) => Find();
-        foreach (var c in new[] { cType, cDoc, cDisc, cLevel, cStatus, cGroup }) c.SelectedIndexChanged += (_, _) => { if (!quiet) { ReadBar(); Find(); } };
+        foreach (var c in new[] { cStatus, cGroup }) c.SelectedIndexChanged += (_, _) => { if (!quiet) { ReadBar(); Find(); } };
+        foreach (var c in new[] { cType, cDoc, cDisc, cLevel }) c.Changed += () => { if (!quiet) { ReadBar(); debounce.Stop(); debounce.Start(); } };
         foreach (var t in new[] { tRev, tFolder, tExclude }) t.TextChanged += (_, _) => { if (!quiet) { ReadBar(); Later(); } };
         dFrom.ValueChanged += (_, _) => { if (!quiet) { ReadBar(); Later(); } };
         dTo.ValueChanged += (_, _) => { if (!quiet) { ReadBar(); Later(); } };
@@ -334,9 +357,8 @@ class FileFinderForm : NovaForm
 
     void ReadBar()
     {
-        HashSet<string> Pick(ComboBox c, HashSet<string> cur) =>
-            c.SelectedIndex <= 0 ? new(StringComparer.OrdinalIgnoreCase) : c.SelectedItem is string s && s.Contains(", ") && cur.Count > 1 ? cur : new(new[] { (string)c.SelectedItem }, StringComparer.OrdinalIgnoreCase);
-        flt.Types = Pick(cType, flt.Types); flt.Docs = Pick(cDoc, flt.Docs); flt.Discs = Pick(cDisc, flt.Discs); flt.Levels = Pick(cLevel, flt.Levels);
+        HashSet<string> Pick(FacetButton c) => new(c.Selected, StringComparer.OrdinalIgnoreCase);
+        flt.Types = Pick(cType); flt.Docs = Pick(cDoc); flt.Discs = Pick(cDisc); flt.Levels = Pick(cLevel);
         flt.Status = cStatus.SelectedIndex switch { 1 => "any", 2 => "superseded", _ => "latest" };
         flt.GroupBy = cGroup.SelectedIndex <= 0 ? "" : ((string)cGroup.SelectedItem).ToLowerInvariant();
         flt.Rev = tRev.Text.Trim().ToUpperInvariant();
@@ -413,6 +435,7 @@ class FileFinderForm : NovaForm
         var f = flt; var showJunk = backups.Checked;
         var clock = System.Diagnostics.Stopwatch.StartNew();
         info.Text = "Searching…";
+        stopBtn.Visible = true;
         string searched = "";
         var (all, shown) = await Task.Run(() =>
         {
@@ -426,6 +449,7 @@ class FileFinderForm : NovaForm
             return (list, Apply(list, f));
         });
         if (my != run || IsDisposed) return;
+        stopBtn.Visible = false;
         act.Mark("file names" + (searched.Length > 0 ? " + ✦ AI search" : ""), $"{shown.Count:N0} of {all.Count:N0}");
         act.Note("searched", searched);
         act.Note("first", string.Join("\n", shown.Take(15).Select(x => x.F.Path)));
@@ -499,18 +523,7 @@ class FileFinderForm : NovaForm
     void FillCombos()
     {
         quiet = true;
-        void Fill(ComboBox c, Func<Row, string> key, HashSet<string> cur)
-        {
-            c.BeginUpdate();
-            c.Items.Clear();
-            c.Items.Add("Any");
-            foreach (var g in lastAll.GroupBy(key).Where(g => g.Key.Length > 0).OrderByDescending(g => g.Count()).Take(40)) c.Items.Add(g.Key);
-            foreach (var v in cur) if (!c.Items.Contains(v)) c.Items.Add(v);
-            if (cur.Count > 1) c.Items.Add(string.Join(", ", cur));
-            c.SelectedIndex = cur.Count == 0 ? 0 : c.Items.IndexOf(cur.Count == 1 ? cur.First() : string.Join(", ", cur));
-            c.EndUpdate();
-        }
-        Fill(cType, r => r.M.Type, flt.Types); Fill(cDoc, r => r.M.Doc, flt.Docs); Fill(cDisc, r => r.M.Disc, flt.Discs); Fill(cLevel, r => r.M.Level, flt.Levels);
+        cType.Set(flt.Types); cDoc.Set(flt.Docs); cDisc.Set(flt.Discs); cLevel.Set(flt.Levels);
         quiet = false;
     }
 

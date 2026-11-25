@@ -74,6 +74,12 @@ class GuidedSearchForm : NovaForm
     readonly CheckBox latestOnly, readMore;
     readonly Button backBtn, timerBtn;
     readonly List<Action> numbered = new();
+    readonly List<(Button B, string Title)> opts = new();
+    readonly TextBox optFilter;
+    readonly Button stopBtn;
+
+    /// <summary>⏱ Nova is working: the time counts in the line under the steps, and ■ Stop shows.</summary>
+    void Working(bool on) { if (!stopBtn.IsDisposed) stopBtn.Visible = on; }
 
     public GuidedSearchForm()
     {
@@ -90,10 +96,21 @@ class GuidedSearchForm : NovaForm
         top.Controls.Add(Th.B("💬 Free chat", () => Screens.Hub("")));
         top.Controls.Add(Th.B("📂 Classic finder", () => Screens.FindFile("")));
         top.Controls.Add(Th.B("⚙", () => Screens.Settings("🎯 Guided mode")));
+        stopBtn = Th.B("■ Stop", () => { cts?.Cancel(); Working(false); note.Text = "■ Stopped — pick again, or ← Back."; });
+        stopBtn.Visible = false;
+        top.Controls.Add(stopBtn);
         var crumbs = new Panel { Dock = DockStyle.Top, Height = 54, BackColor = Th.Bg, Padding = new Padding(16, 2, 16, 2) };
         crumb = new Label { Dock = DockStyle.Top, Height = 26, Font = Th.F(11, true), ForeColor = Th.AccentText, AutoEllipsis = true, UseMnemonic = false };
         note = new Label { Dock = DockStyle.Top, Height = 22, Font = Th.F(9), ForeColor = Th.Muted, AutoEllipsis = true, UseMnemonic = false };
         crumbs.Controls.Add(note); crumbs.Controls.Add(crumb);
+        Thinking.Watch(note);   // ⏱ 0:03 while Nova counts, reads or searches
+        // 🔎 narrow the options as you type (all of them stay available; nothing is removed)
+        crumbs.Height = 90;
+        optFilter = Th.Box(false); if (optFilter is SpellBox ofs) ofs.Off = true;
+        optFilter.Dock = DockStyle.Top; optFilter.Font = Th.F(10); optFilter.PlaceholderText = "🔎 Filter these options — type part of a name (e.g. 08, door, MEP, RFI)…";
+        optFilter.TextChanged += (_, _) => FilterOpts();
+        optFilter.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; var first = opts.FirstOrDefault(o => o.B.Visible && !o.B.IsDisposed); first.B?.PerformClick(); } };
+        crumbs.Controls.Add(optFilter); crumbs.Controls.SetChildIndex(optFilter, 0);
 
         findBar = new Panel { Dock = DockStyle.Top, Height = 120, BackColor = Color.FromArgb(0x0E, 0x11, 0x17), Padding = new Padding(16, 8, 16, 6), Visible = false };
         // ✎ A real typing box: starts at the lines of Settings → 🎯 Guided mode, grows while you type; drag the bar under it to make it bigger.
@@ -122,7 +139,7 @@ class GuidedSearchForm : NovaForm
         KeyDown += (_, e) =>
         {
             if (e.KeyCode == Keys.Escape) { if (step > 0) Back(); else Close(); return; }
-            if (query.Focused) return;
+            if (query.Focused || optFilter.Focused) return;
             var n = e.KeyCode is >= Keys.D1 and <= Keys.D9 ? e.KeyCode - Keys.D0 : e.KeyCode is >= Keys.NumPad1 and <= Keys.NumPad9 ? e.KeyCode - Keys.NumPad0 : 0;
             if (n > 0 && n <= numbered.Count) { e.SuppressKeyPress = true; numbered[n - 1](); }   // type the number = pick it
             if (e.KeyCode == Keys.Back && step > 0) { e.SuppressKeyPress = true; Back(); }
@@ -172,7 +189,8 @@ class GuidedSearchForm : NovaForm
         body.SuspendLayout();
         foreach (Control c in body.Controls.Cast<Control>().ToList()) c.Dispose();
         body.Controls.Clear();
-        numbered.Clear();
+        numbered.Clear(); opts.Clear();
+        if (optFilter != null && optFilter.Text.Length > 0) optFilter.Text = "";
         note.Text = hint;
         Crumb();
         body.ResumeLayout();
@@ -192,7 +210,16 @@ class GuidedSearchForm : NovaForm
         b.AutoSize = false; b.Width = RowWidth; b.Height = sub.Length > 0 ? 50 : 36; b.TextAlign = ContentAlignment.MiddleLeft; b.Font = Th.F(10);
         b.Margin = new Padding(0, 0, 0, 5);
         body.Controls.Add(b);
+        opts.Add((b, title + " " + sub));
         return b;
+    }
+
+    void FilterOpts()
+    {
+        var f = optFilter.Text.Trim();
+        body.SuspendLayout();
+        foreach (var (b, t) in opts) if (!b.IsDisposed) b.Visible = f.Length == 0 || t.Contains(f, StringComparison.OrdinalIgnoreCase);
+        body.ResumeLayout();
     }
 
     void Go(int to)
@@ -200,6 +227,7 @@ class GuidedSearchForm : NovaForm
         cts?.Cancel();
         step = to;
         findBar.Visible = step == 3; findGrip.Visible = step == 3;
+        optFilter.Visible = step < 3; Working(false);
         if (step == 3) FitFind();
         if (step == 0) Where();
         else if (step == 1) What();
@@ -229,8 +257,9 @@ class GuidedSearchForm : NovaForm
         }
         Head("1 · Where is it?");
         var my = cts = new CancellationTokenSource();
+        Working(true);
         var counts = await Task.Run(() => all.Select(p => Projects.CountUnder(p.Folders)).ToList());
-        if (my.IsCancellationRequested || IsDisposed) return;
+        if (IsDisposed) return; Working(false); if (my.IsCancellationRequested) return;
         for (int i = 0; i < all.Count; i++)
         {
             var p = all[i]; var c = counts[i];
@@ -252,23 +281,24 @@ class GuidedSearchForm : NovaForm
         Clear("What are you looking for? Nova counts the files of each kind in " + whereLabel + "…");
         Head("2 · What is it?");
         var my = cts = new CancellationTokenSource();
+        Working(true);
         var files = await Task.Run(() => Projects.Catalogue(folders));
-        if (my.IsCancellationRequested || IsDisposed) return;
+        if (IsDisposed) return; Working(false); if (my.IsCancellationRequested) return;
         note.Text = $"{files.Count:N0} files in {whereLabel} · pick the kind (type its number).";
         var groups = await Task.Run(() => Cats.ToDictionary(c => c.Key, c => c.Match == null ? new List<Projects.FileRow>() : files.Where(f => c.Match.IsMatch(Rel(f.Path))).ToList()));
-        if (my.IsCancellationRequested || IsDisposed) return;
+        if (IsDisposed) return; Working(false); if (my.IsCancellationRequested) return;
         body.SuspendLayout();
         foreach (var c in Cats)
         {
             var list = groups[c.Key];
             if (c.Key == "mail") { Opt($"{c.Icon} {c.Label}", "search your emails of " + whereLabel, () => { cat = c; whatLabel = c.Label; inNarrow = new(); narrowLabel = ""; Go(3); }); continue; }
-            if (list.Count == 0 && c.Key != "all") continue;
-            Opt($"{c.Icon} {c.Label}", $"{list.Count:N0} files", () =>
+            var ob = Opt($"{c.Icon} {c.Label}", $"{list.Count:N0} files", () =>
             {
                 cat = c; whatLabel = c.Label; inWhat = list;
                 if (list.Count <= 40 || c.Key == "all" && list.Count <= 80) { inNarrow = list; narrowLabel = ""; Go(3); }
                 else Go(2);
             });
+            if (list.Count == 0) ob.ForeColor = Th.Muted;   // ☑ always offered, greyed when this area has none
         }
         body.ResumeLayout();
     }
@@ -291,14 +321,16 @@ class GuidedSearchForm : NovaForm
         Clear($"{inWhat.Count:N0} files · narrow it down (type its number).");
         Head("3 · Narrow it");
         var my = cts = new CancellationTokenSource();
+        Working(true);
         var groups = await Task.Run(() => Groups(cat.Key, inWhat));
-        if (my.IsCancellationRequested || IsDisposed) return;
+        if (IsDisposed) return; Working(false); if (my.IsCancellationRequested) return;
         body.SuspendLayout();
         Opt($"All of them", $"{inWhat.Count:N0} files", () => { inNarrow = inWhat; narrowLabel = "all"; Go(3); });
         foreach (var (label, list) in groups)
         {
             var l = list;
-            Opt(label, $"{l.Count:N0} files", () => { inNarrow = l; narrowLabel = label; Go(3); });
+            var b = Opt(label, $"{l.Count:N0} files", () => { inNarrow = l; narrowLabel = label; Go(3); });
+            if (l.Count == 0) b.ForeColor = Th.Muted;
         }
         body.ResumeLayout();
     }
@@ -331,9 +363,18 @@ class GuidedSearchForm : NovaForm
             g ??= FirstFolder(f.Path);
             Add(g, f);
         }
-        var ordered = res.Where(kv => kv.Value.Count > 0).OrderByDescending(kv => kv.Key.StartsWith("Division") || Disciplines.ContainsValue(kv.Key) || SubTypes.Any(s => s.Label == kv.Key) ? 1 : 0)
-                         .ThenBy(kv => kv.Key.StartsWith("Division") ? kv.Key : "").ThenByDescending(kv => kv.Value.Count).ToList();
-        return ordered.Take(14).Select(kv => (kv.Key, kv.Value)).ToList();
+        // ☑ Every division / discipline / type is offered, even with 0 files (greyed); folders: the 20 biggest.
+        var known = key switch
+        {
+            "spec" => Divisions.Select(kv => $"Division {kv.Key} · {kv.Value}").ToList(),
+            "dwg" => Disciplines.Values.Distinct().Append("CAD files").ToList(),
+            "sub" => SubTypes.Select(s => s.Label).ToList(),
+            _ => new List<string>(),
+        };
+        foreach (var k in known) if (!res.ContainsKey(k)) res[k] = new();
+        var named = res.Where(kv => known.Contains(kv.Key)).OrderBy(kv => key == "spec" ? kv.Key : "").ThenByDescending(kv => kv.Value.Count).ToList();
+        var other = res.Where(kv => !known.Contains(kv.Key) && kv.Value.Count > 0).OrderByDescending(kv => kv.Value.Count).Take(20).ToList();
+        return named.Concat(other).Select(kv => (kv.Key, kv.Value)).ToList();
     }
 
     string FirstFolder(string path)
@@ -363,14 +404,15 @@ class GuidedSearchForm : NovaForm
         Clear($"🔎 Finding “{q}” in {inNarrow.Count:N0} files…");
         Head("4 · Found");
         var my = cts = new CancellationTokenSource();
+        Working(true);
         var latest = latestOnly.Checked; var more = readMore.Checked;
         var set = inNarrow;
         var ui = SynchronizationContext.Current;
         var (hits, clauses, read) = await Task.Run(() => Search(set, q, latest, more, msg => ui?.Post(_ => { if (!note.IsDisposed) note.Text = msg; }, null), my.Token));
-        if (my.IsCancellationRequested || IsDisposed) return;
+        if (IsDisposed) return; Working(false); if (my.IsCancellationRequested) return;
         body.SuspendLayout();
         foreach (Control c in body.Controls.Cast<Control>().ToList()) c.Dispose();
-        body.Controls.Clear(); numbered.Clear();
+        body.Controls.Clear(); numbered.Clear(); opts.Clear();
         note.Text = $"{hits.Count} file(s) by name · {clauses.Count} passage(s) inside the text · {read} file(s) searched inside" + (q.Length == 0 ? "" : $" · “{q}”");
         if (hits.Count == 0 && clauses.Count == 0)
         {
