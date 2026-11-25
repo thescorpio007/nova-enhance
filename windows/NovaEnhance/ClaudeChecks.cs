@@ -271,5 +271,68 @@ static class ClaudeChecks
         return sb.ToString();
     }
 
+    /// <summary>🧩 Every Office add-in registered for this user / this PC (COM + web), read-only.</summary>
+    public static string Addins()
+    {
+        var sb = new StringBuilder($"🧩 Office add-ins · {Program.Shown}\n");
+        foreach (var app in new[] { "Outlook", "Word", "Excel", "PowerPoint" })
+        {
+            sb.Append($"\n— {app} (COM add-ins)\n");
+            foreach (var (hive, hn) in new[] { (Microsoft.Win32.Registry.CurrentUser, "this user"), (Microsoft.Win32.Registry.LocalMachine, "this PC") })
+                foreach (var view in new[] { Microsoft.Win32.RegistryView.Registry64, Microsoft.Win32.RegistryView.Registry32 })
+                {
+                    try
+                    {
+                        using var root = Microsoft.Win32.RegistryKey.OpenBaseKey(hive == Microsoft.Win32.Registry.CurrentUser ? Microsoft.Win32.RegistryHive.CurrentUser : Microsoft.Win32.RegistryHive.LocalMachine, view);
+                        using var k = root.OpenSubKey($@"Software\Microsoft\Office\{app}\Addins");
+                        if (k == null) continue;
+                        foreach (var n in k.GetSubKeyNames())
+                        {
+                            using var a = k.OpenSubKey(n);
+                            var name = a?.GetValue("FriendlyName")?.ToString() ?? n;
+                            var load = a?.GetValue("LoadBehavior")?.ToString() ?? "?";
+                            var desc = a?.GetValue("Description")?.ToString() ?? "";
+                            var loaded = load is "3" or "9" or "16" ? "loads at start" : load is "2" or "0" ? "OFF" : "load " + load;
+                            sb.Append($"   • {name}  [{n}] · {loaded} · {hn}, {(view == Microsoft.Win32.RegistryView.Registry64 ? "64-bit" : "32-bit")}{(desc.Length > 0 ? " · " + Cut(desc, 90) : "")}\n");
+                        }
+                    }
+                    catch (Exception e) { sb.Append($"   ⚠ {hn}: {e.Message}\n"); }
+                }
+            // add-ins Office turned off after a crash
+            try
+            {
+                using var dis = Microsoft.Win32.Registry.CurrentUser.OpenSubKey($@"Software\Microsoft\Office\16.0\{app}\Resiliency\DisabledItems");
+                if (dis != null && dis.GetValueNames().Length > 0) sb.Append($"   ⚠ {dis.GetValueNames().Length} item(s) disabled by Office after a crash\n");
+            }
+            catch { }
+        }
+        // web add-ins (manifests): sideloaded (Developer) + the ones Office downloaded
+        sb.Append("\n— Web add-ins (manifests)\n");
+        try
+        {
+            using var dev = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Office\16.0\WEF\Developer");
+            if (dev != null) foreach (var v in dev.GetValueNames()) sb.Append($"   • sideloaded: {v} → {Cut(dev.GetValue(v)?.ToString() ?? "", 140)}\n");
+        }
+        catch { }
+        var wef = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Microsoft\Office\16.0\Wef");
+        try
+        {
+            if (Directory.Exists(wef))
+                foreach (var f in Directory.EnumerateFiles(wef, "*.*", SearchOption.AllDirectories).Where(f => f.EndsWith(".xml", StringComparison.OrdinalIgnoreCase) || Path.GetFileName(f).Contains("manifest", StringComparison.OrdinalIgnoreCase)).Take(200))
+                {
+                    string txt; try { txt = File.ReadAllText(f); } catch { continue; }
+                    var dn = Regex.Match(txt, @"<DisplayName\s+DefaultValue=""([^""]+)""");
+                    if (!dn.Success) continue;
+                    var prov = Regex.Match(txt, @"<ProviderName>([^<]+)<");
+                    var tabs = Regex.Matches(txt, @"(?:Label|Tab\.Label|TabLabel)[^>]*DefaultValue=""([^""]{1,40})""").Select(m => m.Groups[1].Value).Distinct().Take(8);
+                    sb.Append($"   • {dn.Groups[1].Value}{(prov.Success ? " · by " + prov.Groups[1].Value : "")} · labels: {string.Join(", ", tabs)}\n");
+                }
+        }
+        catch (Exception e) { sb.Append("   ⚠ " + e.Message + "\n"); }
+        // Nova's own tab
+        try { sb.Append($"\n— Nova's own ✦ Nova tab: {(OfficeRibbon.Installed ? "installed" : "not installed")}\n"); } catch { }
+        return sb.ToString();
+    }
+
     static string Cut(string s, int n) => s == null ? "" : s.Length <= n ? s : s[..n] + "…";
 }
