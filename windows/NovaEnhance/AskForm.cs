@@ -2166,7 +2166,8 @@ class BriefForm : NovaForm
         info.Text = "Reading your index…";
         try
         {
-            var (n, f) = await BriefLogic.Build(CancellationToken.None);
+            // the whole brief is worked out away from the window (the index can be busy at 9:00 — the window never freezes)
+            var (n, f) = await Task.Run(() => BriefLogic.Build(CancellationToken.None));
             lastNeeds = n; lastFollow = f;
             PhoneLink.BriefMade(n, f);   // 📱 the phone gets the same brief
             needs.Nova = fyi.Nova = follow.Nova = null;
@@ -2178,7 +2179,8 @@ class BriefForm : NovaForm
             if (n.Count == 0 && f.Count == 0)
             {
                 message.Visible = true;
-                message.Text = MailIndex.Count() == 0
+                var empty = await Task.Run(() => MailIndex.Count() == 0);
+                message.Text = empty
                     ? "The email index is still empty. Open Outlook and leave it running — Nova builds the index in the background (the first time can take a while)."
                     : "✓ Nothing is waiting for you. Enjoy your day!";
             }
@@ -2212,7 +2214,7 @@ class BriefForm : NovaForm
             }
             var all = lastMeetings;
             var two = all.Where(x => x.Start < today.AddDays(2)).ToList();
-            Calendar.Prepare(two, waiting);
+            await Task.Run(() => Calendar.Prepare(two, waiting));   // searches the index for each meeting: not on the window
             foreach (var day in new[] { today, today.AddDays(1) })
             {
                 var list = two.Where(x => x.Start.Date <= day && x.End > day && x.IsMeeting && !x.Cancelled && !x.Declined).OrderBy(x => x.Start).ToList();

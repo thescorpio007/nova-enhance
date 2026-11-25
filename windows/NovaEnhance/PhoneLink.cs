@@ -335,7 +335,7 @@ static class PhoneLink
 
     static JsonObject Hit(MailHit h) => new()
     {
-        ["i"] = h.Id, ["e"] = h.Entry, ["d"] = new DateTimeOffset(h.Date).ToUnixTimeMilliseconds(), ["s"] = h.Sent, ["fn"] = h.FromName, ["fa"] = h.FromAddr,
+        ["i"] = h.Id, ["e"] = h.Entry, ["d"] = TimeMs.Of(h.Date), ["s"] = h.Sent, ["fn"] = h.FromName, ["fa"] = h.FromAddr,
         ["to"] = h.To, ["cc"] = h.Cc, ["sub"] = h.Subject, ["an"] = h.AttNames, ["st"] = h.Status, ["why"] = h.Why, ["first"] = h.FirstLines(400),
         ["p"] = MailProjects.Of(h.Id)
     };

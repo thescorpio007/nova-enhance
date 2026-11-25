@@ -1261,7 +1261,7 @@ static class MailIndex
         finally { Outlook.Release(subs); }
     }
 
-    static long Ms(DateTime d) => new DateTimeOffset(d).ToUnixTimeMilliseconds();
+    static long Ms(DateTime d) => TimeMs.Of(d);
 
     /// <summary>
     /// Newest first. "hi/lo" remember which date span of this folder is already complete, so later passes only add new mail
@@ -1646,8 +1646,8 @@ static class MailIndex
         if (ors.Count == 0) return list;
         cmd.CommandText = $"SELECT m.id,m.entry,m.store,m.conv,m.folder,m.sent,m.date,m.from_name,m.from_addr,m.to_list,m.cc_list,m.to_addr,m.cc_addr,m.subject,substr(m.body,1,{Math.Clamp(bodyChars, 200, 20000)}),m.att_names,m.unread,m.importance FROM mail m " +
                           $"WHERE ({string.Join(" OR ", ors)}) AND m.date >= $a AND m.date <= $b ORDER BY m.date LIMIT {Math.Clamp(max, 1, 300000)}";
-        cmd.Parameters.AddWithValue("$a", new DateTimeOffset(after).ToUnixTimeMilliseconds());
-        cmd.Parameters.AddWithValue("$b", new DateTimeOffset(before).ToUnixTimeMilliseconds());
+        cmd.Parameters.AddWithValue("$a", TimeMs.Of(after));
+        cmd.Parameters.AddWithValue("$b", TimeMs.Of(before));
         using var r = cmd.ExecuteReader();
         while (r.Read())
         {
@@ -1675,8 +1675,8 @@ static class MailIndex
         for (int i = 0; i < ts.Count; i++) { ors.Add($"m.subject LIKE $t{i}"); cmd.Parameters.AddWithValue("$t" + i, "%-" + ts[i] + "-%"); }
         cmd.CommandText = $"SELECT m.id,m.entry,m.store,m.conv,m.folder,m.sent,m.date,m.from_name,m.from_addr,m.to_list,m.cc_list,m.to_addr,m.cc_addr,m.subject,substr(m.body,1,{Math.Clamp(bodyChars, 200, 20000)}),m.att_names,m.unread,m.importance FROM mail m " +
                           $"WHERE ({string.Join(" OR ", ors)}) AND m.date >= $a AND m.date <= $b ORDER BY m.date LIMIT {Math.Clamp(max, 1, 200000)}";
-        cmd.Parameters.AddWithValue("$a", new DateTimeOffset(after).ToUnixTimeMilliseconds());
-        cmd.Parameters.AddWithValue("$b", new DateTimeOffset(before).ToUnixTimeMilliseconds());
+        cmd.Parameters.AddWithValue("$a", TimeMs.Of(after));
+        cmd.Parameters.AddWithValue("$b", TimeMs.Of(before));
         using var r = cmd.ExecuteReader();
         while (r.Read())
         {

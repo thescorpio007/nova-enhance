@@ -288,6 +288,18 @@ static class Store
     };
 }
 
+/// <summary>Dates as milliseconds, safe for “no limit” (DateTime.MinValue / MaxValue): with your time zone (+4 h) the earliest date
+/// fell before year 0 and stopped every email-index pass since 22 Nov (“The UTC time … must be between year 0 and 10,000”).</summary>
+static class TimeMs
+{
+    public static long Of(DateTime d)
+    {
+        if (d.Year < 1971) return 0;
+        if (d.Year > 9000) return 253402214400000;
+        try { return new DateTimeOffset(d).ToUnixTimeMilliseconds(); } catch { return 0; }
+    }
+}
+
 /// <summary>Starts Nova with Windows (per user, no admin needed).</summary>
 static class Startup
 {

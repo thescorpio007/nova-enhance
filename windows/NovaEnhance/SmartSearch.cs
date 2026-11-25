@@ -263,7 +263,7 @@ static class SmartSearch
         // Meaning search: what is said in other words.
         var semantic = new HashSet<long>();
         if (Semantic.Ready)
-            try { foreach (var h in await Semantic.Mail(question, 40, ct)) if (Pass(h, baseQ)) { semantic.Add(h.Id); count.TryAdd(h.Id, 0); dates[h.Id] = new DateTimeOffset(h.Date).ToUnixTimeMilliseconds(); } }
+            try { foreach (var h in await Semantic.Mail(question, 40, ct)) if (Pass(h, baseQ)) { semantic.Add(h.Id); count.TryAdd(h.Id, 0); dates[h.Id] = TimeMs.Of(h.Date); } }
             catch (OperationCanceledException) { throw; }
             catch (Exception e) { Log.Warn("ai search", "meaning: " + e.Message); }
         // 2 · Read the best-matching candidates (most ideas first) — up to 3,000, old and new alike.

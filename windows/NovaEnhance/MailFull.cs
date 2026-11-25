@@ -69,7 +69,7 @@ static class MailFull
         return (m, a, m * 9 / 1024);     // about 9 KB a page once packed
     }
 
-    static long Ms(DateTime d) => new DateTimeOffset(d).ToUnixTimeMilliseconds();
+    static long Ms(DateTime d) => TimeMs.Of(d);
 
     public static void Forget()
     {

@@ -477,14 +477,25 @@ static class BriefLogic
     }
 
     /// <summary>Once a day, from the chosen hour, when there is something in the index.</summary>
+    static volatile bool checking;
     public static void MaybeShow()
     {
         if (!Store.BriefOn || AdminLock.Locked) return;   // 🔐 locked: the brief waits until you unlock
         var today = DateTime.Now.ToString("yyyy-MM-dd");
         if (Store.Str("win_last_brief") == today || DateTime.Now.Hour < Store.BriefHour) return;
-        if (MailIndex.Count() == 0) return;
-        Store.Set("win_last_brief", today);
-        Screens.Brief();
+        if (checking) return;
+        checking = true;
+        // the index count opens the encrypted index: done away from the window, then the brief opens
+        Task.Run(() =>
+        {
+            try
+            {
+                if (MailIndex.Count() == 0) return;
+                Store.Set("win_last_brief", today);
+                Program.UiContext?.Post(_ => Screens.Brief(), null);
+            }
+            finally { checking = false; }
+        });
     }
 
     /// <summary>Saves a list for Excel (CSV) and as a page to print or save as PDF (HTML). Returns the CSV path.</summary>
