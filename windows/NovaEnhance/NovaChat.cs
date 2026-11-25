@@ -431,6 +431,7 @@ class NovaChat
         if (string.IsNullOrEmpty(folder) && deep == null)
             try
             {
+                var localSw = System.Diagnostics.Stopwatch.StartNew();
                 var proj = Projects.ForText(searchText);
                 var named = proj != null || Revisions.Numbers(searchText).Count > 0;
                 var docsOk = named && FolderAsk.Sees != "never";
@@ -443,6 +444,10 @@ class NovaChat
                     sources.Add(new Src { Kind = "email", Entry = parts.Length > 1 ? parts[1] : "", Store = parts.Length > 2 ? parts[2] : "", Label = p.Loc, Text = p.Text });
                 }
                 foreach (var p in ns.Memory.Concat(ns.History)) sources.Add(new Src { Kind = "note", Label = p.Loc, Text = p.Text });
+                // ⚡ What Nova found on this PC is shown at once — the AI writes the answer after (you can open them while it works).
+                var found = sources.Where(x => x.Kind is "passage" or "email" or "file").Take(10).ToList();
+                if (found.Count > 0)
+                    Post(new JsonObject { ["t"] = "local", ["text"] = $"⚡ Found on this PC in {localSw.Elapsed.TotalSeconds:0.0} s (no AI) — the AI is now writing the answer from them:", ["sources"] = new JsonArray(found.Select(x => (JsonNode)x.Json()).ToArray()) });
                 if (ns.Project != null) notes.Add($"📁 project {ns.Project.Code} detected");
                 notes.AddRange(ns.Notes.Where(n => n.StartsWith("⚠ not reachable")));
             }

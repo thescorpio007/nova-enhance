@@ -494,7 +494,7 @@ class FileFinderForm : NovaForm
         var more = shown.Count > 3000 ? " (first 3,000 shown — add a word or a filter)" : "";
         info.Text = shown.Count == 0
             ? $"Nothing matches — try fewer words or remove a filter (✗)."
-            : $"{shown.Count:N0} of {all.Count:N0} files match{more} · {clock.ElapsedMilliseconds} ms · Enter opens · right-click: show in folder, copy, attach";
+            : $"{shown.Count:N0} of {all.Count:N0} files match{more} · ⚡ {clock.ElapsedMilliseconds} ms on this PC (no AI) · Enter opens · right-click: show in folder, copy, attach";
         if (searched.Length > 0) info.Text = "✦ " + searched + "\n" + info.Text;
         if (openIfOne && shown.Count == 1) Shell.Open(shown[0].F.Path);
         else if (openIfOne && lv.Items.Count > 0) { lv.Focus(); lv.Items[0].Selected = true; lv.Items[0].Focused = true; }

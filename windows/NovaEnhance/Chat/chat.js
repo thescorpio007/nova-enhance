@@ -293,6 +293,19 @@
     } else if (m.t === "chats") { chats = m.chats || []; drawList(); }
     else if (m.t === "chat") { cur = m.chat; ctx = m.chat.ctx || newCtx(); newClock(); drawList(); drawChips(); drawChat(); }
     else if (m.t === "progress") thinking(m.text, !!m.step);
+    else if (m.t === "local") {
+      // ⚡ found on this PC before the AI answers: click to open while it writes
+      var box = $("msgs"), d = el("div", "localhits");
+      d.appendChild(el("div", "lt", m.text));
+      (m.sources || []).forEach(function (src) {
+        var a = el("a", "lh", (src.kind === "email" ? "✉ " : src.kind === "passage" ? "📄 " : "📎 ") + (src.label || src.path || ""));
+        a.onclick = function (e) { post({ t: "openSource", src: src, ctrl: !!(e && e.ctrlKey) }); };
+        d.appendChild(a);
+      });
+      var th = box.querySelector(".thinking");
+      if (th && th.parentNode === box) box.insertBefore(d, th); else box.appendChild(d);
+      box.scrollTop = box.scrollHeight;
+    }
     else if (m.t === "answer") {
       setBusy(false); if (thk) thk.done(); thk = null;
       cur = m.chat; drawList(); drawChat();

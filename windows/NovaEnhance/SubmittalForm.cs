@@ -85,9 +85,15 @@ class SubmittalForm : WebPage
             case "ask":
             {
                 // 🧭 A follow-up typed in the log window.
-                var it = Intent.Read(m["text"]?.ToString() ?? "", cur?.Projects.FirstOrDefault() ?? "", cur ?? new SubmittalLog.Options());
-                // 🧭 Anything that is not a quick log choice goes to the Nova agent (AI + your Brain + the log + emails + threads).
-                if (it.Log == null || Agent.Wanted(m["text"]?.ToString() ?? "")) { Post(new JsonObject { ["t"] = "ag.start", ["text"] = m["text"]?.ToString() ?? "" }); return; }
+                var text = m["text"]?.ToString() ?? "";
+                var it = Intent.Read(text, cur?.Projects.FirstOrDefault() ?? "", cur ?? new SubmittalLog.Options());
+                var reasoning = Agent.Wanted(text) || m["ai"]?.ToString() is "true" or "True";
+                var forced = System.Text.RegularExpressions.Regex.Match(text, @"^\s*(?:✦|ask ai\s*:?)\s*", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (forced.Success && forced.Length > 0) { reasoning = true; text = text[forced.Length..]; }
+                // ⚡ Local first: the words of the question are looked for in the log itself (no AI, about a second).
+                //    The AI agent is used only for a real question (who / why / draft…), when nothing is found here, or when you ask for it.
+                if (!reasoning && (it.Log == null || SubmittalLog.FreeWords(text).Count > 0)) { LocalAsk(text, it.Log); return; }
+                if (it.Log == null || reasoning) { Post(new JsonObject { ["t"] = "ag.start", ["text"] = text }); return; }
                 exportNext = it.Export;
                 Post(new JsonObject { ["t"] = "opt", ["opt"] = OptJson(it.Log), ["said"] = it.Said });
                 Run(it.Log);
@@ -122,6 +128,60 @@ class SubmittalForm : WebPage
             case "brain": Screens.Brain(); break;
         }
     }
+
+    /// <summary>⚡ The question answered from the log: its filters (type, project, tower, level, status, dates) + its free words.</summary>
+    void LocalAsk(string text, SubmittalLog.Options fromIntent)
+    {
+        var words = SubmittalLog.FreeWords(text);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        // 1 · the rows already on screen (instant)
+        var shown = last?.Items.Where(i => SubmittalLog.WordsFit(i, words)).ToList() ?? new();
+        var n = SubmittalLog.FromWords(text, cur?.Projects.FirstOrDefault() ?? "");
+        if (n.Types.Count > 0) shown = shown.Where(i => n.Types.Contains(i.Type, StringComparer.OrdinalIgnoreCase)).ToList();
+        if (shown.Count > 0 && words.Count > 0)
+        {
+            var r = new SubmittalLog.Result { Items = shown, Opt = cur, Mails = last.Mails, Seconds = sw.Elapsed.TotalSeconds, Discs = last.Discs, Statuses = last.Statuses };
+            Post(Pack(r));
+            Post(new JsonObject { ["t"] = "busy", ["text"] = $"⚡ {shown.Count} found here in {sw.ElapsedMilliseconds} ms (no AI) · words: {string.Join(", ", words)} · ✦ type “ask AI: …” to send the question to the AI" });
+            return;
+        }
+        // 2 · the whole log: every type, every status, since the project started (local, a few seconds)
+        var o = (fromIntent ?? cur ?? new SubmittalLog.Options()).Copy();
+        if (fromIntent == null) { o.Types = n.Types; o.Status = ""; o.Discipline = ""; o.Tower = n.Tower; o.Zone = n.Zone; o.LevelFrom = n.LevelFrom; o.LevelTo = n.LevelTo; }
+        // no period in the question: the whole project, not the last 30 days
+        if (!System.Text.RegularExpressions.Regex.IsMatch(text, @"this (week|month)|last (week|month|\d+ days)|since|between|today|yesterday|\d{1,2}\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+        { o.From = new DateTime(2018, 1, 1); o.To = DateTime.Today.AddDays(1).AddSeconds(-1); }
+        o.Words = words;
+        Post(new JsonObject { ["t"] = "opt", ["opt"] = OptJson(o), ["said"] = "⚡ Looking in the whole log (no AI)" + (words.Count > 0 ? " for “" + string.Join(" ", words) + "”" : "") + "…" });
+        cur = o;
+        cts?.Cancel(); cts = new CancellationTokenSource();
+        var ct = cts.Token;
+        Work("⚡ Searching the log on this PC (no AI)…", () =>
+        {
+            var r = SubmittalLog.Run(o, null, ct);
+            last = r;
+            if (r.Items.Count == 0)
+            {
+                // 3 · nothing here: now the AI agent (with your Brain, the emails and the threads)
+                BeginInvoke(new Action(() => Post(new JsonObject { ["t"] = "ag.start", ["text"] = text })));
+                return new JsonObject { ["t"] = "busy", ["text"] = $"⚡ Nothing in the log for “{string.Join(" ", words)}” ({r.Seconds:0.0} s) — asking the AI…" };
+            }
+            var j = Pack(r);
+            j["said"] = $"⚡ {r.Items.Count} found on this PC in {r.Seconds:0.0} s (no AI)";
+            return j;
+        });
+    }
+
+    static JsonObject Pack(SubmittalLog.Result r) => new()
+    {
+        ["t"] = "result", ["kpi"] = SubmittalLog.Kpis(r),
+        ["items"] = new JsonArray(r.Items.Take(3000).Select(i => (JsonNode)SubmittalLog.Json(i)).ToArray()),
+        ["towers"] = A(r.Items.Select(i => i.Tower).Where(x => x.Length > 0 && !x.StartsWith("TH")).Distinct().OrderBy(x => x)),
+        ["discs"] = A(r.Items.Select(i => i.Disc).Where(x => x.Length > 0).Distinct().OrderBy(x => x)),
+        ["discCounts"] = new JsonObject(r.Discs.Where(x => x.Key.Length > 0).Select(x => KeyValuePair.Create(x.Key, (JsonNode)x.Value))),
+        ["statCounts"] = new JsonObject(r.Statuses.Select(x => KeyValuePair.Create(x.Key, (JsonNode)x.Value))),
+        ["projects"] = A(r.Items.Select(i => i.Project).Where(x => x.Length > 0).Distinct().OrderBy(x => x))
+    };
 
     async void AgentAsk(string text)
     {

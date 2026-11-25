@@ -452,7 +452,7 @@ class GuidedSearchForm : NovaForm
         body.SuspendLayout();
         foreach (Control c in body.Controls.Cast<Control>().ToList()) c.Dispose();
         body.Controls.Clear(); numbered.Clear(); opts.Clear();
-        note.Text = $"{hits.Count} file(s) by name · {clauses.Count} passage(s) inside the text · {read} file(s) searched inside" + (q.Length == 0 ? "" : $" · “{q}”");
+        note.Text = $"{hits.Count} file(s) by name · {clauses.Count} passage(s) inside the text · {read} file(s) searched inside · ⚡ on this PC, no AI" + (q.Length == 0 ? "" : $" · “{q}”");
         if (hits.Count == 0 && clauses.Count == 0)
         {
             Head("Nothing found here");

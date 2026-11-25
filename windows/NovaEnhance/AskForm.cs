@@ -1222,7 +1222,7 @@ class AskForm : NovaForm
         understood.Text = "🔍 " + q;
         // A new search: the previous results leave at once (they could belong to another project).
         if (!followUp) { hits = new(); rawHits = new(); list.Nova = null; filterVal = ""; ShowList(); }
-        info.Text = Ai.Active() != null ? "Understanding your question…" : "Searching (no AI key — simple word search)…";
+        info.Text = Ai.Active() == null ? "Searching (no AI key — simple word search)…" : Assistant.LocalEnough(q) ? "⚡ Searching on this PC (no AI)…" : "✦ Understanding your question…";
         // The old results are gone: draw the window now, before the search keeps it busy (it was left half-painted).
         try { Refresh(); } catch { }
         // ✦ Prompts: the question goes to the search; "exclude … / only … / group … / export …" become your instructions.
@@ -1294,7 +1294,7 @@ class AskForm : NovaForm
             var mainCount = hits.Count(h => h.MaybeAnswered.Length == 0);
             var maybeCount = hits.Count - mainCount;
             var count = hits.Count == 0 ? "No emails found" : $"{mainCount} email{(mainCount == 1 ? "" : "s")} found" + (maybeCount > 0 ? $" · {maybeCount} probably answered (grey, at the bottom)" : "");
-            info.Text = $"{count} in {ans.Seconds:0.0} s" + (MailIndex.Count() == 0 ? " · the index is still empty — open Outlook and wait a few minutes" : "");
+            info.Text = $"{count} in {ans.Seconds:0.0} s" + (ans.Local ? " · ⚡ on this PC, no AI" : ans.Slow ? " · the AI was slow, Nova planned it" : " · ✦ AI understood the question") + (MailIndex.Count() == 0 ? " · the index is still empty — open Outlook and wait a few minutes" : "");
             if (ans.Intent == "outstanding" && !MailIndex.Complete)
                 info.Text += Outstanding.LiveChecked
                     ? " · Index still building — your replies were checked live in Outlook"

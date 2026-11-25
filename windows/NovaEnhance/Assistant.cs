@@ -15,6 +15,8 @@ static class Assistant
     {
         public string Intent = "search";
         public string Explain = "";
+        /// <summary>⚡ Understood on this PC (no AI).</summary>
+        public bool Local;
         /// <summary>✦ AI search: what was searched (ideas, passes, candidates → best).</summary>
         public string Searched = "";
         /// <summary>📐 Emails found at once by a document / drawing number in the question.</summary>
@@ -71,7 +73,13 @@ Rules:
         var full = question;
         if (sx.Any) question = sx.Free.Trim().Length > 0 ? sx.Free : "emails";
         if (sx.Project.Length > 0) project = sx.Project;
-        if (Ai.Active() != null)
+        // ⚡ Local first: a short search (words, numbers, codes, dates, project) is understood on this PC — no AI, no waiting.
+        //    The AI only reads real questions (who / why / not answered / summarise / draft …).
+        ans.Local = Ai.Active() == null || LocalEnough(question);
+        // ⚡ A question the AI already understood once: the same plan again, at once (never sent twice).
+        var remembered = !ans.Local && previous == null ? Understood.Get(question + "|" + project) : null;
+        if (remembered != null) { ans.Local = true; }
+        if (!ans.Local)
         {
             var today = DateTime.Now;
             var user = new StringBuilder();
@@ -82,11 +90,11 @@ Rules:
             if (sx.Any) user.Append("\n(Nova applies these rules itself, do not repeat them: " + sx.Describe() + ")");
             // Privacy A: only the question (and the dates above) leave the PC.
             // ⏱ The AI has 20 s to understand; after that Nova plans the search itself (ideas + short forms) and carries on.
-            try { f = Ai.ParseJson(await SmartSearch.CloudChat(ParseSystem, user.ToString(), 20, ct)); }
+            try { f = Ai.ParseJson(await SmartSearch.CloudChat(ParseSystem, user.ToString(), 10, ct)); if (f.Count > 0 && previous == null) Understood.Put(question + "|" + project, f); }
             catch (OperationCanceledException) { throw; }
             catch (Exception e) { Log.Warn("ask", "understand: " + e.Message); f = LocalParse(question); ans.Slow = true; }
         }
-        else f = LocalParse(question);
+        else f = remembered ?? LocalParse(question);
         if (f.Count == 0) f = LocalParse(question);
         Activity.Current?.Mark(ans.Slow ? "understand (AI too slow → Nova planned it)" : "understand the question", "");
         Activity.Current?.Note("plan", f.ToJsonString());
@@ -257,6 +265,17 @@ Rules:
 
     /// <summary>Without the AI (no key, or the AI too slow): dates, then the important words — filler words and the project left out.</summary>
     static readonly Regex Instruction = new(@"^(show|find|search|look|check|list|give|get|bring|display|all|every|each|any|old|older|oldest|earliest|new|newer|newest|latest|recent|recently|approved|approve|approval|approvals|accepted|please|me|my|kindly|history)$", RegexOptions.IgnoreCase);
+
+    static readonly Regex Reasoning = new(@"\b(who|whom|why|how|did|didn'?t|does|doesn'?t|has|hasn'?t|have|haven'?t|not answered|unanswered|answer(ed)?|repl(y|ied|ies)|waiting|pending|outstanding|summar\w*|draft|compare|sent|send|asked|ask|need(s|ed)?|should|colleagues?|approv\w*|forward\w*|followed|follow up|latest from|anything|everything about)\b|\?", RegexOptions.IgnoreCase);
+
+    /// <summary>⚡ A short search Nova understands by itself: up to 6 words, no question about people, replies or writing.</summary>
+    public static bool LocalEnough(string q)
+    {
+        q = (q ?? "").Trim();
+        if (q.Length == 0) return true;
+        var words = Regex.Split(q, @"\s+").Where(w => w.Length > 0).ToList();
+        return words.Count <= 6 && !Reasoning.IsMatch(q);
+    }
 
     static JsonObject LocalParse(string q)
     {
@@ -520,4 +539,43 @@ static class BriefLogic
 
     public static string Dot(string status) => status switch { "needs" => "🔴", "week" => "🟠", "fyi" => "⚪", "follow" => "↩", _ => "•" };
     public static string StatusText(string status) => status switch { "needs" => "Needs reply (overdue)", "week" => "Needs reply", "fyi" => "FYI", "follow" => "No answer yet", _ => "" };
+}
+
+/// <summary>⚡ Questions the AI already understood (the plan only — never emails), kept on this PC: asked again = answered at once.</summary>
+static class Understood
+{
+    static readonly object L = new();
+    static JsonObject data;
+    static string FilePath => Path.Combine(Paths.Root, "ai-understood.json");
+    static string Key(string q) => Regex.Replace((q ?? "").ToLowerInvariant(), @"\s+", " ").Trim();
+
+    static JsonObject D()
+    {
+        if (data != null) return data;
+        try { data = File.Exists(FilePath) ? JsonNode.Parse(File.ReadAllText(FilePath)) as JsonObject : null; } catch { data = null; }
+        return data ??= new JsonObject();
+    }
+
+    public static JsonObject Get(string q)
+    {
+        lock (L)
+        {
+            if (D()[Key(q)] is not JsonObject e) return null;
+            if (DateTimeOffset.FromUnixTimeMilliseconds(e["at"]?.GetValue<long>() ?? 0) < DateTimeOffset.Now.AddDays(-30)) return null;   // dates move: 30 days
+            return e["f"]?.DeepClone() as JsonObject;
+        }
+    }
+
+    public static void Put(string q, JsonObject f)
+    {
+        // "this week", "yesterday", "last 7 days" change every day: never remembered
+        if (Regex.IsMatch(q ?? "", @"\b(today|yesterday|tomorrow|week|month|year|days?|last|this|since|recent|latest|new)\b", RegexOptions.IgnoreCase)) return;
+        lock (L)
+        {
+            var d = D();
+            d[Key(q)] = new JsonObject { ["at"] = DateTimeOffset.Now.ToUnixTimeMilliseconds(), ["f"] = f.DeepClone() };
+            while (d.Count > 400) d.Remove(d.First().Key);
+            try { File.WriteAllText(FilePath, d.ToJsonString()); } catch { }
+        }
+    }
 }

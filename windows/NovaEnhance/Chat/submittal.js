@@ -319,13 +319,14 @@
       else if (us !== "MZA") $("sub").textContent = "every submission found in Outlook · Thinkproject or direct email · checks if " + us + " replied on the same thread";
       setCols(); drawFilters();
     }
-    else if (m.t === "busy") { if (/^[✓⚠]/.test(m.text)) busy(m.text); else busy(m.text, true); }
+    else if (m.t === "busy") { if (/^[✓⚠]|^⚡ \d/.test(m.text)) busy(m.text); else busy(m.text, true); }
     else if (m.t === "opt") { opt = m.opt; drawFilters(); if (m.said) busy("🧭 " + m.said + " …", true); }
     else if (m.t === "result") {
       busy(""); items = m.items || [];
       (m.towers || []).forEach(function (x) { towers[x] = 1; }); discs = m.discCounts || {}; stats = m.statCounts || {}; (m.projects || []).forEach(function (x) { if (!allProjects.some(function (p) { return p.code === x; }) && !fresh.some(function (s) { return s.value === x; })) allProjects.push({ code: x, name: "" }); });
       show = ""; drawFilters(); drawKpi(m.kpi); drawTable();
       $("gaps").textContent = (m.kpi.gaps || []).length ? "⚠ Missing in the register: " + m.kpi.gaps.join(" · ") : "";
+      if (m.said) busy(m.said);   // ⚡ found on this PC (no AI)
     }
     else if (m.t === "saved") busy("✓ Saved and opened: " + m.path);
     else if (m.t === "error") busy("⚠ " + m.text);

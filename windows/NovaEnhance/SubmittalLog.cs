@@ -19,7 +19,9 @@ static class SubmittalLog
         public DateTime From = DateTime.Today.AddDays(-30), To = DateTime.Today.AddDays(1).AddSeconds(-1);
         public string Tower = "", Zone = "", Discipline = "", Status = "";
         public int LevelFrom = -99, LevelTo = 999;
-        public Options Copy() { var o = (Options)MemberwiseClone(); o.Projects = new(Projects); o.Types = new(Types); return o; }
+        /// <summary>⚡ Words every row must have (number, title, tower…): the local search, no AI.</summary>
+        public List<string> Words = new();
+        public Options Copy() { var o = (Options)MemberwiseClone(); o.Projects = new(Projects); o.Types = new(Types); o.Words = new(Words); return o; }
     }
 
     public class Item
@@ -403,6 +405,7 @@ static class SubmittalLog
             if (o.Tower.Length > 0 && !it.Tower.Equals(o.Tower, StringComparison.OrdinalIgnoreCase) && !(o.Tower == "TH" && it.Tower.StartsWith("TH"))) continue;
             if (o.Zone.Length > 0 && !it.Zone.StartsWith(o.Zone, StringComparison.OrdinalIgnoreCase)) continue;
             if ((o.LevelFrom > -99 || o.LevelTo < 999) && (it.LevelNum == null || it.LevelNum < o.LevelFrom || it.LevelNum > o.LevelTo)) continue;
+            if (o.Words.Count > 0 && !WordsFit(it, o.Words)) continue;
             res.Discs[it.Disc] = res.Discs.GetValueOrDefault(it.Disc) + 1;
             if (o.Discipline.Length > 0 && !LogPrefs.DiscFits(o.Discipline, it.Disc, discGroups)) continue;
             foreach (var st in new[] { it.Status is "Open" or "Reviewing" or "Replied" or "Draft" or "Overdue" ? "Open" : "", it.Status, it.Code is "Code 3" or "Code 4" ? "Code3/4" : "", it.Code })
@@ -555,6 +558,24 @@ static class SubmittalLog
         ["why"] = hide != null ? hide.Hide(i.Why) : i.Why, ["check"] = i.Check, ["series"] = i.Series, ["ref"] = i.Ref, ["label"] = Def(i.Type)?.Label ?? i.Type,
         ["entry"] = (i.Rep ?? i.Sub)?.Entry ?? "", ["store"] = (i.Rep ?? i.Sub)?.StoreId ?? "", ["subEntry"] = i.Sub?.Entry ?? "", ["subStore"] = i.Sub?.StoreId ?? ""
     };
+
+    /// <summary>⚡ Every word is in the row (number, title, type, discipline, tower, zone, level, flat, who, code, reference).</summary>
+    public static bool WordsFit(Item it, IEnumerable<string> words)
+    {
+        var hay = string.Join(" ", it.No, it.Title, it.Type, it.Disc, it.Tower, it.Zone, it.Level, it.Apt, it.By, it.Code, it.Ref, it.Rev, it.Project).ToLowerInvariant();
+        var flat = System.Text.RegularExpressions.Regex.Replace(hay, @"[\s_\-]+", "");
+        return words.All(w => hay.Contains(w.ToLowerInvariant()) || flat.Contains(System.Text.RegularExpressions.Regex.Replace(w.ToLowerInvariant(), @"[\s_\-]+", "")));
+    }
+
+    /// <summary>⚡ The words of a question that are not filters (types, projects, towers, dates, statuses are read by FromWords).</summary>
+    public static List<string> FreeWords(string q)
+    {
+        var t = " " + (q ?? "").ToLowerInvariant() + " ";
+        foreach (var (code, rx) in TypeWords) t = rx.Replace(t, " ");
+        foreach (var p in KnownProjects()) t = System.Text.RegularExpressions.Regex.Replace(t, @"(?<![\p{L}\p{N}])" + System.Text.RegularExpressions.Regex.Escape(p.ToLowerInvariant()) + @"(?![\p{L}\p{N}])", " ");
+        t = System.Text.RegularExpressions.Regex.Replace(t, @"\b(show|me|the|all|my|ones?|list|give|please|find|get|of|in|for|a|an|are|is|which|what|that|those|these|to|from|and|with|only|now|just|see|open|closed|overdue|pending|submittals?|log|register|this|last|week|month|days?|since|tower|towers|zone|level|levels|floor|t\d|l\d{1,2}|gf|code\s?[1-5]|about|any|where|search|related|regarding)\b", " ");
+        return System.Text.RegularExpressions.Regex.Split(t, @"[^\p{L}\p{N}\-]+").Where(w => w.Length > 1).Distinct().Take(8).ToList();
+    }
 
     public static JsonObject Kpis(Result r)
     {

@@ -693,14 +693,16 @@ class FolderSearchForm : NovaForm
         }
         var num = Revisions.Number(q);
         var looksNumber = num.Length > 0 && q.Trim().Length <= num.Length + 12;
-        if (covered && named.Count > 0 && looksNumber && namesOnlyFor != q)
+        // ⚡ Names first, for any search: when the names already answer, Nova stops there (instant, from the index) —
+        //    reading inside thousands of files only when you ask for it.
+        if (covered && named.Count > 0 && namesOnlyFor != q)
         {
             namesOnlyFor = q;
             pg = null;
             bar.Visible = false;
             stopBtn.Enabled = pauseBtn.Enabled = false;
             searchBtn.Text = "🔍 Also search inside files";
-            status.Text = $"📛 {named.Count} file(s) found by name in {clock.ElapsedMilliseconds} ms — press “🔍 Also search inside files” to look for {num} inside the documents too (slower).";
+            status.Text = $"⚡ {named.Count} file(s) found by name in {clock.ElapsedMilliseconds} ms (index on this PC, no AI) — press “🔍 Also search inside files” to look for “{(looksNumber ? num : q)}” inside the documents too (slower).";
             return;
         }
         namesOnlyFor = null;
