@@ -331,6 +331,16 @@ static class Smoke
         try { var xr = Transfer.SelfTest(); Ok(xr.StartsWith("✅"), "Nova transfer: " + xr); } catch (Exception ex) { Ok(false, "Nova transfer: " + ex.Message); }
         try { var tw = new TransferForm(); tw.Show(); Pump(300); Ok(tw.Visible, "Nova transfer window opens"); tw.Dispose(); } catch (Exception ex) { Ok(false, "Nova transfer window: " + ex.Message); }
         try { var vw = new VpnForm(); vw.Show(); Pump(500); Ok(vw.Visible, "Nova VPN window opens"); vw.Dispose(); } catch (Exception ex) { Ok(false, "Nova VPN window: " + ex.Message); }
+        try { var gw = new GuidedSearchForm(); gw.Show(); Pump(500); Ok(gw.Visible, "🎯 Guided search window opens"); gw.Dispose(); } catch (Exception ex) { Ok(false, "Guided search window: " + ex.Message); }
+        {
+            // 🎯 the options of an answer: parsed, stripped, picked by number
+            var ans = "The door must be 90 min.\n\n▶ Options\n1. Check the frame\n2. **Find the door schedule**\n3) Draft a reply";
+            var o = Guided.Options(ans);
+            Ok(o.Count == 3 && o[1] == "Find the door schedule", "guided options parsed: " + string.Join(" | ", o));
+            Ok(!Guided.Strip(ans).Contains("Options") && Guided.Strip(ans).Contains("90 min"), "guided options stripped for copy");
+            Ok(Guided.Pick("2", ans) == "Find the door schedule" && Guided.Pick("door?", ans) == "door?", "typing 2 picks option 2");
+            Ok(Guided.KeepOptions(ans, "Rewritten answer.").Contains("3. Draft a reply"), "options kept after the technical check");
+        }
         var errs = Log.Read();
         Ok(!errs.Contains("settings ") || true, "No settings errors");
     }

@@ -151,7 +151,7 @@ static class Conversations
         ".acts{margin-top:8px}.acts a{font-size:12.5px;color:#B9B0FF;margin-right:14px;text-decoration:none}.acts a:hover{color:#fff}" +
         "mark{background:#5A4A00;color:#FFE08A;border-radius:2px}.srcs{font-size:12px;color:#9AA3B5;margin-top:8px}.muted{color:#9AA3B5}.wait{color:#B9B0FF;font-style:italic}" +
         ".refs{margin-top:10px;padding:8px 10px;border:1px solid #2A3142;border-radius:8px;background:#151A24;font-size:13px}.refs div{margin-top:4px}.refs a.rl{color:#C9CEFF;text-decoration:none}.refs a.rl:hover{text-decoration:underline}" +
-        ".head{border-bottom:1px solid #2A3040;padding-bottom:10px;margin-bottom:16px}.sign{text-align:right;color:#7C6CFF;font-weight:bold;font-size:12px;margin-top:20px}" + FileTalk.TableCss;
+        ".head{border-bottom:1px solid #2A3040;padding-bottom:10px;margin-bottom:16px}.sign{text-align:right;color:#7C6CFF;font-weight:bold;font-size:12px;margin-top:20px}" + FileTalk.TableCss + Guided.Css;
 
     /// <summary>The label of the draft link under answers ("✍ Put into my draft" while you are writing an email).</summary>
     public static string DraftAction = "✦ Draft reply";
@@ -165,7 +165,9 @@ static class Conversations
                 ? $"<a class=src href=\"https://nova.src/{index}/{id}\" title=\"{Esc(m.Src.First(s => s.Id == id).Title)}\">{id}</a>" : $"[{id}]")));
         var sb = new StringBuilder();
         bool advice = false;
-        var allLines = (m.Text ?? "").Replace("\r\n", "\n").Split('\n');
+        // 🎯 Guided mode: the "▶ Options" at the end become numbered buttons (typing the number picks it too).
+        var opts = actions && m.Role != "user" ? Guided.Options(m.Text) : new List<string>();
+        var allLines = (opts.Count > 0 ? Guided.Strip(m.Text) : m.Text ?? "").Replace("\r\n", "\n").Split('\n');
         var table = new List<string>();
         void FlushTable()
         {
@@ -192,6 +194,7 @@ static class Conversations
         }
         FlushTable();
         if (advice) sb.Append("</div>");
+        if (opts.Count > 0) sb.Append("<div class=muted style=\"margin-top:8px\">▶ Options — click, or type the number</div>").Append(Guided.Buttons(opts, "pick", index));
         if (m.Check.Length > 0)
         {
             sb.Append($"<div class=check>{Esc(m.Check)}");

@@ -65,6 +65,7 @@ class VpnForm : NovaForm
 
         // ── options | log ──
         var split = new SplitContainer { Dock = DockStyle.Fill, BackColor = Th.Line, SplitterWidth = 5 };
+        Flex.DoubleClickMax(split);   // ↔ double-click the divider: the first side takes almost all the room, again to go back
         var left = new Stack { Dock = DockStyle.Fill, AutoScroll = true, Padding = new Padding(16, 6, 12, 10), BackColor = Th.Bg };
         split.Panel1.Controls.Add(left);
         BuildOptions(left);

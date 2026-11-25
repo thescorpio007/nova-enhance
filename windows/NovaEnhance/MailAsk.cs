@@ -70,6 +70,9 @@ class MailAskForm : NovaForm
     Conversation conv;
     string pendingHtml;
     AttachBar attach;
+    /// <summary>🎯 ⏱ The time limit of this conversation.</summary>
+    Guided.Clock clock = new();
+    Button timerBtn;
 
     public MailAskForm()
     {
@@ -104,20 +107,30 @@ class MailAskForm : NovaForm
             {
                 var whole = split.Orientation == Orientation.Vertical ? split.Width : split.Height;
                 if (whole <= 400) return;   // the window has no real size yet (WinForms refuses minimum sizes before that)
-                if (split.Panel1MinSize != 120) { split.Panel1MinSize = 120; split.Panel2MinSize = 260; }
-                var per = Store.Int(split.Orientation == Orientation.Vertical ? "win_mailask_splitv" : "win_mailask_splith", split.Orientation == Orientation.Vertical ? 500 : 420);
+                // ↔ the dividers move almost to the edges
+                if (split.Panel1MinSize != 60) { split.Panel1MinSize = 60; split.Panel2MinSize = 200; }
+                // more room for the email by default: 62 % beside, 65 % on top (once, over the old 50 / 42 %)
+                if (!Store.Bool("win_mailask_split2", false)) { Store.Remove("win_mailask_splitv"); Store.Remove("win_mailask_splith"); Store.SetBool("win_mailask_split2", true); }
+                var per = Store.Int(split.Orientation == Orientation.Vertical ? "win_mailask_splitv" : "win_mailask_splith", split.Orientation == Orientation.Vertical ? 620 : 650);
                 split.SplitterDistance = Math.Clamp(whole * per / 1000, split.Panel1MinSize, whole - split.Panel2MinSize - split.SplitterWidth);
             }
             catch { }
         }
         Shown += (_, _) => PlaceSplit();
-        split.SizeChanged += (_, _) => { if (split.Panel1MinSize != 120) PlaceSplit(); };
-        Controls.Add(split); Controls.Add(bottom); Controls.Add(top);
+        split.SizeChanged += (_, _) => { if (split.Panel1MinSize != 60) PlaceSplit(); };
+        // double-click the divider: the email takes almost all the room, double-click again to go back
+        Flex.DoubleClickMax(split, () => { if (split.Width > 0) Store.SetInt(split.Orientation == Orientation.Vertical ? "win_mailask_splitv" : "win_mailask_splith", split.SplitterDistance * 1000 / Math.Max(1, split.Orientation == Orientation.Vertical ? split.Width : split.Height)); });
+        // ↕ a divider above the typing area: drag it to give the conversation or the typing box more room
+        var inSplit = new Splitter { Dock = DockStyle.Bottom, Height = 5, BackColor = Color.FromArgb(0x2A, 0x30, 0x40), MinExtra = 160, MinSize = 90, Cursor = Cursors.HSplit };
+        inSplit.SplitterMoved += (_, _) => Store.SetInt("win_mailask_inh", bottom.Height);
+        Controls.Add(split); Controls.Add(inSplit); Controls.Add(bottom); Controls.Add(top);
 
         var hr = top.Add(Th.Row());
         hr.Controls.Add(Th.L("💬 Talk about this email", 13, Th.Text, true));
         hr.Controls.Add(Th.B("🕘 Chat history", Screens.ChatHistory));
         hr.Controls.Add(Th.B("＋ New chat", NewChat));
+        timerBtn = Guided.TimerButton(() => clock, () => { if (!busy) Draw(); });
+        hr.Controls.Add(timerBtn);
         InitSide("mailask");
         hr.Controls.Add(SideButton());
         hr.Controls.Add(Th.B("🧹 Clear", () => { NewChat(); status.Text = "🧹 Cleared — this email stays the reference."; }));
@@ -131,6 +144,10 @@ class MailAskForm : NovaForm
         var hideBtn = Th.B(split.Panel1Collapsed ? "👁 Show email" : "👁 Hide email", () => { });
         hideBtn.Click += (_, _) => { split.Panel1Collapsed = !split.Panel1Collapsed; Store.SetBool("win_mailask_hidepv", split.Panel1Collapsed); hideBtn.Text = split.Panel1Collapsed ? "👁 Show email" : "👁 Hide email"; if (!split.Panel1Collapsed) PlaceSplit(); };
         hr.Controls.Add(hideBtn);
+        // ▴ Compact: the people, attachments and folder rows hide — more room for the email and the chat
+        var compactBtn = Th.B(Store.Bool("win_mailask_compact", false) ? "▾ Details" : "▴ Compact", () => { });
+        compactBtn.Click += (_, _) => { var on = !Store.Bool("win_mailask_compact", false); Store.SetBool("win_mailask_compact", on); compactBtn.Text = on ? "▾ Details" : "▴ Compact"; ApplyCompact(); };
+        hr.Controls.Add(compactBtn);
         var relBtn = Th.B("🔗 Find related ▾", () => { });
         relBtn.Click += (_, _) =>
         {
@@ -164,8 +181,10 @@ class MailAskForm : NovaForm
         fr.Controls.Add(folderLbl);
         fr.Controls.Add(Th.B("📁 Choose…", ChooseFolder));
         fr.Controls.Add(Th.B("No folder", () => SetFolder("")));
-        fr.Controls.Add(Th.B("📂 Find a file", () => { var n = Revisions.Numbers(Outlook.SelectedText()); Screens.FindFile(n.FirstOrDefault()); }));
+        fr.Controls.Add(Th.B("📂 Find a file", () => { var n = Revisions.Numbers(Outlook.SelectedText()); if (n.Count == 0 && Guided.On && Guided.SearchFirst) Screens.Guided(Projects.ForMail(anchor)); else Screens.FindFile(n.FirstOrDefault()); }));
         status = top.Add(Th.Wrap("", 9.5f, Th.AccentText), true);
+        folderRow = fr;
+        ApplyCompact();
 
         // Your input, always at the bottom: Enter = send · Shift+Enter = new line.
         var row = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = Color.Transparent };
@@ -189,15 +208,29 @@ class MailAskForm : NovaForm
         bottom.Controls.Add(attach);
         attach.Hook(prompt, this);
         // The typing area sizes itself at any window size: the 📎 row + the whole box.
+        // The typing box grows with what you write (4 → 12 lines); a height you dragged is kept.
+        bool fitting = false;
         void FitBottom()
         {
+            if (fitting) return;
             var w = bottom.ClientSize.Width - bottom.Padding.Horizontal;
             if (w <= 0) return;
-            attach.ShortHint = w < 760;
-            bottom.Height = bottom.Padding.Vertical + attach.GetPreferredSize(new Size(w, 0)).Height + attach.Margin.Vertical + Math.Max(prompt.Font.Height * 4 + 14, 104);
+            fitting = true;
+            try
+            {
+                attach.ShortHint = true;   // the 📎 hint on one line
+                int lines = 4;
+                try { lines = Math.Clamp(prompt.GetLineFromCharIndex(Math.Max(0, prompt.TextLength - 1)) + 2, 4, 12); } catch { }
+                var want = bottom.Padding.Vertical + attach.GetPreferredSize(new Size(w, 0)).Height + attach.Margin.Vertical + Math.Max(prompt.Font.Height * lines + 14, 104);
+                var h = Math.Max(want, Store.Int("win_mailask_inh", 0));
+                h = Math.Min(h, Math.Max(want, ClientSize.Height - 260));
+                if (bottom.Height != h) bottom.Height = h;
+            }
+            finally { fitting = false; }
         }
         attach.Changed += FitBottom;
         bottom.Resize += (_, _) => FitBottom();
+        prompt.TextChanged += (_, _) => FitBottom();
 
         ResizeEnd += (_, _) => { if (WindowState == FormWindowState.Normal) { Store.SetInt("win_mailask_w", Width); Store.SetInt("win_mailask_h", Height); } };
         FormClosing += (_, e) => { if (e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; cts?.Cancel(); Hide(); } };
@@ -268,6 +301,7 @@ class MailAskForm : NovaForm
         gathered = false; thread.Clear(); attPool.Clear(); allowDocs = false;
         fullBody = h?.Body ?? "";
         conv = resume;
+        clock = new Guided.Clock();
         status.Text = "";
         prompt.Text = "";
         if (h == null) { head.Text = "No email selected — select an email in Outlook, then press 💬 Talk about this email (Ctrl+Alt+Q) again."; meta.Text = ""; atts.Controls.Clear(); Draw(); return; }
@@ -330,6 +364,7 @@ class MailAskForm : NovaForm
     {
         cts?.Cancel();
         conv = null;
+        clock = new Guided.Clock();
         status.Text = "＋ New conversation on the same email.";
         prompt.Text = "";
         Draw();
@@ -503,6 +538,8 @@ class MailAskForm : NovaForm
         if (anchor == null) { status.Text = "No email — open Nova from an email."; return; }
         Speller.FixBeforeSearch(prompt, Ask);
         var p = prompt.Text.Trim();
+        // 🎯 A bare number picks that option of the last answer.
+        if (Guided.On) p = Guided.Pick(p, conv?.Msgs.LastOrDefault(gm => gm.Role != "user")?.Text);
         var files = attach?.Files.ToList() ?? new List<string>();
         if (p.Length == 0) p = files.Count >= 2 ? "Compare the attached files in a comparison table, then the key differences and your recommendation."
                              : files.Count == 1 ? "Read the attached file and tell me what matters for this email."
@@ -514,6 +551,7 @@ class MailAskForm : NovaForm
         busy = true; sendBtn.Enabled = false;
         conv ??= new Conversation { Kind = "email", Title = anchor.Subject ?? "Email", Ref = anchor.Entry ?? "", RefStore = anchor.StoreId ?? "" };
         conv.Folder = folder;
+        clock.Go();
         var history = string.Join("\n", conv.Msgs.TakeLast(6).Select(m => (m.Role == "user" ? "User: " : "Nova: ") + Cut(m.Text, 1500)));
         var userMsg = new ConvMsg { Role = "user", Text = p + (files.Count > 0 ? "\n📎 " + string.Join(" · ", files.Select(Path.GetFileName)) : "") };
         conv.Msgs.Add(userMsg);
@@ -660,7 +698,8 @@ class MailAskForm : NovaForm
             Draw($"✦ {label} is writing the answer from {sources.Count} sources…");
             var user = (history.Length > 0 ? "EARLIER IN THIS CONVERSATION:\n" + history + "\n\n" : "") + "SOURCES:\n" + block + "\nTHE USER'S PROMPT:\n" + p;
             using var _aiFor11 = Ai.For("email");   // ⚙ AI for each feature
-            var ans = (await Ai.Chat(AnswerRules + NovaSearch.SourceRule + " [M…] = 🧠 Nova Memory, [H…] = 🕘 an earlier conversation." + (files.Count > 0 ? FileTalk.Rules : "") + FolderAsk.AdviceRule + Modes.ProfileNote(), user, false, false, null, my.Token)).Trim();
+            var ans = (await Ai.Chat(AnswerRules + NovaSearch.SourceRule + " [M…] = 🧠 Nova Memory, [H…] = 🕘 an earlier conversation." + (files.Count > 0 ? FileTalk.Rules : "") + FolderAsk.AdviceRule + Guided.Rule(Scope) + Modes.ProfileNote(), user, false, false, null, my.Token)).Trim();
+            var firstAns = ans;
 
             status.Text = "🔎 Technical check — your AI re-reads its answer against the sources…";
             Draw("🔎 Technical check — re-reading the answer against the sources…");
@@ -677,7 +716,11 @@ class MailAskForm : NovaForm
             catch (OperationCanceledException) { throw; }
             catch (Exception e) { msg.Check = "🔎 Technical check not done (" + e.Message + ") — read the answer with care."; }
 
-            msg.Text = drawLine + ans + (docNote.Length > 0 ? "\n\n" + docNote : "");
+            ans = Guided.KeepOptions(firstAns, ans);
+            // the options stay last (after the note)
+            var optsOnly = Guided.Options(ans);
+            msg.Text = drawLine + (optsOnly.Count > 0 ? Guided.Strip(ans) : ans) + (docNote.Length > 0 ? "\n\n" + docNote : "") +
+                       (optsOnly.Count > 0 ? "\n\n" + Guided.Head + "\n" + string.Join("\n", optsOnly.Select((go, gk) => $"{gk + 1}. {go}")) : "");
             msg.Src = sources.Select(s => new ConvSrc { Id = s.Id, Title = s.Title, Path = s.Path, Goto = s.Goto, Loc = s.Loc, Entry = s.Mail?.Entry ?? "", Store = s.Mail?.StoreId ?? "" }).ToList();
             conv.Msgs.Add(msg);
             Conversations.Save(conv);
@@ -701,12 +744,50 @@ class MailAskForm : NovaForm
     {
         Conversations.DraftAction = anchor?.IsDraft == true ? "✍ Put into my draft" : "✦ Draft reply";
         var body = conv == null || conv.Msgs.Count == 0
-            ? "<p class=muted>Write your prompt below and press Enter. Nova reads this email, its attachments, the earlier emails with the same subject or references, and your project folder — then checks its answer against them. Follow-ups keep this email as the reference. Every conversation is saved in 🕘 Chat history.</p>"
+            ? (Guided.On && Guided.MenuFirst && anchor != null ? Guided.MenuHtml("What do you want to do with this email?", Scope, Guided.EmailMenu) : "") +
+              "<p class=muted>Write your prompt below and press Enter. Nova reads this email, its attachments, the earlier emails with the same subject or references, and your project folder — then checks its answer against them. Follow-ups keep this email as the reference. Every conversation is saved in 🕘 Chat history.</p>"
             : Conversations.Body(conv, true);
         if (waiting != null) body += $"<div class=a><div class=wait>{System.Net.WebUtility.HtmlEncode(waiting)}</div></div>";
+        else if (Guided.On && clock.Up && conv?.Msgs.Count > 0) body += Guided.WrapHtml(conv.Msgs.Count - 1);
+        if (timerBtn != null) timerBtn.Text = clock.Label;
         var html = "<!doctype html><html><head><meta charset=utf-8><style>" + Conversations.Css + "</style></head><body>" + body +
                    "<div id=end></div><script>window.scrollTo(0, document.body.scrollHeight);</script></body></html>";
         if (web?.CoreWebView2 != null) web.CoreWebView2.NavigateToString(html); else pendingHtml = html;
+    }
+
+    FlowLayoutPanel folderRow;
+    void ApplyCompact()
+    {
+        var on = Store.Bool("win_mailask_compact", false);
+        foreach (var c in new Control[] { meta, atts, folderRow }) if (c != null) c.Visible = !on;
+        try { top.FitAll(); } catch { }
+    }
+
+    /// <summary>🎯 The scope of this conversation: this email (and its project).</summary>
+    string Scope => anchor == null ? "this email" : $"this email “{anchor.Subject}”" + (Projects.ForMail(anchor) is { } pj ? $" (project {pj.Code})" : "") + ", its attachments, its thread and the project documents it refers to";
+
+    /// <summary>🎯 A numbered option, menu item or wrap-up choice was clicked.</summary>
+    bool GuidedAct(string what, int i)
+    {
+        var (kind, n) = Guided.Parse(what);
+        if (kind == null) return false;
+        string pick = kind switch
+        {
+            "menu" => Guided.EmailMenu.ElementAtOrDefault(n - 1),
+            "pick" => conv != null && i >= 0 && i < conv.Msgs.Count ? Guided.Options(conv.Msgs[i].Text).ElementAtOrDefault(n - 1) : null,
+            _ => null,
+        };
+        if (kind == "wrap")
+        {
+            if (n == 1) { clock.Add(10); status.Text = "⏱ +10 min"; Draw(); }
+            else if (n == 2) { clock.Ended = true; prompt.Text = Guided.SummaryAsk; Ask(); }
+            else { clock.Ended = true; status.Text = "✓ Ended — the conversation is saved in 🕘 Chat history."; Draw(); }
+            return true;
+        }
+        if (string.IsNullOrEmpty(pick)) return true;
+        prompt.Text = pick;
+        Ask();
+        return true;
     }
 
     async Task EnsureWeb()
@@ -749,12 +830,13 @@ class MailAskForm : NovaForm
 
     async void Act(string what, int i)
     {
+        if (GuidedAct(what, i)) return;
         if (conv == null || i < 0 || i >= conv.Msgs.Count) return;
         var m = conv.Msgs[i];
         var q = i > 0 ? conv.Msgs[i - 1].Text : "";
         switch (what)
         {
-            case "copy": Clipboard.SetText(m.Text); status.Text = "⧉ Copied"; break;
+            case "copy": Clipboard.SetText(Guided.Strip(m.Text)); status.Text = "⧉ Copied"; break;
             case "xlsx":
                 try { var x = FileTalk.ExportXlsx(m.Text, anchor?.Subject ?? "Comparison"); Shell.Open(x); status.Text = "📊 Saved: " + x; }
                 catch (Exception ex) { status.Text = "⚠ " + ex.Message; }
@@ -765,11 +847,11 @@ class MailAskForm : NovaForm
                 {
                     // ✍ The email you are writing: the answer goes into it (the ✍ part when Nova wrote one).
                     var mm = System.Text.RegularExpressions.Regex.Match(m.Text, @"✍ START\s*(.*?)\s*✍ END", System.Text.RegularExpressions.RegexOptions.Singleline);
-                    var txt = System.Text.RegularExpressions.Regex.Replace(mm.Success ? mm.Groups[1].Value : m.Text, @"\s*\[(?:[EADFMH]\d{1,2}(?:\s*,\s*)?)+\]", "");
+                    var txt = System.Text.RegularExpressions.Regex.Replace(mm.Success ? mm.Groups[1].Value : Guided.Strip(m.Text), @"\s*\[(?:[EADFMH]\d{1,2}(?:\s*,\s*)?)+\]", "");
                     try { status.Text = await Sta(() => Outlook.InsertIntoDraft(anchor.Subject, txt)) ? "✍ Put into your draft (at the cursor)." : "⚠ The draft is not open in Outlook any more — ⧉ Copy and paste it."; }
                     catch (Exception ex) { status.Text = "⚠ " + ex.Message; }
                 }
-                else DraftReply(m.Text);
+                else DraftReply(Guided.Strip(m.Text));
                 break;
             case "task":
                 var t = Work.FromText($"{anchor?.Subject} — Nova answer", q, $"✎ {q}\n\n{m.Text}", "ask-email",

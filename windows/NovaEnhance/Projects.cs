@@ -548,6 +548,45 @@ static class Projects
         return res;
     }
 
+    /// <summary>🎯 Guided search: every listed file under these folders (private ones left out).</summary>
+    public static List<FileRow> Catalogue(IEnumerable<string> folders, int max = 150000)
+    {
+        var res = new List<FileRow>();
+        var roots = folders.Where(f => !string.IsNullOrEmpty(f) && !GDrive.IsRoot(f)).Select(RootKey).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (roots.Count == 0) return res;
+        try
+        {
+            using var c = Db();
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = $"SELECT path,name,size,mtime FROM pnames WHERE {Under(cmd, roots)} LIMIT {max}";
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                var path = r.GetString(0);
+                if (Private.IsMatch(path)) continue;
+                var m = r.IsDBNull(3) ? 0 : r.GetInt64(3);
+                res.Add(new FileRow { Path = path, Name = r.GetString(1), Size = r.IsDBNull(2) ? 0 : r.GetInt64(2), Modified = m > 0 ? new DateTime(m) : DateTime.MinValue });
+            }
+        }
+        catch (Exception e) { Log.Warn("projects", "catalogue: " + e.Message); }
+        return res;
+    }
+
+    /// <summary>🎯 How many files are listed under these folders.</summary>
+    public static int CountUnder(IEnumerable<string> folders)
+    {
+        var roots = folders.Where(f => !string.IsNullOrEmpty(f) && !GDrive.IsRoot(f)).Select(RootKey).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (roots.Count == 0) return 0;
+        try
+        {
+            using var c = Db();
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = $"SELECT COUNT(*) FROM pnames WHERE {Under(cmd, roots)}";
+            return Convert.ToInt32(cmd.ExecuteScalar());
+        }
+        catch { return 0; }
+    }
+
     /// <summary>True when the folder (or the project folder it is in) has its file names listed.</summary>
     public static bool Covers(string folder) =>
         !string.IsNullOrEmpty(folder) && All().SelectMany(p => p.Folders).Concat(General)

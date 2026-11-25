@@ -85,7 +85,7 @@ class SettingsActivity : BaseActivity() {
         row("🔑", "AI & API keys", "$keyed of ${Providers.all.size} connected · models · compare", S_AI)
         row("👤", "Accounts", "Send to the official AI apps · $apps installed", S_ACCOUNTS)
         row("✂", "Capture", "Nova keyboard, Share menu, text selection, bubble, tile", S_CAPTURE)
-        row("✦", "Enhancement", "About me, default route, speaking language, custom instruction", S_ENHANCE)
+        row("✦", "Enhancement", "About me, default route, speaking language, custom instruction, 🎯 guided mode (${if (store.guided) Guided.minLabel(store.guidedMin) else "off"})", S_ENHANCE)
         row("✍", "Correction", "Same brain as your PC · underlines in any app · keyboard panel", S_CORRECT)
         val pcCard = Ui.row(c).apply {
             background = Ui.round(Ui.CARD, Ui.dp(c, 16).toFloat())
@@ -435,6 +435,21 @@ class SettingsActivity : BaseActivity() {
             Profile.edit(c) { draw() }
         }, Ui.lp(top = Ui.dp(c, 10)))
         root.addView(me)
+
+        root.addView(Ui.section(c, "🎯 Guided mode (Ask AI)"))
+        root.addView(Ui.text(c, "A strict scope and a time limit, always numbered options: Ask AI starts with a menu, every answer ends with ▶ Options (tap one, or type its number), and when the time is up you get +10 min, a summary or end — the same as Nova on your PC.", 13f, Ui.MUTED))
+        root.addView(android.widget.CheckBox(c).apply {
+            text = "Guided mode on"; setTextColor(Ui.TEXT); textSize = 14.5f; isChecked = store.guided
+            buttonTintList = android.content.res.ColorStateList.valueOf(Ui.ACCENT)
+            setOnCheckedChangeListener { _, v -> store.guided = v }
+        })
+        root.addView(Ui.text(c, "⏱ Time limit of each session (change it per session with ⏱)", 13f, Ui.MUTED))
+        val (gs, gr) = Ui.chipRow(c)
+        for (m in Guided.CHOICES) {
+            gr.addView(Ui.chip(c, Guided.minLabel(m), store.guidedMin == m) { store.guidedMin = m; draw() },
+                Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 8)))
+        }
+        root.addView(gs)
 
         root.addView(Ui.section(c, "Send through"))
         val (rs, rr) = Ui.chipRow(c)

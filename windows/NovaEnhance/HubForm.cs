@@ -79,6 +79,7 @@ class HubForm : NovaForm
         tools.Controls.Add(tr); tools.Controls.Add(tl);
 
         split = new SplitContainer { Dock = DockStyle.Fill, BackColor = Th.Bg, Panel2Collapsed = true, SplitterWidth = 4 };
+        Flex.DoubleClickMax(split);   // ↔ double-click the divider: the first side takes almost all the room, again to go back
         split.Panel1.BackColor = split.Panel2.BackColor = Th.Bg;
 
         Controls.Add(split);

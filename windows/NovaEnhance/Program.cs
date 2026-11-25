@@ -233,6 +233,7 @@ class NovaContext : ApplicationContext
         m.Items.Add("✦  Enhance selected text      Ctrl+Shift+E", null, (_, _) => Screens.Enhance());
         m.Items.Add("💬  Nova Chat & AI Hub        Ctrl+Shift+A", null, (_, _) => Screens.Hub(null));
         m.Items.Add("📌  My Work", null, (_, _) => Screens.Work(null));
+        m.Items.Add("🎯  Guided search…", null, (_, _) => Screens.Guided());
         m.Items.Add("📂  Find a project file…", null, (_, _) => Screens.FindFile(null));
         m.Items.Add("📄  Nova for this PDF                Ctrl+Shift+D", null, (_, _) => PdfCompanion.Open());
         m.Items.Add(new ToolStripSeparator());
@@ -339,6 +340,7 @@ class NovaContext : ApplicationContext
                 {
                     case "ask": Screens.Ask(); break;
                     case "find": Screens.FindFile(null); break;
+                    case "guided": Screens.Guided(); break;
                     case "folder": Screens.FolderSearch(null); break;
                     case "brief": Screens.Brief(); break;
                     case "hub": Screens.Hub(null); break;
@@ -711,9 +713,26 @@ static class Screens
     static FileFinderForm finder;
 
     /// <summary>📂 Find a project file by name (optionally with a search already typed).</summary>
+    static GuidedSearchForm guidedWin;
+    /// <summary>🎯 Guided search: Where › What › Narrow › Find, always by numbered options.</summary>
+    public static void Guided(Project start = null)
+    {
+        if (Program.OffUi(() => Guided(start))) return;
+        Guard.Screen("guided");
+        try
+        {
+            if (guidedWin == null || guidedWin.IsDisposed) guidedWin = new GuidedSearchForm();
+            Show(guidedWin);
+            if (start != null) guidedWin.StartAt(start);
+        }
+        catch (Exception e) { Log.Error("guided search", e); }
+    }
+
     public static void FindFile(string q)
     {
         if (Program.OffUi(() => FindFile(q))) return;
+        // 🎯 With guided mode on, "Find a project file" (with nothing to find yet) starts the guided search.
+        if (q == null && NovaEnhance.Guided.On && NovaEnhance.Guided.SearchFirst) { Guided(); return; }
         Guard.Screen("find");
         if (finder == null || finder.IsDisposed) finder = new FileFinderForm();
         Show(finder);

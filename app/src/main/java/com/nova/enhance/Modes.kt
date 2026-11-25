@@ -85,7 +85,8 @@ object Modes {
         "Reply in the language of the question. Use short paragraphs and numbered lists where they help; avoid long preambles. " +
         "If something is uncertain or depends on local rules or contract terms, say so."
 
-    fun askSystem(s: Store): String = ASK_SYSTEM + Profile.note(s)
+    fun askSystem(s: Store): String = ASK_SYSTEM + Profile.note(s) +
+        (if (s.guided) Guided.rule("the task the user started this Ask AI session with, inside their projects, documents and emails") else "")
 
     fun askMessage(style: Mode, question: String): String = "Answer style: ${style.instruction}\n\nQuestion:\n$question"
 

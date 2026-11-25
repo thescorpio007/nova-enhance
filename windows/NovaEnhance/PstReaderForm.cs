@@ -64,11 +64,13 @@ class PstReaderForm : NovaForm
         bottom.Controls.Add(Th.L("   " + Program.Sign + " · " + Program.Shown + " · reader: XstReader (Ms-PL)", 9, Th.Muted));
 
         var split1 = new SplitContainer { Dock = DockStyle.Fill, BackColor = Th.Bg };
+        Flex.DoubleClickMax(split1);   // ↔ double-click the divider: the first side takes almost all the room, again to go back
         tree = new TreeView { Dock = DockStyle.Fill, BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.None, Font = Th.F(10), CheckBoxes = true, HideSelection = false };
         tree.AfterSelect += (_, e) => { if (e.Node?.Tag is X.Folder f) ShowFolder(f); };
         split1.Panel1.Controls.Add(tree);
 
         var split2 = new SplitContainer { Dock = DockStyle.Fill, BackColor = Th.Bg };
+        Flex.DoubleClickMax(split2);   // ↔ double-click the divider: the first side takes almost all the room, again to go back
         list = new ListView { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, HideSelection = false, VirtualMode = true, BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.None, Font = Th.F(9.5f) };
         list.Columns.Add("Date", 130); list.Columns.Add("From", 170); list.Columns.Add("Subject", 360); list.Columns.Add("📎", 30); list.Columns.Add("Folder", 160);
         GridCols.Remember(list, "pst");

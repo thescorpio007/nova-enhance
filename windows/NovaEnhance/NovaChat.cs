@@ -83,7 +83,7 @@ class NovaChat
             switch (m["t"]?.ToString())
             {
                 case "init":
-                    Post(new JsonObject { ["t"] = "init", ["ai"] = Ai.LabelOf(Ai.Current()) ?? "", ["sign"] = Program.Sign, ["chats"] = List(), ["text"] = PendingText });
+                    Post(new JsonObject { ["t"] = "init", ["ai"] = Ai.LabelOf(Ai.Current()) ?? "", ["sign"] = Program.Sign, ["chats"] = List(), ["text"] = PendingText, ["guided"] = GuidedInfo() });
                     PendingText = null;
                     break;
                 case "open":
@@ -244,6 +244,14 @@ class NovaChat
 
     CancellationTokenSource sendCts;
     string deepHist;
+
+    /// <summary>🎯 Guided mode for the chat page: on, the opening menu, the time limit.</summary>
+    static JsonObject GuidedInfo()
+    {
+        var items = new JsonArray(); foreach (var x in Guided.ChatMenu) items.Add(x);
+        var wrap = new JsonArray(); foreach (var x in Guided.WrapUp) wrap.Add(x);
+        return new JsonObject { ["on"] = Guided.On, ["menu"] = Guided.MenuFirst, ["min"] = Guided.Minutes, ["items"] = items, ["wrap"] = wrap, ["summary"] = Guided.SummaryAsk };
+    }
 
     async Task Send(JsonObject m, CancellationToken stop = default)
     {
@@ -470,6 +478,8 @@ class NovaChat
         sys.Append(detailed ? "Give a complete, well-structured answer with headings or bullets where useful. " : "Be concise: the direct answer first, then at most 6 short lines or bullets. ");
         if (sources.Any(x => x.Kind == "file"))
             sys.Append(" Here the ATTACHED FILES are the extracts from the user's files (their labels are file names); cite them by their numbers." + FileTalk.Rules);
+        // 🎯 Guided mode: stay in the task of this chat, end with ▶ Options (numbered buttons).
+        sys.Append(Guided.Rule($"the task of this chat (“{chat["title"]}”)" + (ctx["folder"]?.ToString() is { Length: > 0 } gf ? $", in the folder {gf}" : "") + ", inside the user's projects, files and emails"));
         if (about) sys.Append(Modes.ProfileNote());
         if (deep != null && deep.Parts.Count > 0) sys.Append(DeepSearch.Instructions(deep));
 

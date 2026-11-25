@@ -43,6 +43,7 @@ class WorkForm : NovaForm
         detail = new Stack();
         // Wide window: the task on the left, its emails previewed on the right (◀ ▶ through them).
         split = new SplitContainer { Dock = DockStyle.Fill, BackColor = Th.Bg, Panel2Collapsed = true, SplitterWidth = 6, FixedPanel = FixedPanel.Panel2 };
+        Flex.DoubleClickMax(split);   // ↔ double-click the divider: the first side takes almost all the room, again to go back
         split.Panel1.BackColor = split.Panel2.BackColor = Th.Bg;
         split.Panel1.Controls.Add(detail);
         // ⏳ The remaining number for this task, fixed at the top while you scroll.

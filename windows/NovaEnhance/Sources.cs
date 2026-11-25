@@ -240,6 +240,7 @@ class SourcesForm : NovaForm
                         "Names only = instant search by file name and drawing number · Names + text = Nova also reads inside PDF, Word and Excel (in the background). " +
                         "⚡ Offline copy = kept on this PC so it opens fast and still works when the VPN is down. 🔒 Private folders are never read.", 9.5f, Th.Muted), true);
         var split = new SplitContainer { Dock = DockStyle.Fill, BackColor = Th.Line, SplitterWidth = 5 };
+        Flex.DoubleClickMax(split);   // ↔ double-click the divider: the first side takes almost all the room, again to go back
         Controls.Add(split); Controls.Add(top);
 
         // ◧ the folder tree (one level at a time: the office server is never listed in full)

@@ -47,6 +47,9 @@ class TalkPanel : Panel
     bool busy;
     List<MailHit> lastList = new();
     NovaListFilter current;
+    /// <summary>🎯 ⏱ The time limit of this conversation.</summary>
+    Guided.Clock clock = new();
+    readonly Button timerBtn;
     /// <summary>The chips row ("✦ Nova filter: … ✗ · ⭐ Keep as rule") — the window puts it above its list.</summary>
     public readonly FlowLayoutPanel ChipBar;
     /// <summary>Search for email: the conversation can run a better search ([[SEARCH {"q":…}]]) — the window searches again.</summary>
@@ -72,7 +75,8 @@ class TalkPanel : Panel
         var send = Th.B("✦ Send", () => Ask(input.Text, false), true); send.Width = 96;
         var stop = Th.B("■ Stop", () => cts?.Cancel()); stop.Width = 96;
         var nw = Th.B("＋ New", NewChat); nw.Width = 96;
-        btns.Controls.Add(send); btns.Controls.Add(stop); btns.Controls.Add(nw);
+        timerBtn = Guided.TimerButton(() => clock, () => { if (!busy) Draw(); }); timerBtn.Width = 96;
+        btns.Controls.Add(send); btns.Controls.Add(stop); btns.Controls.Add(nw); btns.Controls.Add(timerBtn);
         row.Controls.Add(input, 0, 0); row.Controls.Add(btns, 1, 0);
         bottom.Controls.Add(row);
         attach = new AttachBar { Dock = DockStyle.Top };
@@ -81,6 +85,7 @@ class TalkPanel : Panel
         // The typing area sizes itself: the 📎 row + a full 3-line box + the buttons, at any window size.
         attach.Changed += Fit;
         Resize += (_, _) => Fit();
+        input.TextChanged += (_, _) => Fit();
         attach.SizeChanged += (_, _) => Fit();
         ChipBar = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, BackColor = Color.FromArgb(0x1B, 0x18, 0x30), Padding = new Padding(8, 2, 8, 2), Margin = new Padding(0, 2, 0, 6), Visible = false };
         HandleCreated += async (_, _) => { var f = FindForm(); if (f != null) attach.Hook(input, f); await EnsureWeb(); };
@@ -96,9 +101,11 @@ class TalkPanel : Panel
         try
         {
             var w = bottom.ClientSize.Width - bottom.Padding.Horizontal;
-            attach.ShortHint = w < 760;
+            attach.ShortHint = true;   // the 📎 hint on one line
             var ah = attach.GetPreferredSize(new Size(w, 0)).Height + attach.Margin.Vertical;
-            var lines = input.Font.Height * 3 + 14;
+            int n = 3;
+            try { n = Math.Clamp(input.GetLineFromCharIndex(Math.Max(0, input.TextLength - 1)) + 2, 3, 10); } catch { }   // grows with what you write
+            var lines = input.Font.Height * n + 14;
             var bh = btns.GetPreferredSize(Size.Empty).Height;
             bottom.Height = bottom.Padding.Vertical + ah + Math.Max(lines, bh) + 4;
         }
@@ -116,7 +123,7 @@ class TalkPanel : Panel
 
     void NewChat()
     {
-        cts?.Cancel(); conv = null; attach.Clear(); status.Text = "";
+        cts?.Cancel(); conv = null; attach.Clear(); status.Text = ""; clock = new Guided.Clock();
         Draw();
     }
 
@@ -163,10 +170,34 @@ class TalkPanel : Panel
               "or <b>pick emails</b> (click · Ctrl+click · Shift+click) and ask a <b>technical question</b> — Nova reads them with their attachments, the drawings they mention, your project files, 🧠 Memory and past answers. " +
               "📎 Attach, paste (Ctrl+V) or drop any file. Every conversation is saved in 🕘 Chat history.</p>"
             : Conversations.Body(conv, true);
+        if ((conv == null || conv.Msgs.Count == 0) && Guided.On && Guided.MenuFirst) body = Guided.MenuHtml("What do you want to do with " + (kind == "brief" ? "your brief?" : "these emails?"), Scope, Guided.ListMenu) + body;
         if (waiting != null) body += $"<div class=a><div class=wait>{System.Net.WebUtility.HtmlEncode(waiting)}</div></div>";
+        else if (Guided.On && clock.Up && conv?.Msgs.Count > 0) body += Guided.WrapHtml(conv.Msgs.Count - 1);
+        if (timerBtn != null) timerBtn.Text = clock.Label;
         var html = "<!doctype html><html><head><meta charset=utf-8><style>" + Conversations.Css + "</style></head><body>" + body +
                    "<div id=end></div><script>window.scrollTo(0, document.body.scrollHeight);</script></body></html>";
         if (web?.CoreWebView2 != null) web.CoreWebView2.NavigateToString(html); else pendingHtml = html;
+    }
+
+    /// <summary>🎯 The scope of this conversation: the emails of this list.</summary>
+    string Scope => kind == "brief" ? "the emails of your morning brief and what they ask from you" : "the emails of this list (and the ones you pick), their attachments and the project documents they refer to";
+
+    /// <summary>🎯 A numbered option, menu item or wrap-up choice was clicked.</summary>
+    bool GuidedAct(string what, int i)
+    {
+        var (k, n) = Guided.Parse(what);
+        if (k == null) return false;
+        if (k == "wrap")
+        {
+            if (n == 1) { clock.Add(10); status.Text = "⏱ +10 min"; Draw(); }
+            else if (n == 2) { clock.Ended = true; Ask(Guided.SummaryAsk, false); }
+            else { clock.Ended = true; status.Text = "✓ Ended — saved in 🕘 Chat history."; Draw(); }
+            return true;
+        }
+        var pick = k == "menu" ? Guided.ListMenu.ElementAtOrDefault(n - 1)
+                 : conv != null && i >= 0 && i < conv.Msgs.Count ? Guided.Options(conv.Msgs[i].Text).ElementAtOrDefault(n - 1) : null;
+        if (!string.IsNullOrEmpty(pick)) Ask(pick, false);
+        return true;
     }
 
     // ------------------------------------------------------------------ asking
@@ -208,6 +239,7 @@ class TalkPanel : Panel
     async void Ask(string q, bool silent, List<string> chipsOnly = null)
     {
         q = (q ?? "").Trim();
+        if (Guided.On && !silent) q = Guided.Pick(q, conv?.Msgs.LastOrDefault(gm => gm.Role != "user")?.Text);   // 🎯 "2" = option 2
         var files = attach.Files.ToList();
         if (q.Length == 0 && files.Count > 0) q = files.Count >= 2 ? "Compare the attached files in a table, then the key differences." : "Read the attached file and tell me what matters.";
         if (q.Length == 0 || busy) return;
@@ -223,6 +255,7 @@ class TalkPanel : Panel
         var userMsg = new ConvMsg { Role = "user", Text = silent ? "✦ " + q : shown };
         conv ??= new Conversation { Kind = kind == "brief" ? "brief" : "ask", Title = (kind == "brief" ? "☀ Brief — " : "🔍 ") + (q.Length > 70 ? q[..70] : q) };
         conv.Msgs.Add(userMsg);
+        clock.Go();
         using var act = Activity.Begin("conversation · " + kind, q);
         // 🔍 Option A: "find / search …" (or an empty list) → Nova searches first (✦ AI search: emails, then the list follows), then answers.
         bool searchedNow = false;
@@ -340,7 +373,7 @@ class TalkPanel : Panel
             if (max > 0 && text.Length > max) text = text[..max];
             var sys = "You are Nova, the assistant of " + Persona.Who + ", talking with them about their emails. Use ONLY the numbered sources for facts and cite them like [E3] [A1] [D2] [F1]; " +
                       "if something isn't in them, say so. Be clear and practical: short paragraphs or numbered points. When he asks for a reply text, put exactly the text between a line ✍ START and a line ✍ END." +
-                      ListRule + (searchedNow ? " The list was just searched for this request: say briefly what it found (most relevant first, cite [E#] and [D#]) and what is missing." : Research != null && !silent ? SearchRule : "") + (files.Count > 0 ? FileTalk.Rules : "") + NovaSearch.SourceRule + FolderAsk.AdviceRule + Modes.ProfileNote();
+                      ListRule + (searchedNow ? " The list was just searched for this request: say briefly what it found (most relevant first, cite [E#] and [D#]) and what is missing." : Research != null && !silent ? SearchRule : "") + (files.Count > 0 ? FileTalk.Rules : "") + NovaSearch.SourceRule + FolderAsk.AdviceRule + Guided.Rule(Scope) + Modes.ProfileNote();
             Draw("Nova is thinking…");
             act.Mark("read the list, picked emails, attachments, files", $"{src.Count} sources · {text.Length:N0} chars");
             using var _aiFor23 = Ai.For("email");   // ⚙ AI for each feature
@@ -496,13 +529,14 @@ class TalkPanel : Panel
 
     void Act(string what, int i)
     {
+        if (GuidedAct(what, i)) return;
         if (conv == null || i < 0 || i >= conv.Msgs.Count) return;
         var m = conv.Msgs[i];
         var q = i > 0 ? conv.Msgs[i - 1].Text : "";
         var form = FindForm();
         switch (what)
         {
-            case "copy": Clipboard.SetText(Regex.Replace(m.Text, @"✍ (START|END)", "").Trim()); status.Text = "⧉ Copied"; break;
+            case "copy": Clipboard.SetText(Regex.Replace(Guided.Strip(m.Text), @"✍ (START|END)", "").Trim()); status.Text = "⧉ Copied"; break;
             case "xlsx":
                 try { var x = FileTalk.ExportXlsx(m.Text, conv.Title); Shell.Open(x); status.Text = "📊 Saved: " + x; }
                 catch (Exception ex) { status.Text = "⚠ " + ex.Message; }

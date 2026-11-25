@@ -68,3 +68,13 @@ b,strong{color:#fff}
 table.cmp th{background:#2E2A55;color:#fff;text-align:left;padding:6px 10px;border:1px solid #3A4256}
 table.cmp td{padding:5px 10px;border:1px solid #2E3546;vertical-align:top;white-space:normal}
 table.cmp tr.diff td{background:rgba(255,170,60,.10)}table.cmp tr.best td{background:rgba(80,200,120,.10)}
+
+/* 🎯 guided mode */
+.gmenu{margin:14px auto 4px;max-width:760px;text-align:left;padding:12px 14px;border:1px solid #2A3142;border-radius:10px;background:#151A24}
+.gmenu .t{color:#B9B0FF;font-weight:bold;margin-bottom:4px}.gmenu .s{color:#9AA3B5;font-size:12.5px}
+.gmenu.wrapup{border-color:#6B4A12;background:#211A0E}.gmenu.wrapup .t{color:#FFC27A}
+.opts{margin-top:10px;display:flex;flex-wrap:wrap;gap:6px}
+.opts a.opt{display:inline-block;padding:6px 11px;border:1px solid #3B3470;background:#1D1A33;color:#D9D4FF;border-radius:16px;font-size:13px;cursor:pointer}
+.opts a.opt:hover{background:#2B2550;color:#fff}.opts a.opt b{color:#9C8FFF;margin-right:5px}
+.optlab{color:#9AA3B5;font-size:12px;margin-top:8px}
+.chip.gclock{cursor:pointer}.chip.gclock.up{color:#FFC27A;border-color:#6B4A12}

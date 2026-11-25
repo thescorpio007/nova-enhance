@@ -730,6 +730,7 @@ class AskForm : NovaForm
         // Top: question and status. Below: the list — and, in a wide window, the reading pane on the right.
         stack = new Stack { Dock = DockStyle.Top, AutoScroll = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(16, 12, 16, 4) };
         split = new SplitContainer { Dock = DockStyle.Fill, BackColor = Th.Bg, Panel2Collapsed = true, SplitterWidth = 6, FixedPanel = FixedPanel.Panel1 };
+        Flex.DoubleClickMax(split);   // ↔ double-click the divider: the first side takes almost all the room, again to go back
         split.Panel1.BackColor = split.Panel2.BackColor = Th.Bg;
         listHost = new Stack { Padding = new Padding(16, 4, 8, 8) };
         split.Panel1.Controls.Add(listHost);
@@ -1870,6 +1871,7 @@ class BriefForm : NovaForm
         // Top: greeting, counts and buttons. Below: one column, or the list + reading pane, or columns + reading pane.
         top = new Stack { Dock = DockStyle.Top, AutoScroll = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(16, 12, 16, 4) };
         split = new SplitContainer { Dock = DockStyle.Fill, BackColor = Th.Bg, Panel2Collapsed = true, SplitterWidth = 6, FixedPanel = FixedPanel.None };
+        Flex.DoubleClickMax(split);   // ↔ double-click the divider: the first side takes almost all the room, again to go back
         // The right pane keeps its share of the window (a third by default) when you resize or maximise; dragging the divider sets the share.
         split.SplitterMoved += (_, _) =>
         {

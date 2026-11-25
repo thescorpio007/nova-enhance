@@ -49,15 +49,84 @@
   function short(p) { var parts = p.split("\\"); return parts.length > 3 ? parts[0] + "\\…\\" + parts.slice(-2).join("\\") : p; }
 
   // ---------------------------------------------------------------- messages
+  // ---------------------------------------------------------------- 🎯 guided mode: numbered options, ⏱ time limit
+  var G = { on: false, menu: false, min: 15, items: [], wrap: [], summary: "" };
+  var clock = { start: 0, min: 15, ended: false };
+  function newClock() { clock = { start: 0, min: G.min, ended: false }; }
+  function clockUp() { return G.on && clock.start && !clock.ended && clock.min > 0 && Date.now() - clock.start >= clock.min * 60000; }
+  function clockLabel() {
+    if (clock.min <= 0) return "⏱ no limit";
+    if (!clock.start) return "⏱ " + clock.min + " min";
+    if (clockUp()) return "⏱ time is up";
+    return "⏱ " + Math.max(1, Math.ceil((clock.start + clock.min * 60000 - Date.now()) / 60000)) + " min left";
+  }
+  var OPT = /^\s*(?:\*\*)?(\d{1,2})[.)]\s*(?:\*\*)?\s*(.+?)\s*$/;
+  function options(text) {
+    var lines = (text || "").split("\n"), at = -1, res = [];
+    for (var i = lines.length - 1; i >= 0; i--) if (lines[i].indexOf("▶ Options") >= 0 || /^(\*\*)?▶?\s*Options\s*:?\s*(\*\*)?$/i.test(lines[i].trim())) { at = i; break; }
+    if (at < 0) return { list: [], text: text || "" };
+    var end = at + 1;
+    for (; end < lines.length; end++) {
+      var m = OPT.exec(lines[end]);
+      if (m) res.push(m[2].replace(/\*+$/, "").trim());
+      else if (lines[end].trim() && res.length) break;
+    }
+    if (!res.length) return { list: [], text: text || "" };
+    lines.splice(at, end - at);
+    return { list: res.slice(0, 8), text: lines.join("\n").replace(/\s+$/, "") };
+  }
+  function optButtons(list, onPick) {
+    var o = el("div", "opts");
+    list.forEach(function (t, i) { var a = el("a", "opt"); a.appendChild(el("b", null, String(i + 1))); a.appendChild(document.createTextNode(t)); a.onclick = function () { onPick(t, i); }; o.appendChild(a); });
+    return o;
+  }
+  function lastOptions() {
+    if (!cur) return [];
+    for (var i = cur.messages.length - 1; i >= 0; i--) if (cur.messages[i].role !== "user") return options(cur.messages[i].text).list;
+    return [];
+  }
+  function drawClock() {
+    var b = $("gclock");
+    if (!b) { b = el("span", "chip gclock"); b.id = "gclock"; b.title = "🎯 Time limit of this chat — click to change"; b.onclick = cycleClock; var c = $("chips"); if (c && c.parentNode) c.parentNode.insertBefore(b, c); }
+    b.style.display = G.on ? "" : "none";
+    b.textContent = clockLabel();
+    b.className = "chip gclock" + (clockUp() ? " up" : "");
+  }
+  function cycleClock() {
+    var ch = [5, 10, 15, 30, 60, 0], i = ch.indexOf(clock.min);
+    clock.min = ch[(i + 1) % ch.length]; if (clock.start) clock.start = Date.now(); clock.ended = false;
+    drawClock(); drawChat();
+  }
+  var wasUp = false;
+  setInterval(function () { if (!G.on) return; drawClock(); var u = clockUp(); if (u && !wasUp && !busy) drawChat(); wasUp = u; }, 15000);
+
   function drawChat() {
     var box = $("msgs"); box.innerHTML = "";
+    drawClock();
     if (!cur || !cur.messages.length) { box.appendChild(emptyView()); return; }
     cur.messages.forEach(function (m, i) { box.appendChild(m.role === "user" ? userMsg(m) : aiMsg(m, i)); });
+    if (clockUp() && !busy) {
+      var w = el("div", "gmenu wrapup");
+      w.appendChild(el("div", "t", "⏱ Time is up")); w.appendChild(el("div", "s", "How do you want to finish?"));
+      w.appendChild(optButtons(G.wrap, function (t, i) {
+        if (i === 0) { clock.min += 10; if (clockUp()) { clock.start = Date.now(); clock.min = 10; } drawChat(); }
+        else if (i === 1) { clock.ended = true; send(G.summary); }
+        else { clock.ended = true; drawChat(); }
+      }));
+      box.appendChild(w);
+    }
     box.scrollTop = box.scrollHeight;
   }
   function emptyView() {
     var e = el("div", "empty");
     e.appendChild(el("div", "big", "✦ Nova Chat"));
+    if (G.on && G.menu) {
+      var g = el("div", "gmenu");
+      g.appendChild(el("div", "t", "🎯 What do you want to work on?"));
+      g.appendChild(el("div", "s", "Pick a number (or type it), or write your own step · ⏱ " + (G.min > 0 ? G.min + " min" : "no limit") + " · nothing is analysed until you pick."));
+      g.appendChild(optButtons(G.items, function (t) { send(t); }));
+      e.appendChild(g);
+    }
     var p = el("div"); p.innerHTML = "Ask anything. Add <b>About me</b>, a <b>folder</b>, <b>files</b> or <b>emails</b> below and Nova answers from them, with sources you can open. 📎 Paste (Ctrl+V) a screenshot or copied files, or drop files here — then ask: <b>read it</b> · <b>check it</b> · <b>compare them in a table</b>.";
     e.appendChild(p);
     var ex = el("div", "ex");
@@ -77,8 +146,13 @@
     var d = el("div", "ma");
     if (m.label) d.appendChild(el("div", "lab", m.label));
     var t = el("div", "txt");
-    render(t, m.text || "", m.sources || []);
+    var op = options(m.text || "");
+    render(t, op.text, m.sources || []);
     d.appendChild(t);
+    if (op.list.length) {
+      d.appendChild(el("div", "optlab", "▶ Options — click, or type the number"));
+      d.appendChild(optButtons(op.list, function (x) { send(x); }));
+    }
     if (m.sources && m.sources.length) {
       var s = el("div", "srcs");
       m.sources.forEach(function (src, i) {
@@ -90,7 +164,7 @@
       d.appendChild(s);
     }
     var acts = el("div", "acts");
-    btn("⧉ Copy", function () { post({ t: "copy", text: m.text }); });
+    btn("⧉ Copy", function () { post({ t: "copy", text: op.text }); });
     if (/^\s*\|.*\|/m.test(m.text || "")) {
       btn("📊 Comparison sheet → Excel", function () { post({ t: "exportTable", text: m.text, title: (cur && cur.title) || "Comparison" }); });
       btn("⧉ Copy table", function () { post({ t: "copyTable", text: m.text }); });
@@ -182,6 +256,10 @@
   function send(text, moreDetail, deep, resume) {
     text = (text || "").trim();
     if (!text || busy) return;
+    // 🎯 a bare number picks that option of the last answer
+    var pn = /^\s*(?:option\s*)?#?(\d{1,2})\s*\.?\s*$/i.exec(text);
+    if (G.on && pn) { var lo = lastOptions(), k = parseInt(pn[1], 10); if (k >= 1 && k <= lo.length) text = lo[k - 1]; }
+    if (G.on && !clock.start) clock.start = Date.now();
     if (!cur) cur = { id: null, title: text.substring(0, 60), messages: [] };
     var d = moreDetail ? true : detail;
     if (!moreDetail) cur.messages.push({ role: "user", text: text, ctxLabel: ctxLabel(ctx) });
@@ -208,10 +286,12 @@
   function onMsg(m) {
     if (m.t === "init") {
       chats = m.chats || []; $("ai").textContent = m.ai ? "AI: " + m.ai : "No AI key — add one in Settings";
-      $("sign").textContent = m.sign; drawList(); drawChips(); drawChat();
+      $("sign").textContent = m.sign;
+      if (m.guided) { G = m.guided; newClock(); }
+      drawList(); drawChips(); drawChat();
       if (m.text) { $("input").value = m.text; $("input").focus(); }
     } else if (m.t === "chats") { chats = m.chats || []; drawList(); }
-    else if (m.t === "chat") { cur = m.chat; ctx = m.chat.ctx || newCtx(); drawList(); drawChips(); drawChat(); }
+    else if (m.t === "chat") { cur = m.chat; ctx = m.chat.ctx || newCtx(); newClock(); drawList(); drawChips(); drawChat(); }
     else if (m.t === "progress") thinking(m.text, !!m.step);
     else if (m.t === "answer") {
       setBusy(false); if (thk) thk.done(); thk = null;
@@ -271,7 +351,7 @@
     var th = $("thinking"); $("msgs").insertBefore(card, th || null);
     card.scrollIntoView({ block: "nearest" });
   }
-  function newChat() { cur = null; ctx = newCtx(); drawList(); drawChips(); drawChat(); $("input").focus(); }
+  function newChat() { cur = null; ctx = newCtx(); newClock(); drawList(); drawChips(); drawChat(); $("input").focus(); }
 
   // ---------------------------------------------------------------- wiring
   $("newchat").onclick = newChat;

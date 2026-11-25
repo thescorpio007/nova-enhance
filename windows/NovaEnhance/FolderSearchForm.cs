@@ -232,6 +232,7 @@ class FolderSearchForm : NovaForm
 
         // ============================================================ results (left) · preview (right)
         split = new SplitContainer { Dock = DockStyle.Fill, BackColor = Th.Line, SplitterWidth = 6, Orientation = Orientation.Vertical };
+        Flex.DoubleClickMax(split);   // ↔ double-click the divider: the first side takes almost all the room, again to go back
         split.Panel1.BackColor = Th.Bg; split.Panel2.BackColor = Th.Bg;
         var left = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, BackColor = Th.Bg, Padding = new Padding(12, 0, 6, 4) };
         left.RowStyles.Add(new RowStyle(SizeType.AutoSize));

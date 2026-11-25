@@ -63,6 +63,15 @@ class Store(c: Context) {
         get() = sp.getBoolean("p_asked", false)
         set(v) = sp.edit().putBoolean("p_asked", v).apply()
 
+    /** 🎯 Guided mode in Ask AI: numbered options, strict scope, time limit. */
+    var guided: Boolean
+        get() = sp.getBoolean("guided", true)
+        set(v) = sp.edit().putBoolean("guided", v).apply()
+    /** ⏱ Minutes of a guided Ask AI session (0 = no limit). */
+    var guidedMin: Int
+        get() = sp.getInt("guided_min", 15)
+        set(v) = sp.edit().putInt("guided_min", v).apply()
+
     /** Answer style in Ask AI mode. */
     var askStyle: String
         get() = sp.getString("ask_style", "advise")!!

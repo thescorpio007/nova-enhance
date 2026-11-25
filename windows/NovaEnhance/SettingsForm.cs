@@ -3,7 +3,7 @@ namespace NovaEnhance;
 /// <summary>Settings, split into sections like the phone app.</summary>
 class SettingsForm : NovaForm
 {
-    static readonly string[] AllSections = { "🧠 Nova Brain", "🔐 Admin", "AI & API keys", "⚙ AI for each feature", "About me", "Enhancement", "Email & AI", "📥 Email index", "🗂 Mailboxes & archives", "📂 Folders in the index", "📁 Email projects", "Folder search", "📁 Projects", "🌐 Office VPN", "🗂 Project sources", "📦 Transfer engine", "✦ Prompts", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "🧪 Activity history", "🔌 Test connector", "📱 Phone link", "About" };
+    static readonly string[] AllSections = { "🧠 Nova Brain", "🔐 Admin", "AI & API keys", "⚙ AI for each feature", "About me", "Enhancement", "Email & AI", "📥 Email index", "🗂 Mailboxes & archives", "📂 Folders in the index", "📁 Email projects", "Folder search", "📁 Projects", "🌐 Office VPN", "🗂 Project sources", "📦 Transfer engine", "🎯 Guided mode", "✦ Prompts", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "🧪 Activity history", "🔌 Test connector", "📱 Phone link", "About" };
     /// <summary>🧪 Activity history and 🔌 Test connector are advanced tools: shown only when switched on (About → Advanced tools).</summary>
     static readonly string[] AdvancedSections = { "🧪 Activity history", "🔌 Test connector" };
     static string[] Sections = Visible();
@@ -95,6 +95,7 @@ class SettingsForm : NovaForm
                 case "🌐 Office VPN": VpnPage(); break;
                 case "🗂 Project sources": SourcesPage(); break;
                 case "📦 Transfer engine": TransferPage(); break;
+                case "🎯 Guided mode": GuidedPage(); break;
                 case "Google Drive": GoogleDrive(); break;
                 case "Shortcuts": Shortcuts(); break;
                 case "🔐 Admin": AdminPage(); break;
@@ -1711,6 +1712,33 @@ class SettingsForm : NovaForm
     // ------------------------------------------------------------------ 🌐 Office VPN
 
     /// <summary>📦 Transfer engine (Robocopy): SuperCopier-style choices for errors and collisions, speed, checks, Explorer.</summary>
+    /// <summary>🎯 Guided mode: a strict scope, a time limit, numbered options everywhere.</summary>
+    void GuidedPage()
+    {
+        Note("Nova helps you make progress inside a strict scope and a time limit, always by offering numbered options: a new chat starts with a menu (nothing is analysed until you pick), " +
+             "every answer ends with ▶ Options (click, or type the number), a question outside the scope gets options instead of an answer, and when the time is up Nova offers +10 min, a summary or to end. " +
+             "🎯 Guided search narrows Where › What › Narrow › Find to reach the file, the drawing or the clause fast. The same options are on the phone.");
+        page.Add(Th.Check("🎯 Guided mode on (all conversations: email, lists, Nova Chat)", Guided.On, v => Guided.On = v));
+        page.Add(Th.Check("A new chat opens with Nova's numbered menu", Guided.MenuFirst, v => Guided.MenuFirst = v));
+        page.Add(Th.Check("📂 Find a project file opens 🎯 Guided search first", Guided.SearchFirst, v => Guided.SearchFirst = v));
+        var r = page.Add(Th.Row(false));
+        r.Controls.Add(new Label { Text = "⏱ Time limit of each chat", AutoSize = false, Width = 230, ForeColor = Th.Muted, Font = Th.F(9.5f), TextAlign = ContentAlignment.MiddleLeft, Height = 28 });
+        var c = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160, BackColor = Th.Card2, ForeColor = Th.Text, FlatStyle = FlatStyle.Flat };
+        c.Items.AddRange(Guided.Choices.Select(m => (object)Guided.MinLabel(m)).ToArray());
+        var at = Array.IndexOf(Guided.Choices, Guided.Minutes);
+        if (at < 0) { c.Items.Add(Guided.MinLabel(Guided.Minutes)); at = c.Items.Count - 1; }
+        c.SelectedIndex = at;
+        c.SelectedIndexChanged += (_, _) => { if (c.SelectedIndex < Guided.Choices.Length) Guided.Minutes = Guided.Choices[c.SelectedIndex]; };
+        r.Controls.Add(c);
+        var cu = new NumericUpDown { Minimum = 0, Maximum = 600, Value = Guided.Minutes, Width = 70, BackColor = Th.Card2, ForeColor = Th.Text };
+        cu.ValueChanged += (_, _) => Guided.Minutes = (int)cu.Value;
+        r.Controls.Add(Th.L("  or exactly", 9.5f, Th.Muted)); r.Controls.Add(cu); r.Controls.Add(Th.L("min (0 = no limit)", 9.5f, Th.Muted));
+        c.SelectedIndexChanged += (_, _) => { if (cu.Value != Guided.Minutes) cu.Value = Guided.Minutes; };
+        page.Add(Th.Wrap("Each chat can change its own time with the ⏱ button (5, 10, 15, 30, 60 min or no limit, +10 min).", 9, Th.Muted));
+        var b = page.Add(Th.Row());
+        b.Controls.Add(Th.B("🎯 Open Guided search", () => Screens.Guided(), true));
+    }
+
     void TransferPage()
     {
         Note("Copy, move and mirror folders with Windows' Robocopy, many files at once. Explorer right-click ▸ 🚀 Nova transfer (in Windows 11: “Show more options”, or Shift + right-click). " +

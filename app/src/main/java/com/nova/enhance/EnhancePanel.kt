@@ -102,6 +102,11 @@ class EnhancePanel(
     private val noteText = Ui.text(act, "", 12f, Ui.MUTED)
     private val actions = Ui.row(act)
     private val savedText = Ui.text(act, "", 12f, Ui.MUTED)
+    /** 🎯 Guided mode: the opening menu, ▶ Options of the answer, ⏱ time limit and wrap-up. */
+    private val guideBox = Ui.col(act)
+    private var gStart = 0L
+    private var gMin = -1
+    private var gEnded = false
 
     private val langSwitch = Ui.row(act)
     /** Editable result, the "show changes" view, version bar and refine bar. */
@@ -271,6 +276,7 @@ class EnhancePanel(
         })
         addView(box, Ui.lp(top = Ui.dp(c, 6)))
         addView(savedText, Ui.lp(top = Ui.dp(c, 4)))
+        addView(guideBox, Ui.lp(top = Ui.dp(c, 6)))
 
         // ---------------------------------------------------------------- choices
         choicesLabel = Ui.section(c, "Enhancement")
@@ -307,6 +313,7 @@ class EnhancePanel(
         if (askMode == ask) return
         askMode = ask
         tabs.clear()
+        gStart = 0L; gMin = -1; gEnded = false
         origLabel.text = if (ask) "YOUR QUESTION" else "ORIGINAL"
         input.hint = if (ask) "Type or speak your question…" else "Paste, type or share text here…"
         goBtn.text = if (ask) "💬 Ask" else "✦ Enhance"
@@ -701,8 +708,80 @@ class EnhancePanel(
 
     // ------------------------------------------------------------------ enhanced window
 
+    // ------------------------------------------------------------------ 🎯 guided mode
+
+    private fun gMinutes() = if (gMin < 0) store.guidedMin else gMin
+    private fun gUp() = store.guided && gStart > 0 && !gEnded && gMinutes() > 0 && System.currentTimeMillis() - gStart >= gMinutes() * 60_000L
+    private fun gLabel(): String {
+        val m = gMinutes()
+        if (m <= 0) return "⏱ no limit"
+        if (gStart == 0L) return "⏱ $m min"
+        if (gUp()) return "⏱ time is up"
+        val left = ((gStart + m * 60_000L - System.currentTimeMillis()) / 60_000.0).let { Math.ceil(it).toInt().coerceAtLeast(1) }
+        return "⏱ $left min left"
+    }
+    private val gTick = object : Runnable {
+        var wasUp = false
+        override fun run() {
+            if (askMode && store.guided) { val u = gUp(); if (u != wasUp) drawGuide(); wasUp = u }
+            postDelayed(this, 20_000)
+        }
+    }
+    init { postDelayed(gTick, 20_000) }
+
+    private fun numbered(items: List<String>, onPick: (Int, String) -> Unit): FlowLayout {
+        val f = FlowLayout(act, Ui.dp(act, 6), Ui.dp(act, 6))
+        items.forEachIndexed { i, t -> f.addView(Ui.chip(act, "${i + 1}  $t", false) { onPick(i, t) }) }
+        return f
+    }
+
+    private fun drawGuide() {
+        val c = act
+        guideBox.removeAllViews()
+        if (!askMode || !store.guided) { guideBox.visibility = View.GONE; return }
+        guideBox.visibility = View.VISIBLE
+        val head = Ui.row(c)
+        val t = tabs.getOrNull(selected)
+        head.addView(Ui.text(c, if (tabs.isEmpty()) "🎯 WHAT DO YOU WANT TO WORK ON?" else "▶ OPTIONS · tap, or type the number", 11f, Ui.MUTED, true), Ui.lp(0, weight = 1f))
+        head.addView(Ui.text(c, gLabel(), 12f, if (gUp()) Ui.AMBER else Ui.ACCENT, true).apply {
+            setPadding(Ui.dp(c, 8), Ui.dp(c, 4), 0, Ui.dp(c, 4))
+            setOnClickListener {
+                val items = Guided.CHOICES.map { "This session: " + Guided.minLabel(it) } + "+10 min"
+                AlertDialog.Builder(c).setTitle("⏱ Time limit").setItems(items.toTypedArray()) { _, i ->
+                    if (i < Guided.CHOICES.size) { gMin = Guided.CHOICES[i]; if (gStart > 0) gStart = System.currentTimeMillis(); gEnded = false }
+                    else gMin = gMinutes() + 10
+                    drawGuide()
+                }.setNegativeButton("Cancel", null).show()
+            }
+        })
+        guideBox.addView(head)
+        if (gUp()) {
+            guideBox.addView(Ui.text(c, "⏱ Time is up — how do you want to finish?", 13f, Ui.AMBER, true), Ui.lp(top = Ui.dp(c, 6)))
+            guideBox.addView(numbered(Guided.WRAP) { i, _ ->
+                when (i) {
+                    0 -> { gStart = System.currentTimeMillis(); gMin = 10 }
+                    1 -> { gEnded = true; refine(Guided.SUMMARY) }
+                    else -> gEnded = true
+                }
+                drawGuide()
+            }, Ui.lp(top = Ui.dp(c, 6)))
+            return
+        }
+        if (tabs.isEmpty()) {
+            if (input.text.isBlank()) guideBox.addView(numbered(Guided.MENU) { _, x ->
+                input.setText(x); input.setSelection(input.text.length); go()
+            }, Ui.lp(top = Ui.dp(c, 6)))
+            else guideBox.visibility = View.GONE
+            return
+        }
+        val opts = if (t != null && !t.busy) Guided.options(t.current) else emptyList()
+        if (opts.isEmpty()) { if (t?.busy != true) head.getChildAt(0).let { (it as android.widget.TextView).text = "🎯 GUIDED MODE" } ; return }
+        guideBox.addView(numbered(opts) { _, x -> refine(x) }, Ui.lp(top = Ui.dp(c, 6)))
+    }
+
     private fun drawResult() {
         sizeBoxes()
+        drawGuide()
         val c = act
         tabsRow.second.removeAllViews(); actions.removeAllViews(); verRow.removeAllViews()
         resultBox.visibility = View.GONE; diffView.visibility = View.GONE; body.visibility = View.VISIBLE
@@ -750,8 +829,8 @@ class EnhancePanel(
                     }
                 }
                 fun cur() = t.current ?: ""
-                actions.addView(Ui.button(c, "⧉  Copy", true) { Ui.copy(c, cur()) }, Ui.lp(0, weight = 1f, end = Ui.dp(c, 8)))
-                actions.addView(Ui.button(c, "Share") { share(cur()) }, Ui.lp(LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 8)))
+                actions.addView(Ui.button(c, "⧉  Copy", true) { Ui.copy(c, if (t.ask) Guided.strip(cur()) else cur()) }, Ui.lp(0, weight = 1f, end = Ui.dp(c, 8)))
+                actions.addView(Ui.button(c, "Share") { share(if (t.ask) Guided.strip(cur()) else cur()) }, Ui.lp(LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 8)))
                 val replace = onReplace
                 if (replace != null) actions.addView(Ui.button(c, "Replace") { replace(cur()) },
                     Ui.lp(LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 8)))
@@ -810,10 +889,11 @@ class EnhancePanel(
     }
 
     /** Re-enhance the version on screen (including own edits); the result becomes a new version. */
-    private fun refine(request: String) {
-        if (request.isBlank()) { Ui.toast(act, "Type what to change, or tap a chip"); return }
+    private fun refine(asked: String) {
+        if (asked.isBlank()) { Ui.toast(act, "Type what to change, or tap a chip"); return }
         val t = tabs.getOrNull(selected) ?: return
         val cur = t.current ?: return
+        val request = if (t.ask && store.guided) Guided.pick(asked, cur) else asked   // 🎯 "2" = option 2
         if (t.busy) return
         if (!store.hasKey(t.p)) { Ui.toast(act, "Add a ${t.p.label} API key in Settings"); return }
         val p = t.p
@@ -842,8 +922,14 @@ class EnhancePanel(
     fun runNow() { if (input.text.isNotBlank()) go(auto = true) }
 
     private fun go(auto: Boolean = false) {
-        val text = input.text.toString().trim()
+        var text = input.text.toString().trim()
         if (text.isEmpty()) { Ui.toast(act, "Add some text first"); return }
+        if (askMode && store.guided) {
+            // 🎯 a bare number picks the option of the answer on screen; the ⏱ starts with the first question
+            val picked = Guided.pick(text, tabs.getOrNull(selected)?.current)
+            if (picked != text) { text = picked; input.setText(picked) }
+            if (gStart == 0L) gStart = System.currentTimeMillis()
+        }
         store.custom = customBox.text.toString()
         val mode = if (askMode) Modes.askById(store.askStyle) else Modes.byId(store.mode)
         val targets = if (store.target == "all") Providers.all else listOfNotNull(Providers.byId(store.target))
