@@ -352,6 +352,9 @@ static class Smoke
             var r4 = Filing.Classify(@"F:\P\_Drawings\_EI\MZA-ZUB-22-1497-L-2025-320 - Engineer's Instruction No. 43 - Revert Extent.pdf");
             Ok(r4.Kind == "Letter" && r4.Source == "Consultant (MZA)" && r4.Rev == "", $"filing: letter → {r4.Kind} · {r4.Source} · rev “{r4.Rev}”");
             Ok(Revisions.Number("SLV-ZUC-ID-SDS-00411_Rev02-Code2") == "SLV-ZUC-ID-SDS-00411", "number found before “_Rev02”");
+            Ok(Revisions.Number("SLV-ZUC-T3-L13-DRW-AR-PLN-22533 CAD(00) ARCH") == "SLV-ZUC-T3-L13-DRW-AR-PLN-22533", "T3 (a tower) does not cut the number");
+            var r5 = Filing.Classify(@"S:\P\7. Shop Drawings\01-Architectural\SLV-ZUC-AR-SDS-00442 - TOWER 3 LEVEL 13 GA PLANS\SLV-ZUC-T3-L13-DRW-AR-PLN-22533 CAD(00) ARCH.dwg");
+            Ok(r5.Kind == "Shop drawing" && r5.Rev == "00" && r5.Disc == "Architecture", $"filing: a sheet inside a shop drawing → {r5.Kind} · rev {r5.Rev} · {r5.Disc}");
             Ok(Revisions.Parse(@"C:\x\Review and Assessment of the MEP Submission.pdf", 0).Rev == "", "revision: “Review” is not a revision");
             Ok(Revisions.Parse(@"C:\x\RE_YB Sea La vie _ IFC Submission.msg", 0).Rev == "", "revision: IFC in an email name is the stage, not a revision");
         }

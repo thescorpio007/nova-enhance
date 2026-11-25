@@ -65,6 +65,9 @@ static class Filing
         R("FC-03", "Disciplines (every project)",
             "AR / ARC architecture · ID / IN interior design · ST / STR / SE structure · LA / LS / LND landscape · MEP · MS / ME / MC / MV / HV / HVAC mechanical services · ES / EL / EE electrical services · PL / PLB / PH / DR plumbing · FF / FP / FA / FLS fire & life safety · AC acoustic · FC façade · LT lighting · SG signage · WM waste · CV / CI / CW civil works · HSE health & safety · IF infrastructure · ICT / IT · EV / LF vertical transport · PM project management · GN / GE / GEN general. " +
             "[codes.disc = AR:Architecture; ARC:Architecture; ID:Interior design; IN:Interior design; INT:Interior design; ST:Structure; STR:Structure; SE:Structure; LA:Landscape; LS:Landscape; LND:Landscape; MEP:MEP; MS:Mechanical services; ME:Mechanical services; MC:Mechanical services; MV:Mechanical services; HV:Mechanical services; HVAC:Mechanical services; ES:Electrical services; EL:Electrical services; EE:Electrical services; PL:Plumbing; PLB:Plumbing; PH:Plumbing; DR:Plumbing; FF:Fire & life safety; FP:Fire & life safety; FA:Fire & life safety; FLS:Fire & life safety; AC:Acoustic; FC:Façade; CW:Civil works; CV:Civil works; CI:Civil works; LT:Lighting; SG:Signage; WM:Waste management; HSE:Health & safety; IF:Infrastructure; ICT:ICT; IT:ICT; EV:Vertical transport; LF:Vertical transport; PM:Project management; GN:General; GE:General; GEN:General]"),
+        R("FC-09", "Sheet codes in drawing numbers",
+            "In drawing numbers a part tells the kind of sheet: PLN plan · DET detail · SEC section · ELE / ELV elevation · LAY layout · DIA diagram · GA general arrangement · RCP reflected ceiling plan · TYP typical · SCH schedule — not a document kind. " +
+            "[codes.sheet = PLN:Plan; DET:Detail; SEC:Section; ELE:Elevation; ELV:Elevation; LAY:Layout; DIA:Diagram; GA:General arrangement; RCP:Reflected ceiling plan; TYP:Typical; SCH:Schedule; DTL:Detail; PL:Plan]"),
         R("FC-04", "Who issued it (every project)",
             "MZA = Consultant (MZA, us). [codes.source = MZA:Consultant (MZA)]"),
         R("FC-05", "Folders → kind",
@@ -86,6 +89,9 @@ static class Filing
             "SLV: ZUC / ZUB = the contractor (Züblin) — every ZUC submittal is the contractor's. NY = Nine Yard, the client. MZA and YT-MZA = issued by MZA. DSH = site MEP inspection clearance. CW civil works · ES electrical services · MS mechanical services · HSE health & safety. " +
             "Numbers: SLV-<from>-<discipline>-<type>-<serial> (SLV-ZUC-ID-SDS-00411); letters MZA-ZUB-22-1497-L-<year>-<serial>; design drawings YT-MZA-<…>-DRW-<discipline>-…-<serial>-<stage>. " +
             "[codes.SLV.source = ZUC:Contractor; ZUB:Contractor; NY:Client; YT:Consultant (MZA); MZA:Consultant (MZA)] [codes.SLV.kind = DSH:Site MEP inspection clearance] [codes.SLV.template = project from discipline type serial]"),
+        R("PJ-06", "SLV drawing sheets",
+            "SLV drawing sheets inside submittals are numbered SLV-<from>-<zone/tower>-<level>-DRW-<discipline>-<sheet>-<serial> (SLV-ZUC-T3-L13-DRW-AR-PLN-22533); T3 is a tower, not a revision; “CAD(00)” is revision 00. " +
+            "[codes.SLV.template = project from discipline type serial | project from zone level type discipline sheet serial]"),
         R("PJ-05", "RS5-C7 parties",
             "RS5-C7: ACC = the contractor. Numbers RS5-C7-ACC-<discipline>-<type>-<serial>-R<rev>. [codes.RS5-C7.source = ACC:Contractor; MZA:Consultant (MZA)]"),
     };
@@ -96,7 +102,8 @@ static class Filing
     {
         public Dictionary<string, string> Kind = new(StringComparer.OrdinalIgnoreCase), Disc = new(StringComparer.OrdinalIgnoreCase), Source = new(StringComparer.OrdinalIgnoreCase);
         public Dictionary<string, Dictionary<string, string>> PKind = new(StringComparer.OrdinalIgnoreCase), PDisc = new(StringComparer.OrdinalIgnoreCase), PSource = new(StringComparer.OrdinalIgnoreCase);
-        public Dictionary<string, List<string>> Template = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, List<List<string>>> Template = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, string> Sheet = new(StringComparer.OrdinalIgnoreCase);
         public Dictionary<string, HashSet<string>> Ignore = new(StringComparer.OrdinalIgnoreCase);
         public List<(string Key, string Val)> FKind = new(), FDisc = new(), FStage = new();
         public List<string> Reply = new(), Withdrawn = new();
@@ -104,7 +111,9 @@ static class Filing
 
     static Dict cur;
     static readonly object L = new();
-    static readonly Dictionary<string, (string Kind, string Disc, string Stage, string State, List<string> Why)> dirCache = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>What the folders above a file say. Parent* = the nearest folder named by a document number (a submittal holding its sheets).</summary>
+    class FolderInfo { public string Kind = "", Disc = "", Stage = "", State = "", ParentNo = "", ParentKind = "", ParentDisc = "", ParentSource = ""; public List<string> Why = new(); }
+    static readonly Dictionary<string, FolderInfo> dirCache = new(StringComparer.OrdinalIgnoreCase);
     static Filing() { Brain.Changed += () => { lock (L) { cur = null; dirCache.Clear(); } }; }
 
     static readonly Regex SetRx = new(@"\[([a-z][\w.\-]*)\s*=\s*([^\]]+)\]", RegexOptions.IgnoreCase);
@@ -136,7 +145,7 @@ static class Filing
                 }
                 if (parts.Length == 2)
                 {
-                    var target = parts[1] switch { "kind" => d.Kind, "disc" => d.Disc, "source" => d.Source, _ => null };
+                    var target = parts[1] switch { "kind" => d.Kind, "disc" => d.Disc, "source" => d.Source, "sheet" => d.Sheet, _ => null };
                     if (target != null) foreach (var (k, v) in Pairs(val)) target[k] = v;
                 }
                 else if (parts.Length >= 3)
@@ -144,7 +153,8 @@ static class Filing
                     // codes.<PROJECT>.<what> — the project code may hold dots? no; it may hold dashes (RS5-C7)
                     var proj = string.Join(".", parts.Skip(1).Take(parts.Length - 2)).ToUpperInvariant();
                     var what = parts[^1];
-                    if (what == "template") { d.Template[proj] = Regex.Split(val.ToLowerInvariant(), @"[\s,;·\-]+").Where(x => x.Length > 0).ToList(); continue; }
+                    // several templates: "project from discipline type serial | project from zone level type discipline sheet serial" (chosen by length)
+                    if (what == "template") { d.Template[proj] = val.Split('|').Select(t => Regex.Split(t.ToLowerInvariant(), @"[\s,;·\-]+").Where(x => x.Length > 0).ToList()).Where(t => t.Count > 1).ToList(); continue; }
                     if (what == "ignore") { if (!d.Ignore.TryGetValue(proj, out var ig)) d.Ignore[proj] = ig = new(StringComparer.OrdinalIgnoreCase); foreach (var x in List(val)) ig.Add(x); continue; }
                     var map = what switch { "kind" => d.PKind, "disc" => d.PDisc, "source" => d.PSource, _ => null };
                     if (map == null) continue;
@@ -170,7 +180,12 @@ static class Filing
     public static string DiscOf(string project, string code) => Look(D.PDisc, D.Disc, project ?? "", code);
     public static string SourceOf(string project, string code) => Look(D.PSource, D.Source, project ?? "", code);
     public static bool Ignored(string project, string code) => D.Ignore.TryGetValue(project ?? "", out var ig) && ig.Contains(code);
-    public static List<string> TemplateOf(string project) => D.Template.TryGetValue(project ?? "", out var t) ? t : null;
+    public static List<List<string>> TemplatesOf(string project) => D.Template.TryGetValue(project ?? "", out var t) && t.Count > 0 ? t : null;
+    /// <summary>The templates as words ("a b c | d e f") for showing.</summary>
+    public static List<string> TemplateOf(string project) => TemplatesOf(project) is { } t ? t.SelectMany((x, i) => i == 0 ? x : x.Prepend("|")).ToList() : null;
+    public static bool Sheet(string code) => D.Sheet.ContainsKey(code);
+    /// <summary>A code Nova already knows in any list (never asked about).</summary>
+    static bool Known(string project, string c) => SourceOf(project, c) != null || KindOf(project, c) != null || DiscOf(project, c) != null || Sheet(c) || LevelRx.IsMatch(c) || Ignored(project, c);
 
     // ------------------------------------------------------------------ the project of a file
 
@@ -238,6 +253,15 @@ static class Filing
         // 2 · the folders (nearest first), cached per folder
         var dir = Path.GetDirectoryName(path) ?? "";
         var fl = Folders(dir, f.Project);
+        // a drawing sheet inside a submittal's folder belongs to that submittal (a shop drawing's sheets are never a design set)
+        if (fl.ParentKind.Length > 0 && SubmittalKind(fl.ParentKind) && (f.Kind.Length == 0 || f.Kind is "Design drawing" or "Model / CAD" or "Sketch") &&
+            !fl.ParentNo.Equals(f.Number, StringComparison.OrdinalIgnoreCase))
+        {
+            f.Why.Add($"Kind: {fl.ParentKind} ← a sheet of {fl.ParentNo} (its folder){(f.Kind.Length > 0 ? " — the sheet's own number says " + f.Kind : "")}");
+            f.Kind = fl.ParentKind;
+            if (f.Disc.Length == 0 && fl.ParentDisc.Length > 0) { f.Disc = fl.ParentDisc; f.Why.Add($"Discipline: {fl.ParentDisc} ← {fl.ParentNo}"); }
+            if (f.Source.Length == 0 && fl.ParentSource.Length > 0) { f.Source = fl.ParentSource; f.Why.Add($"Source: {fl.ParentSource} ← {fl.ParentNo}"); }
+        }
         if (f.Kind.Length == 0 && fl.Kind.Length > 0) { f.Kind = fl.Kind; f.Why.AddRange(fl.Why.Where(w => w.StartsWith("Kind"))); }
         if (f.Disc.Length == 0 && fl.Disc.Length > 0) { f.Disc = fl.Disc; f.Why.AddRange(fl.Why.Where(w => w.StartsWith("Discipline"))); }
         else if (f.Disc.Length > 0 && fl.Disc.Length > 0 && !fl.Disc.Equals(f.Disc, StringComparison.OrdinalIgnoreCase))
@@ -294,21 +318,21 @@ static class Filing
     {
         var seg = f.Number.Split('-').ToList();
         var projTokens = f.Project.Split('-').ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var tpl = TemplateOf(f.Project);
-        if (tpl != null && seg.Count >= tpl.Count - 1)
+        // 1 · the project's template that has exactly this many parts (submittals and drawing sheets are numbered differently)
+        var pp = f.Project.Length > 0 && f.Number.StartsWith(f.Project + "-", StringComparison.OrdinalIgnoreCase) ? f.Project.Count(c => c == '-') + 1 : 1;
+        var tpl = TemplatesOf(f.Project)?.FirstOrDefault(t => t.Count + (t.Contains("project") ? pp - 1 : 0) == seg.Count);
+        if (tpl != null)
         {
-            // project codes with a dash (RS5-C7) take two parts
             int si = 0;
             foreach (var role in tpl)
             {
                 if (si >= seg.Count) break;
-                if (role == "project") { si += Math.Max(1, f.Project.Count(c => c == '-') + 1); continue; }
-                var code = seg[si++];
-                Assign(f, role, code, true);
+                if (role == "project") { si += pp; continue; }
+                Assign(f, role, seg[si++], true);
             }
             if (f.Kind.Length > 0 || f.Disc.Length > 0) return;
         }
-        // no template (or it did not fit): find each code by its meaning — the type is the LAST type-like code (it follows the discipline)
+        // 2 · no template for this length: find each code by its meaning — the type is the LAST type-like code (it follows the discipline)
         int kindAt = -1;
         for (int i = seg.Count - 1; i >= 0; i--)
             if (!projTokens.Contains(seg[i]) && KindOf(f.Project, seg[i]) != null && !seg[i].All(char.IsDigit)) { kindAt = i; break; }
@@ -320,8 +344,8 @@ static class Filing
             if (f.Source.Length == 0 && SourceOf(f.Project, c) != null) { Assign(f, "from", c, false); continue; }
             if (f.Disc.Length == 0 && DiscOf(f.Project, c) != null) { Assign(f, "discipline", c, false); continue; }
             if (f.Level.Length == 0 && LevelRx.IsMatch(c)) { f.Level = c.ToUpperInvariant(); continue; }
-            // a short code of letters Nova does not know yet: the 🧠 Learn window asks you about it
-            if (c.Length is >= 2 and <= 4 && c.All(char.IsLetter) && i > 0 && !LevelRx.IsMatch(c) && !Ignored(f.Project, c))
+            // a short code of letters Nova does not know anywhere: the 🧠 Learn window asks you about it
+            if (c.Length is >= 2 and <= 4 && c.All(char.IsLetter) && i > 0 && !Known(f.Project, c))
                 f.Unknown.Add(("?", c.ToUpperInvariant()));
         }
     }
@@ -334,15 +358,19 @@ static class Filing
             case "from":
             case "originator":
                 var s = SourceOf(f.Project, code);
-                if (s != null) { f.Source = s; f.Why.Add($"Source: {s} ← {code} in the {how}"); } else if (!Ignored(f.Project, code)) f.Unknown.Add(("from", code.ToUpperInvariant()));
+                if (s != null) { f.Source = s; f.Why.Add($"Source: {s} ← {code} in the {how}"); } else if (!Known(f.Project, code)) f.Unknown.Add(("from", code.ToUpperInvariant()));
                 break;
             case "discipline":
                 var dd = DiscOf(f.Project, code);
-                if (dd != null) { f.Disc = dd; f.Why.Add($"Discipline: {dd} ← {code} in the {how}"); } else if (!Ignored(f.Project, code)) f.Unknown.Add(("discipline", code.ToUpperInvariant()));
+                if (dd != null) { f.Disc = dd; f.Why.Add($"Discipline: {dd} ← {code} in the {how}"); } else if (!Known(f.Project, code)) f.Unknown.Add(("discipline", code.ToUpperInvariant()));
                 break;
             case "type":
                 var k = KindOf(f.Project, code);
-                if (k != null) { f.Kind = k; f.Why.Add($"Kind: {k} ← {code} in the {how}"); } else if (!Ignored(f.Project, code)) f.Unknown.Add(("type", code.ToUpperInvariant()));
+                if (k != null) { f.Kind = k; f.Why.Add($"Kind: {k} ← {code} in the {how}"); } else if (!Known(f.Project, code)) f.Unknown.Add(("type", code.ToUpperInvariant()));
+                break;
+            case "sheet":
+                // the kind of sheet (plan, detail…) or the system on it (tiling, glazing…): asked once, never a document kind
+                if (!Known(f.Project, code) && code.All(char.IsLetter)) f.Unknown.Add(("sheet", code.ToUpperInvariant()));
                 break;
             case "level":
                 if (LevelRx.IsMatch(code)) f.Level = code.ToUpperInvariant();
@@ -351,12 +379,13 @@ static class Filing
     }
 
     /// <summary>What the folders say (nearest folder first): kind, discipline, stage (+ its date and R00), reply / withdrawn.</summary>
-    static (string Kind, string Disc, string Stage, string State, List<string> Why) Folders(string dir, string project)
+    static FolderInfo Folders(string dir, string project)
     {
         lock (L) if (dirCache.TryGetValue(dir, out var c)) return c;
         var d = D;
         string kind = "", disc = "", stage = "", state = "";
         var why = new List<string>();
+        var info = new FolderInfo();
         var root = RootOf(dir + "\\");
         var rel = root.Length > 0 && (dir + "\\").StartsWith(root, StringComparison.OrdinalIgnoreCase) ? dir[Math.Min(dir.Length, root.Length)..] : dir;
         var parts = rel.Split('\\', StringSplitOptions.RemoveEmptyEntries);
@@ -365,7 +394,15 @@ static class Filing
             var raw = parts[i];
             var low = raw.ToLowerInvariant();
             var bare = Regex.Replace(low, @"^\d{1,2}\s*[\.\-_]\s*", "");    // "05. MEP" → "mep"
-            var isNumber = Revisions.Number(raw).Length > 0;                 // a document folder: its words are a title
+            var fno = Revisions.Number(raw);
+            var isNumber = fno.Length > 0;                                   // a document folder: its words are a title
+            if (isNumber && info.ParentNo.Length == 0)
+            {
+                // the nearest submittal folder (SLV-ZUC-AR-SDS-00442 - …): the drawings inside are ITS sheets
+                var pf = new FileLabels { Number = fno, Project = project };
+                if (LetterNo.IsMatch(fno)) pf.Kind = "Letter"; else Segments(pf, d);
+                info.ParentNo = fno; info.ParentKind = pf.Kind; info.ParentDisc = pf.Disc; info.ParentSource = pf.Source;
+            }
             if (state.Length == 0)
             {
                 if (d.Reply.Any(r => low == r || low.StartsWith(r + " ") || low.EndsWith(" " + r) || (r.Contains(' ') && low.Contains(r)))) { state = "MZA reply"; why.Add($"State: MZA reply ← folder “{raw}”"); }
@@ -391,9 +428,9 @@ static class Filing
                         break;
                     }
         }
-        var res = (kind, disc, stage, state, why);
-        lock (L) { if (dirCache.Count > 20000) dirCache.Clear(); dirCache[dir] = res; }
-        return res;
+        info.Kind = kind; info.Disc = disc; info.Stage = stage; info.State = state; info.Why = why;
+        lock (L) { if (dirCache.Count > 20000) dirCache.Clear(); dirCache[dir] = info; }
+        return info;
     }
 
     static bool Hit(string low, string bare, string key)
@@ -425,7 +462,7 @@ static class Filing
             if (lm.Success)
             {
                 foreach (var g in new[] { lm.Groups[1].Value, lm.Groups[2].Value })
-                    if (SourceOf(f.Project, g) == null && !Ignored(f.Project, g)) f.Unknown.Add(("from", g.ToUpperInvariant()));
+                    if (!Known(f.Project, g)) f.Unknown.Add(("from", g.ToUpperInvariant()));
             }
             else Segments(f, D);
             foreach (var (role, code) in f.Unknown)
@@ -454,7 +491,8 @@ static class Filing
     static string Suggest(Unknown u)
     {
         var text = string.Join(" ", u.Examples).ToLowerInvariant();
-        if (u.Role is "type" or "?")
+        if (u.Role is "sheet" or "?") return "";
+        if (u.Role == "type")
             foreach (var (w, m) in Hints) if (Regex.IsMatch(text, @"\b(" + w + @")")) return m;
         if (u.Role == "from") return "Source: Contractor";
         if (u.Role == "discipline") return "Discipline: General";

@@ -35,7 +35,9 @@ static class Revisions
         foreach (Match m in NumRx.Matches(text ?? ""))
         {
             var seg = m.Value.Split('-').ToList();
-            var cut = seg.FindIndex(1, x => RevSeg.IsMatch(x));
+            // A revision part ends the number only AFTER its serial: in SLV-ZUC-T3-L13-DRW-AR-PLN-22533, T3 is a tower, not a revision.
+            var serial = seg.FindIndex(1, x => Regex.IsMatch(x, @"^\d{3,}[A-Z]?$", RegexOptions.IgnoreCase));
+            var cut = serial > 0 ? seg.FindIndex(serial + 1, x => RevSeg.IsMatch(x)) : seg.FindIndex(1, x => RevSeg.IsMatch(x));
             if (cut > 0) seg = seg.Take(cut).ToList();
             var lastDigit = seg.FindLastIndex(x => x.Any(char.IsDigit));
             if (lastDigit < 0) continue;
@@ -67,7 +69,12 @@ static class Revisions
         // With a document number, the revision is the one right after it ("…-50003-C0-TITLE"), not a word of the title.
         var at = num.Length > 0 ? name.IndexOf(num, StringComparison.OrdinalIgnoreCase) : -1;
         var after = at >= 0 ? ms.Cast<Match>().FirstOrDefault(x => x.Index >= at + num.Length - 1) : null;
-        if (after != null || ms.Count > 0)
+        // a match INSIDE the number (T3, C7 …) is never its revision
+        if (at >= 0) ms = ms.Where(x => x.Index >= at + num.Length - 1 || x.Index + x.Length <= at).ToList();
+        // "…-22533 CAD(00)" / "(Rev01)": the revision in brackets right after the number
+        var br = at >= 0 && after == null ? Regex.Match(name[(at + num.Length)..], @"^\s*[\-_]?\s*(?:CAD|PDF|DWG)?\s*\((?:rev\s*)?(\d{1,2})\)", RegexOptions.IgnoreCase) : Match.Empty;
+        if (br.Success) d.Rev = br.Groups[1].Value.PadLeft(2, '0');
+        else if (after != null || ms.Count > 0)
         {
             var m = after ?? ms[^1];
             var r = m.Groups["r"].Value.ToUpperInvariant();
