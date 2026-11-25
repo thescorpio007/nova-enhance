@@ -273,7 +273,17 @@ static class FolderIndex
     /// <summary>Keeps what a feature read from a file, for every other feature (and for Search inside a folder, which then skips it).</summary>
     public static void Remember(string path, List<Seg> segs)
     {
-        try
+        // 🔒 "database is locked": another reader is writing — wait a moment and try again (3 times) instead of losing the reading.
+        for (int attempt = 1; ; attempt++)
+        {
+            try { RememberOnce(path, segs); return; }
+            catch (SqliteException e) when (e.SqliteErrorCode == 5 && attempt < 4) { Thread.Sleep(1500 * attempt); }
+            catch (Exception e) { Log.Warn("Folder index", "remember " + Path.GetFileName(path) + ": " + e.Message); return; }
+        }
+    }
+
+    static void RememberOnce(string path, List<Seg> segs)
+    {
         {
             var fi = new FileInfo(path);
             if (!fi.Exists) return;
@@ -291,7 +301,6 @@ static class FolderIndex
             }
             tx.Commit();
         }
-        catch (Exception e) { Log.Warn("Folder index", "remember " + Path.GetFileName(path) + ": " + e.Message); }
     }
 
     /// <summary>A file or a whole folder moved / renamed: what Nova read there is moved with it (nothing is read again).</summary>
@@ -370,6 +379,8 @@ static class FolderIndex
         /// <summary>Pause: Reset() pauses the reading, Set() continues.</summary>
         public readonly ManualResetEventSlim Gate = new(true);
         public readonly System.Collections.Concurrent.ConcurrentQueue<Problem> Problems = new();
+        /// <summary>Folders Windows could not open (skipped, the search went on).</summary>
+        public readonly System.Collections.Concurrent.ConcurrentBag<string> Skipped = new();
     }
 
     public class Problem { public string Path, Name, Reason, Action; }
@@ -464,7 +475,7 @@ static class FolderIndex
         }
         var opts = new EnumerationOptions { RecurseSubdirectories = opt?.Subfolders ?? true, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.Hidden | FileAttributes.System, ReturnSpecialDirectories = false };
         pg.Phase = "Listing files…";
-        foreach (var f in Directory.EnumerateFiles(root, "*", opts))
+        foreach (var f in SafeFiles(root, opts, pg))
         {
             var n = Path.GetFileName(f);
             if (n.StartsWith("~$")) continue;
@@ -473,6 +484,30 @@ static class FolderIndex
             var mt = Ms(fi.LastWriteTime);
             if (opt != null && !opt.Accept(Path.GetRelativePath(root, f), n, fi.Length, mt)) continue;
             yield return new Item { Key = f, Name = n, Ext = fi.Extension.ToLowerInvariant(), Size = fi.Length, Mtime = mt, LocalPath = f };
+        }
+    }
+
+    /// <summary>Every file under a folder; a folder Windows cannot open is skipped (and noted) — the search goes on.</summary>
+    static IEnumerable<string> SafeFiles(string root, EnumerationOptions opts, Progress pg)
+    {
+        var flat = new EnumerationOptions { RecurseSubdirectories = false, IgnoreInaccessible = true, AttributesToSkip = opts.AttributesToSkip, ReturnSpecialDirectories = false };
+        var todo = new Stack<string>(); todo.Push(root);
+        while (todo.Count > 0)
+        {
+            var dir = todo.Pop();
+            List<string> files = null, subs = null;
+            try
+            {
+                files = Directory.EnumerateFiles(dir, "*", flat).ToList();
+                subs = opts.RecurseSubdirectories ? Directory.EnumerateDirectories(dir, "*", flat).ToList() : new List<string>();
+            }
+            catch (Exception e)
+            {
+                Log.Warn("Folder index", $"⚠ skipped a folder Windows could not open: {dir} — {e.Message}");
+                try { pg?.Skipped?.Add(dir); } catch { }
+            }
+            if (files != null) foreach (var f in files) yield return f;
+            if (subs != null) for (int i = subs.Count - 1; i >= 0; i--) todo.Push(subs[i]);
         }
     }
 

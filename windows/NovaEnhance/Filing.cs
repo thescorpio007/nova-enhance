@@ -535,6 +535,8 @@ static class Filing
 
     public static void BackgroundCount()
     {
+        // only when the PC is idle (5 min without keyboard / mouse), once a day, one project at a time
+        if (Gentle.Idle < TimeSpan.FromMinutes(5)) return;
         if (DateTime.Now - new DateTime(Store.Long("win_filing_counted", 0)) < TimeSpan.FromHours(20)) return;
         Store.SetLong("win_filing_counted", DateTime.Now.Ticks);
         Task.Run(() =>
@@ -544,8 +546,10 @@ static class Filing
                 int n = 0;
                 foreach (var p in Projects.All())
                 {
-                    var files = Projects.Catalogue(p.Folders.Concat((p.Sources ?? new()).Select(s => s.Path)), 120000).Select(x => x.Path);
+                    var files = Projects.Catalogue(p.Folders.Concat((p.Sources ?? new()).Select(s => s.Path)), 120000).Select(x => x.Path).ToList();
                     n += Learn(p.Code, files).Count(u => !Store.Bool("win_filing_skip_" + p.Code + "_" + u.Code, false));
+                    files.Clear(); files = null;   // keep only the count
+                    if (Gentle.Idle < TimeSpan.FromMinutes(2)) break;   // you are back: stop, the count finishes another time
                 }
                 Pending = n;
             }

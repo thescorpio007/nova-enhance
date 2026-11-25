@@ -88,6 +88,21 @@ begin
   end;
 end;
 
+// ⏻ Close Nova before the files are replaced: ask it (it ends within 5 s), then make sure (an older Nova that does not know --quit).
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Code: Integer;
+begin
+  Result := '';
+  if FileExists(ExpandConstant('{app}\NovaEnhance.exe')) then
+  begin
+    Exec(ExpandConstant('{app}\NovaEnhance.exe'), '--quit', '', SW_HIDE, ewWaitUntilTerminated, Code);
+    Sleep(6000);
+    Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM NovaEnhance.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
+    Sleep(800);
+  end;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then

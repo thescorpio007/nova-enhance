@@ -75,7 +75,7 @@ Rules:
         if (sx.Project.Length > 0) project = sx.Project;
         // ⚡ Local first: a short search (words, numbers, codes, dates, project) is understood on this PC — no AI, no waiting.
         //    The AI only reads real questions (who / why / not answered / summarise / draft …).
-        ans.Local = Ai.Active() == null || LocalEnough(question);
+        ans.Local = Ai.Active() == null || Ai.QuotaOut || LocalEnough(question);
         // ⚡ A question the AI already understood once: the same plan again, at once (never sent twice).
         var remembered = !ans.Local && previous == null ? Understood.Get(question + "|" + project) : null;
         if (remembered != null) { ans.Local = true; }

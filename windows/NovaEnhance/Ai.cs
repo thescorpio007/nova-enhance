@@ -253,6 +253,10 @@ static class Ai
 
     class Busy : Exception { public Busy(string m) : base(m) { } }
 
+    static DateTime quotaAt = DateTime.MinValue;
+    /// <summary>💳 The AI key's quota was used up less than an hour ago: Nova searches without AI meanwhile.</summary>
+    public static bool QuotaOut => DateTime.Now - quotaAt < TimeSpan.FromMinutes(60);
+
     /// <summary>One question, one answer. Retries busy/connection errors twice.</summary>
     public static async Task<string> Chat(string system, string user, bool fast = true, bool json = false, Provider p = null, CancellationToken ct = default)
     {
@@ -539,6 +543,14 @@ static class Ai
         using var res = await (slow ? SlowHttp : Http).SendAsync(req, ct);
         var text = await res.Content.ReadAsStringAsync(ct);
         int code = (int)res.StatusCode;
+        // 💳 Quota used up (not just busy): say it once in plain words, no retries; Nova answers with its own search for an hour.
+        if (code == 429 && Regex.IsMatch(text ?? "", "quota|RESOURCE_EXHAUSTED|billing|credit", RegexOptions.IgnoreCase))
+        {
+            var first = !QuotaOut;
+            quotaAt = DateTime.Now;
+            if (first) Log.Warn("AI", "💳 The AI quota of this key is used up for now — Nova uses its own search (no AI) for an hour, or add another AI key in Settings → AI & API keys.");
+            throw new AiException("💳 The AI quota of this key is used up for now — Nova answers with its own search (no AI). Add another AI key, or try again later.");
+        }
         if (code == 429 || code == 500 || code == 502 || code == 503 || code == 504 || code == 529) throw new Busy($"{code}");
         if (!res.IsSuccessStatusCode)
         {

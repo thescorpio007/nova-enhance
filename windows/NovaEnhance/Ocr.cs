@@ -133,7 +133,9 @@ static class Ocr
             foreach (var a in new[] { "--ocr", kind, path, only == null ? "all" : string.Join(",", only), maxPages.ToString(), outFile }) psi.ArgumentList.Add(a);
             using var p = System.Diagnostics.Process.Start(psi)!;
             try { p.PriorityClass = System.Diagnostics.ProcessPriorityClass.BelowNormal; } catch { }
-            if (!p.WaitForExit(10 * 60 * 1000)) { try { p.Kill(true); } catch { } MarkBad(path, "no answer after 10 minutes"); return res; }
+            // ⏱ 60 s per file (+ 2 s per page asked, at most 4 min): a stuck Windows OCR never holds Nova (or its exit) for 10 minutes again
+            var limit = (int)Math.Min(240_000, 60_000 + 2_000L * (only?.Count ?? Math.Max(0, Math.Min(maxPages, 90))));
+            if (!p.WaitForExit(limit)) { try { p.Kill(true); } catch { } MarkBad(path, $"no answer after {limit / 1000} s"); return res; }
             if (p.ExitCode != 0 || !File.Exists(outFile)) { MarkBad(path, $"exit code {p.ExitCode}"); return res; }
             foreach (var x in System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(outFile))!.AsArray())
                 res.Add(((int)x!["p"]!, x["t"]?.ToString() ?? ""));

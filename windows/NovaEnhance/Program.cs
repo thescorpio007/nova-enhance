@@ -48,6 +48,12 @@ static class Program
         if (args.Contains("--vpn-helper")) { try { return VpnHelper.Serve(args); } catch { return 3; } }
         // 🛡 The Guardian: a second copy that only watches Nova (restarts it after a crash or a freeze).
         if (args.Contains("--guardian")) { Application.EnableVisualStyles(); return Guard.Watch(args); }
+        // ⏻ The installer (or anyone) asks the running Nova to close: it closes within 5 s, whatever is still running.
+        if (args.Contains("--quit"))
+        {
+            try { EventWaitHandle.OpenExisting("NovaEnhanceWindows-quit").Set(); } catch { }
+            return 0;
+        }
         Restored = args.Contains("--restored");
 
         // Right-click a folder → "Search inside with Nova" starts NovaEnhance.exe --search "<folder>".
@@ -101,6 +107,8 @@ static class Program
         Application.ThreadException += (_, e) => Log.Error("ui", e.Exception);
         AppDomain.CurrentDomain.UnhandledException += (_, e) => { Guard.LastWords(e.ExceptionObject); Log.Write("crash: " + e.ExceptionObject); };
         Microsoft.Win32.SystemEvents.SessionEnding += (_, _) => Guard.CleanExit();
+        // Windows sign-out / shutdown / an installer's “close the applications”: do not hold them up
+        Microsoft.Win32.SystemEvents.SessionEnded += (_, _) => { try { Guard.CleanExit(); } catch { } new Thread(() => { Thread.Sleep(3000); Environment.Exit(0); }) { IsBackground = true }.Start(); };
         TaskScheduler.UnobservedTaskException += (_, e) => { Log.Error("task", e.Exception); e.SetObserved(); };
 
         Application.Run(new NovaContext(args.Contains("--tray") || xferVerb != null || StartSearch != null || StartOffice != null || StartOpen != null));
@@ -122,7 +130,7 @@ class NovaContext : ApplicationContext
     readonly NotifyIcon tray;
     readonly HotkeyWindow hot;
     readonly System.Windows.Forms.Timer timer;
-    readonly EventWaitHandle showEvt, searchEvt, openEvt, xferEvt;
+    readonly EventWaitHandle showEvt, searchEvt, openEvt, xferEvt, quitEvt;
     readonly List<EventWaitHandle> officeEvts = new();
     int ticks;
 
@@ -293,6 +301,8 @@ class NovaContext : ApplicationContext
         Filing.Tick = new System.Threading.Timer(_ => { try { Filing.BackgroundCount(); } catch { } }, null, TimeSpan.FromMinutes(12), TimeSpan.FromHours(6));
         XferMenu.Apply();
         PasteHook.Apply();
+        quitEvt = new EventWaitHandle(false, EventResetMode.AutoReset, "NovaEnhanceWindows-quit");
+        ThreadPool.RegisterWaitForSingleObject(quitEvt, (_, _) => { try { Program.UiContext.Post(_ => Quit(), null); } catch { Environment.Exit(0); } }, null, -1, true);
         xferEvt = new EventWaitHandle(false, EventResetMode.AutoReset, "NovaEnhanceWindows-xfer");
         ThreadPool.RegisterWaitForSingleObject(xferEvt, (_, _) => Transfer.ReadRequests(), null, -1, false);
         Transfer.ReadRequests();   // Nova was started by the menu itself
@@ -410,6 +420,9 @@ class NovaContext : ApplicationContext
 
     void Quit()
     {
+        // ⏻ Exit always ends within 5 s: background work (listing, reading, OCR, index) gets 5 s to stop, then Nova closes anyway
+        //    (the index is written in small transactions: nothing is lost, the file is simply read again later).
+        new Thread(() => { Thread.Sleep(5000); try { Log.Write("⏻ closed after 5 s (background work still running)"); } catch { } Environment.Exit(0); }) { IsBackground = true, Name = "Nova exit watchdog" }.Start();
         Guard.CleanExit();
         tray.Visible = false;
         MailIndex.Stop();

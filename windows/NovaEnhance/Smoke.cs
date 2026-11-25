@@ -358,6 +358,18 @@ static class Smoke
             Ok(Revisions.Parse(@"C:\x\Review and Assessment of the MEP Submission.pdf", 0).Rev == "", "revision: “Review” is not a revision");
             Ok(Revisions.Parse(@"C:\x\RE_YB Sea La vie _ IFC Submission.msg", 0).Rev == "", "revision: IFC in an email name is the stage, not a revision");
         }
+        {
+            // 📜 contract area: the role of a folder from its name (no files → no first pages)
+            var ca = Path.Combine(Path.GetTempPath(), "nova-ca-" + Guid.NewGuid().ToString("N")[..6]);
+            string R(string n) { var d = Path.Combine(ca, n); Directory.CreateDirectory(d); return ContractArea.ProposeOne("TST", d, CancellationToken.None).Role; }
+            Ok(R("BOQ Bills Of Quantities") == "BOQ", "contract area: BOQ folder → BOQ");
+            Ok(R("4. Specifications") == "Specifications", "contract area: 4. Specifications → Specifications");
+            Ok(R("5. Addenda") == "Addenda / bulletins", "contract area: 5. Addenda → Addenda");
+            Ok(R("16. Correspondence") == "Reference only", "contract area: Correspondence → reference only");
+            Ok(R("Draft Contract") == "Draft" && !ContractArea.Governs("Draft") && ContractArea.Governs("BOQ"), "contract area: a draft never governs");
+            Ok(ContractArea.DefaultRank("Agreement & LoA") == 1 && ContractArea.DefaultRank("BOQ") == 9, "contract area: the usual order of precedence");
+            try { Directory.Delete(ca, true); } catch { }
+        }
         var errs = Log.Read();
         Ok(!errs.Contains("settings ") || true, "No settings errors");
     }

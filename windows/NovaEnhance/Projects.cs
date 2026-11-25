@@ -374,6 +374,9 @@ static class Projects
                 {
                     Exec(c, "CREATE TABLE IF NOT EXISTS pnames(path TEXT PRIMARY KEY, root TEXT, name TEXT, ext TEXT, size INTEGER, mtime INTEGER, seen INTEGER);");
                     Exec(c, "CREATE INDEX IF NOT EXISTS pnames_root ON pnames(root);");
+                    Exec(c, "CREATE INDEX IF NOT EXISTS pnames_name ON pnames(name);");
+                    // 📶 files the background reading leaves out on purpose (older revision, a copy already read on this PC)
+                    Exec(c, "CREATE TABLE IF NOT EXISTS pskip(path TEXT PRIMARY KEY, why TEXT, at INTEGER);");
                     Exec(c, "DROP TABLE IF EXISTS pread;");   // build 36's separate store: now one store for all of Nova
                     dbReady = true;
                 }
@@ -906,7 +909,118 @@ static class Projects
         }
 
         public class Prog { public string Code = ""; public int Total, Done; }
-        public static volatile string Phase = "off", Current = "";
+        public static volatile string Phase = "off", Current = "", CurrentPath = "";
+
+        // ------------------------------------------------------------------ 📶 rules of the background reading (Settings → 📶 Indexing progress)
+        /// <summary>Read only the latest revision of each document (older ones: names only).</summary>
+        public static bool LatestOnly { get => Store.Bool("win_read_latest", true); set { Store.SetBool("win_read_latest", value); counted = DateTime.MinValue; wake.Set(); } }
+        /// <summary>Network folders: "afterhours" (default) · "always" · "never" (names only).</summary>
+        public static string NetRead { get => Store.Str("win_net_read", "afterhours"); set { Store.Set("win_net_read", value); wake.Set(); } }
+        /// <summary>Skip a network file when the same file (name + size) is already read on this PC.</summary>
+        public static bool NetSkipCopies { get => Store.Bool("win_net_skipdup", true); set => Store.SetBool("win_net_skipdup", value); }
+        /// <summary>Folders whose reading is paused (⏸ on their card).</summary>
+        public static List<string> PausedFolders
+        {
+            get { try { return JsonSerializer.Deserialize<List<string>>(Store.Str("win_read_paused", "[]")) ?? new(); } catch { return new(); } }
+            set { Store.Set("win_read_paused", JsonSerializer.Serialize(value ?? new())); wake.Set(); }
+        }
+        /// <summary>⚡ First: this folder is read before the others.</summary>
+        public static string FirstFolder { get => Store.Str("win_read_first", ""); set { Store.Set("win_read_first", value ?? ""); wake.Set(); } }
+
+        static readonly ConcurrentDictionary<string, bool> netCache = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>🌐 A folder on the network (\\server\… or a mapped network drive like S:).</summary>
+        public static bool IsNetwork(string folder) => netCache.GetOrAdd(folder ?? "", f =>
+        {
+            if (f.StartsWith(@"\\")) return true;
+            try { var r = Path.GetPathRoot(f); return r != null && new DriveInfo(r).DriveType == DriveType.Network; } catch { return false; }
+        });
+
+        static bool NetworkMayRun() => Rush || NetRead == "always" || (NetRead == "afterhours" && (!Gentle.WorkingNow || Gentle.Idle > TimeSpan.FromMinutes(3)));
+
+        /// <summary>📶 Per folder: readable files, read, left out on purpose (counted together, ~1 s).</summary>
+        public class FolderStat { public int Names, Readable, Done, Skipped; }
+        public static Dictionary<string, FolderStat> Stats()
+        {
+            var res = new Dictionary<string, FolderStat>(StringComparer.OrdinalIgnoreCase);
+            long max = (long)FolderIndex.MaxMb * 1024 * 1024;
+            using var c = Db();
+            using (var cmd = c.CreateCommand())
+            {
+                cmd.CommandText = "SELECT root, COUNT(*) FROM pnames GROUP BY root";
+                using var r = cmd.ExecuteReader();
+                while (r.Read()) res[r.GetString(0)] = new FolderStat { Names = r.GetInt32(1) };
+            }
+            using (var cmd = c.CreateCommand())
+            {
+                cmd.CommandText = $"SELECT p.root, COUNT(*), SUM(CASE WHEN f.id IS NULL OR s.path IS NOT NULL THEN 0 ELSE 1 END), SUM(CASE WHEN s.path IS NULL THEN 0 ELSE 1 END) " +
+                                  $"FROM pnames p LEFT JOIN files f ON f.path=p.path LEFT JOIN pskip s ON s.path=p.path WHERE p.ext IN ({ExtIn(cmd)}) AND p.size <= $max GROUP BY p.root";
+                cmd.Parameters.AddWithValue("$max", max);
+                using var r = cmd.ExecuteReader();
+                while (r.Read())
+                {
+                    if (!res.TryGetValue(r.GetString(0), out var st)) res[r.GetString(0)] = st = new FolderStat();
+                    st.Skipped = r.IsDBNull(3) ? 0 : r.GetInt32(3);
+                    st.Readable = r.GetInt32(1) - st.Skipped;
+                    st.Done = r.IsDBNull(2) ? 0 : r.GetInt32(2);
+                }
+            }
+            return res;
+        }
+
+        public static string KeyOf(string folder) => RootKey(folder);
+
+        /// <summary>An older revision of a document that has a newer one in the same folder.</summary>
+        static bool Superseded(SqliteConnection c, string path, Dictionary<string, List<(string Path, Revisions.Doc D)>> cache)
+        {
+            var dir = Path.GetDirectoryName(path) ?? "";
+            if (dir.Length == 0) return false;
+            var me = Revisions.Parse(path, 0);
+            if (string.IsNullOrEmpty(me.Key)) return false;
+            if (!cache.TryGetValue(dir, out var sibs)) cache[dir] = sibs = Siblings(c, dir);
+            var mine = Path.GetExtension(path);
+            foreach (var (other, o) in sibs)
+            {
+                if (other.Equals(path, StringComparison.OrdinalIgnoreCase) || !Path.GetExtension(other).Equals(mine, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!string.Equals(o.Key, me.Key, StringComparison.OrdinalIgnoreCase)) continue;
+                if (o.Rank.Item1 > me.Rank.Item1 || o.Rank.Item1 == me.Rank.Item1 && string.CompareOrdinal(o.Rank.Item2, me.Rank.Item2) > 0) return true;
+            }
+            return false;
+        }
+
+        static List<(string, Revisions.Doc)> Siblings(SqliteConnection c, string dir)
+        {
+            var res = new List<(string, Revisions.Doc)>();
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "SELECT path, mtime FROM pnames WHERE path > $a AND path < $b LIMIT 3000";
+            cmd.Parameters.AddWithValue("$a", dir + "\\");
+            cmd.Parameters.AddWithValue("$b", dir + "\\\uffff");
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                var other = r.GetString(0);
+                if (other.IndexOf('\\', dir.Length + 1) >= 0) continue;   // in a subfolder
+                res.Add((other, Revisions.Parse(other, r.IsDBNull(1) ? 0 : r.GetInt64(1))));
+            }
+            return res;
+        }
+
+        /// <summary>The same file (name + size) already read somewhere on this PC.</summary>
+        static bool CopyRead(SqliteConnection c, string path)
+        {
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "SELECT 1 FROM pnames p JOIN files f ON f.path=p.path WHERE p.name=$n AND p.size=(SELECT size FROM pnames WHERE path=$p) AND p.path<>$p LIMIT 1";
+            cmd.Parameters.AddWithValue("$n", Path.GetFileName(path));
+            cmd.Parameters.AddWithValue("$p", path);
+            return cmd.ExecuteScalar() != null;
+        }
+
+        static void LeaveOut(SqliteConnection c, string path, string why)
+        {
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "INSERT OR REPLACE INTO pskip(path,why,at) VALUES($p,$w,$t)";
+            cmd.Parameters.AddWithValue("$p", path); cmd.Parameters.AddWithValue("$w", why); cmd.Parameters.AddWithValue("$t", DateTimeOffset.Now.ToUnixTimeMilliseconds());
+            cmd.ExecuteNonQuery();
+        }
         public static List<Prog> Counts = new();
         public static TimeSpan? Left;
         public static volatile string Error = "";
@@ -947,8 +1061,8 @@ static class Projects
                 {
                     using var c = Db();
                     using var cmd = c.CreateCommand();
-                    cmd.CommandText = $"SELECT COUNT(*), SUM(CASE WHEN f.id IS NULL THEN 0 ELSE 1 END) FROM pnames p LEFT JOIN files f ON f.path=p.path " +
-                                      $"WHERE ({Under(cmd, p.Folders.Select(RootKey).ToList(), "p.path")}) AND p.ext IN ({ExtIn(cmd)}) AND p.size <= $max";
+                    cmd.CommandText = $"SELECT COUNT(*), SUM(CASE WHEN f.id IS NULL THEN 0 ELSE 1 END) FROM pnames p LEFT JOIN files f ON f.path=p.path LEFT JOIN pskip s ON s.path=p.path " +
+                                      $"WHERE ({Under(cmd, p.Folders.Select(RootKey).ToList(), "p.path")}) AND p.ext IN ({ExtIn(cmd)}) AND p.size <= $max AND s.path IS NULL";
                     cmd.Parameters.AddWithValue("$max", max);
                     using var r = cmd.ExecuteReader();
                     if (r.Read()) list.Add(new Prog { Code = p.Code, Total = r.GetInt32(0), Done = r.IsDBNull(1) ? 0 : r.GetInt32(1) });
@@ -979,17 +1093,50 @@ static class Projects
             List<string> res = new();
             long max = (long)FolderIndex.MaxMb * 1024 * 1024;
             // 📖 the chosen projects (when “Read everything” is on) and every 🗂 source set to “names + text”
-            var folders = (On ? Chosen().SelectMany(p => p.Folders) : Enumerable.Empty<string>()).Concat(ProjectSources.TextFolders()).Select(RootKey).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var folders = (On ? Chosen().SelectMany(p => p.Folders) : Enumerable.Empty<string>()).Concat(ProjectSources.TextFolders()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            // 📶 paused folders are left; 🌐 network folders follow their rule; ⚡ First, then 📜 the contract area, then the rest
+            var paused = PausedFolders;
+            folders = folders.Where(f => !paused.Contains(f, StringComparer.OrdinalIgnoreCase)).Where(f => !IsNetwork(f) || (NetRead != "never" && NetworkMayRun())).ToList();
             if (folders.Count == 0) return res;
+            var first = FirstFolder;
+            var contract = ContractArea.ReadFirst();
+            var groups = new List<List<string>>
+            {
+                folders.Where(f => f.Equals(first, StringComparison.OrdinalIgnoreCase)).ToList(),
+                contract.Where(cf => folders.Any(f => cf.StartsWith(f.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase) || cf.Equals(f, StringComparison.OrdinalIgnoreCase))).ToList(),
+                folders,
+            };
+            var sibCache = new Dictionary<string, List<(string, Revisions.Doc)>>(StringComparer.OrdinalIgnoreCase);
             try
             {
                 using var c = Db();
-                using var cmd = c.CreateCommand();
-                // Newest files first: the documents you work on now are ready soonest.
-                cmd.CommandText = $"SELECT p.path FROM pnames p LEFT JOIN files f ON f.path=p.path WHERE ({Under(cmd, folders, "p.path")}) AND p.ext IN ({ExtIn(cmd)}) AND p.size <= $max AND f.id IS NULL ORDER BY p.mtime DESC LIMIT {n}";
-                cmd.Parameters.AddWithValue("$max", max);
-                using var r = cmd.ExecuteReader();
-                while (r.Read()) res.Add(r.GetString(0));
+                foreach (var g in groups)
+                {
+                    if (g.Count == 0 || res.Count >= n) continue;
+                    for (int round = 0; round < 6 && res.Count < n; round++)
+                    {
+                        var cand = new List<string>();
+                        using (var cmd = c.CreateCommand())
+                        {
+                            // Newest files first: the documents you work on now are ready soonest.
+                            cmd.CommandText = $"SELECT p.path FROM pnames p LEFT JOIN files f ON f.path=p.path LEFT JOIN pskip s ON s.path=p.path WHERE ({Under(cmd, g.Select(RootKey).ToList(), "p.path")}) AND p.ext IN ({ExtIn(cmd)}) AND p.size <= $max AND f.id IS NULL AND s.path IS NULL ORDER BY p.mtime DESC LIMIT {n * 3}";
+                            cmd.Parameters.AddWithValue("$max", max);
+                            using var r = cmd.ExecuteReader();
+                            while (r.Read()) cand.Add(r.GetString(0));
+                        }
+                        if (cand.Count == 0) break;
+                        int skipped = 0;
+                        foreach (var path in cand)
+                        {
+                            if (res.Count >= n) break;
+                            if (res.Contains(path)) continue;
+                            if (LatestOnly && Superseded(c, path, sibCache)) { LeaveOut(c, path, "older revision"); skipped++; continue; }
+                            if (NetSkipCopies && IsNetwork(path) && CopyRead(c, path)) { LeaveOut(c, path, "copy already read on this PC"); skipped++; continue; }
+                            res.Add(path);
+                        }
+                        if (skipped == 0) break;   // nothing left out: the next round would give the same files
+                    }
+                }
             }
             catch (Exception e) { Error = e.Message; Log.Warn("read all", "pending: " + e.Message); return null; }
             return res;
@@ -1017,7 +1164,7 @@ static class Projects
                     foreach (var path in batch)
                     {
                         if (!On || Paused || !MayRun()) break;
-                        Current = Path.GetFileName(path);
+                        Current = Path.GetFileName(path); CurrentPath = path;
                         using var cts = new CancellationTokenSource();
                         using var watch = new System.Threading.Timer(_ => { if (!On || Paused || !MayRun()) try { cts.Cancel(); } catch { } }, null, 2000, 2000);
                         var sw = System.Diagnostics.Stopwatch.StartNew();
