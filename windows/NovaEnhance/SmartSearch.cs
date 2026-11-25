@@ -440,6 +440,10 @@ static class Semantic
 
     static float[] Norm(float[] v) { double s = 0; foreach (var x in v) s += x * x; var n = (float)Math.Sqrt(s); if (n > 0) for (int i = 0; i < v.Length; i++) v[i] /= n; return v; }
 
+    static DateTime embedQuotaAt = DateTime.MinValue;
+    /// <summary>💳 Gemini said the quota is used up: no embedding calls for 1 hour (one line in the log, not one every pass).</summary>
+    public static bool EmbedQuotaOut => DateTime.Now - embedQuotaAt < TimeSpan.FromMinutes(60);
+
     public static async Task<List<float[]>> Embed(List<string> texts, CancellationToken ct, bool query = false)
     {
         var by = By;
@@ -447,6 +451,7 @@ static class Semantic
         {
             var key = Store.Key("gemini");
             if (key.Length == 0) throw new AiException("Meaning search with Gemini needs a Gemini key");
+            if (EmbedQuotaOut) throw new AiException("💳 The Gemini quota of this key is used up for now — meaning search waits (word search still works)");
             var reqs = new JsonArray();
             foreach (var t in texts)
                 reqs.Add(new JsonObject
@@ -458,6 +463,11 @@ static class Semantic
             { Content = new StringContent(new JsonObject { ["requests"] = reqs }.ToJsonString(), Encoding.UTF8, "application/json") };
             using var resp = await http.SendAsync(req, ct);
             var body = await resp.Content.ReadAsStringAsync(ct);
+            if ((int)resp.StatusCode == 429 && System.Text.RegularExpressions.Regex.IsMatch(body, "quota|RESOURCE_EXHAUSTED|billing", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            {
+                embedQuotaAt = DateTime.Now;
+                throw new AiException("💳 The Gemini quota of this key is used up for now — meaning search waits 1 h (word search still works)");
+            }
             if (!resp.IsSuccessStatusCode) throw new AiException("Gemini embeddings: " + (int)resp.StatusCode + " " + (body.Length > 200 ? body[..200] : body));
             return (JsonNode.Parse(body)?["embeddings"]?.AsArray() ?? new JsonArray()).Select(e => Norm(e?["values"]?.AsArray().Select(x => (float)x.GetValue<double>()).ToArray() ?? Array.Empty<float>())).ToList();
         }
@@ -510,6 +520,7 @@ static class Semantic
                 if (!tables) { Tables(); tables = true; }
                 var by = By;
                 Count(by);
+                if (by == "gemini" && EmbedQuotaOut) { Phase = $"💳 Gemini quota used up — continues about {Math.Max(1, (int)(60 - (DateTime.Now - embedQuotaAt).TotalMinutes))} min from now"; wake.WaitOne(TimeSpan.FromMinutes(10)); continue; }
                 if (!MayRun()) { Phase = $"⏸ paused — you are working (continues after {Gentle.EndHour}:00 or when the PC is idle)"; wake.WaitOne(TimeSpan.FromMinutes(2)); continue; }
                 // Emails, newest first.
                 var batch = new List<(long Id, string Text)>();

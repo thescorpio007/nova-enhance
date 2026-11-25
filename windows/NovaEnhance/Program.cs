@@ -139,7 +139,7 @@ class NovaContext : ApplicationContext
         // Nova's window thread: every window must be created here. A WinForms context is installed explicitly — before, a plain
         // context could slip in, and windows Nova opened by itself (Settings at start, a window after a restart) were created on a
         // background thread and never responded.
-        var wfc = new WindowsFormsSynchronizationContext();
+        var wfc = new UiWatch.Ctx(new WindowsFormsSynchronizationContext());
         SynchronizationContext.SetSynchronizationContext(wfc);
         Program.UiContext = wfc;
         Program.Marshal = new Control();
@@ -394,7 +394,7 @@ class NovaContext : ApplicationContext
             UiWatch.Step("minute check: prompts"); Prompts.Tick();
             UiWatch.Step("minute check: send check"); SendCheck.Ensure();
             UiWatch.Step("idle");
-            if (ticks++ % 60 == 0 && Updater.Due) { await Updater.Check(); Updater.Offer(false); }
+            if (ticks++ % 60 == 0 && Updater.Due) { UiWatch.Step("hourly: update check"); await Updater.Check(); Updater.Offer(false); UiWatch.Step("idle"); }
         }
         catch (Exception e) { Log.Error("tick", e); }
     }

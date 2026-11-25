@@ -255,8 +255,55 @@ static class UiWatch
     }
     sealed class Back : IDisposable { readonly string p; public Back(string p) => this.p = p; public void Dispose() => Doing = p; }
 
+    /// <summary>The window message being handled right now (a timer, a posted job, Outlook / COM, a click…) — written next to a freeze.</summary>
+    public static volatile string Msg = "";
+
+    /// <summary>Every job posted to the window thread carries its name (the freeze log then says which one held the window).</summary>
+    public sealed class Ctx : SynchronizationContext
+    {
+        readonly SynchronizationContext inner;
+        public Ctx(SynchronizationContext inner) { this.inner = inner; }
+        static string Name(Delegate d) { try { var m = d.Method; return (m.DeclaringType?.FullName ?? "").Replace("NovaEnhance.", "").Split('+')[0] + "." + m.Name; } catch { return "?"; } }
+        public override void Post(SendOrPostCallback d, object state) => inner.Post(s => Run(d, s), state);
+        public override void Send(SendOrPostCallback d, object state) => inner.Send(s => Run(d, s), state);
+        public override SynchronizationContext CreateCopy() => this;
+        static void Run(SendOrPostCallback d, object s)
+        {
+            var prev = Msg;
+            Msg = "posted job " + Name(d);
+            try { d(s); } finally { Msg = prev; }
+        }
+    }
+
+    sealed class Filter : IMessageFilter
+    {
+        [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        static extern int GetClassName(IntPtr h, System.Text.StringBuilder s, int n);
+        readonly Dictionary<IntPtr, string> cls = new();
+        public bool PreFilterMessage(ref Message m)
+        {
+            // only the messages that run Nova code (not mouse moves / paint)
+            if (m.Msg is 0x0113 or 0x0111 or 0x0201 or 0x0202 or 0x0100 or 0x004A || m.Msg >= 0x0400)
+            {
+                if (!cls.TryGetValue(m.HWnd, out var c))
+                {
+                    var sb = new System.Text.StringBuilder(64);
+                    try { GetClassName(m.HWnd, sb, 64); } catch { }
+                    c = sb.ToString();
+                    if (cls.Count > 500) cls.Clear();
+                    cls[m.HWnd] = c;
+                }
+                var kind = m.Msg switch { 0x0113 => "timer", 0x0111 => "menu / button", 0x0201 or 0x0202 => "click", 0x0100 => "key", 0x004A => "copy-data", _ => "message 0x" + m.Msg.ToString("X") };
+                var who = c.StartsWith("OleMainThreadWndClass") ? "Outlook / COM call" : c.StartsWith("WindowsForms") ? "Nova window" : c;
+                Msg = $"{kind} · {who}";
+            }
+            return false;
+        }
+    }
+
     public static void Start()
     {
+        try { Application.AddMessageFilter(new Filter()); } catch { }
         var t = new System.Windows.Forms.Timer { Interval = 500 };
         t.Tick += (_, _) => Interlocked.Exchange(ref beat, DateTime.UtcNow.Ticks);
         t.Start();
@@ -269,7 +316,7 @@ static class UiWatch
                 var silent = DateTime.UtcNow - new DateTime(Interlocked.Read(ref beat), DateTimeKind.Utc);
                 if (silent > TimeSpan.FromSeconds(5))
                 {
-                    if (since == null) { since = DateTime.Now - silent; what = Doing; wrote30 = false; }
+                    if (since == null) { since = DateTime.Now - silent; what = Doing + (Msg.Length > 0 ? " · last: " + Msg : ""); wrote30 = false; }
                     if (!wrote30 && silent > TimeSpan.FromSeconds(30)) { wrote30 = true; Write($"{since:yyyy-MM-dd HH:mm:ss}  STILL FROZEN after {(int)silent.TotalSeconds} s · while: {what}"); }
                 }
                 else if (since != null)

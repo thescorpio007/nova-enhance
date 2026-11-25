@@ -626,13 +626,15 @@ static class FolderIndex
         }
         if (workers == 0) try { results.CompleteAdding(); } catch { }
 
-        var tx = c.BeginTransaction();
+        // The write lock is held only while saving (never while a file is being read — OCR can take a minute): other writers no longer get “database is locked”.
+        SqliteTransaction tx = null;
         int batch = 0;
         try
         {
             foreach (var r in results.GetConsumingEnumerable(ct))
             {
                 var it = r.It;
+                tx ??= c.BeginTransaction();
                 try
                 {
                     // Replace whatever the index holds for this file (also when another search saved it meanwhile).
@@ -666,8 +668,9 @@ static class FolderIndex
                 if (r.ContentRead) pg.Read++;
                 pg.Done++;
                 Interlocked.Add(ref pg.Bytes, it.Size);
-                if (++batch >= 15) { tx.Commit(); tx.Dispose(); tx = c.BeginTransaction(); batch = 0; }
+                if (++batch >= 15 || results.Count == 0) { tx.Commit(); tx.Dispose(); tx = null; batch = 0; }
             }
+            tx ??= c.BeginTransaction();
             // Files deleted from the folder leave the index (only when no filter hid them).
             if (!ct.IsCancellationRequested && opt.NoFilters)
                 foreach (var (path, k) in known)
@@ -679,8 +682,8 @@ static class FolderIndex
         catch (OperationCanceledException) { }
         finally
         {
-            try { tx.Commit(); } catch { }
-            tx.Dispose();
+            try { tx?.Commit(); } catch { }
+            tx?.Dispose();
             pg.Files = files.Count;
         }
     }
