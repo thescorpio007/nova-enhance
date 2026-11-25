@@ -68,6 +68,10 @@ static class Filing
         R("FC-09", "Sheet codes in drawing numbers",
             "In drawing numbers a part tells the kind of sheet: PLN plan · DET detail · SEC section · ELE / ELV elevation · LAY layout · DIA diagram · GA general arrangement · RCP reflected ceiling plan · TYP typical · SCH schedule — not a document kind. " +
             "[codes.sheet = PLN:Plan; DET:Detail; SEC:Section; ELE:Elevation; ELV:Elevation; LAY:Layout; DIA:Diagram; GA:General arrangement; RCP:Reflected ceiling plan; TYP:Typical; SCH:Schedule; DTL:Detail; PL:Plan]"),
+        R("FC-10", "More folder names (learned from SLV)",
+            "Folders _SSM material · _MSS method statements · _REP reports · _CAL calculations · _WIR inspections · _RFI · Project Manager's Instruction (PMI) · Value Engineering (VE) · Zublin letters · payment · specifications volumes · _MOM · BOQ · Revit model · renders · technical assessment · NOC. Tender = IFT. " +
+            "[folders.kind = _ssm:Material submittal; _mss:Method statement; _rep:Report; _cal:Calculation; _wir:Inspection request; _rfi:Request for information (RFI); _tsr:Report; project manager's instruction:Site instruction; (pmi):Site instruction; value engineering:Variation; zublin letters:Letter; payment:Payment; specifications:Specification; specs all:Specification; _mom:Minutes; bills of quantities:BOQ; boq:BOQ; revit model:Model / CAD; renders:Presentation; technical assessement:Report; technical assessment:Report; noc:Letter; estidama:Report; _authority:Letter] " +
+            "[folders.stage = tender:IFT]"),
         R("FC-04", "Who issued it (every project)",
             "MZA = Consultant (MZA, us). [codes.source = MZA:Consultant (MZA)]"),
         R("FC-05", "Folders → kind",
