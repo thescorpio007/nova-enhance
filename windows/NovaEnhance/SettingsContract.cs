@@ -163,13 +163,13 @@ partial class SettingsForm
         tm.Start();
     }
 
-    // ------------------------------------------------------------------ 📜 Contract area
+    // ------------------------------------------------------------------ 📜 Contract area (by document)
 
-    static string caProject = "";
+    static string caProject = "", caTab = "All governing", caFilter = "";
 
     void ContractPage()
     {
-        Note("The documents that make the contract of each project, and which one governs when two say different things (the order of precedence). Nova reads these folders FIRST and uses them for every review — a MAR, a method statement, an RFI — and for “Which document governs?”. ✦ Nova proposes the role of each folder from its name and from the FIRST PAGES of its documents (title, signed / draft, IFC / IFT, Addendum No.…); nothing is kept until you confirm. Kept in 🧠 Nova Brain → 📜 Contract area.");
+        Note("You give the contract AREAS (folders). Nova reads and labels every DOCUMENT inside by itself — from its number and name, from what page 1 says (title, “SECTION 08 71 00”, “Bill No. 5”, “ADDENDUM No. 3”, signed / draft) and from the folder as a clue — keeps the latest revision as the one that governs and re-reads new or changed files. You only check the exceptions (⚠ Needs your eye). Used by every review against the contract. Kept in 🧠 Nova Brain → 📜 Contract area.");
         if (!Brain.Unlocked)
         {
             Note("🔒 Open 🧠 Nova Brain first (its password) — the contract area is kept inside it.", Th.Warn);
@@ -180,149 +180,228 @@ partial class SettingsForm
         if (all.Count == 0) { Note("Add your projects first in 📁 Projects."); return; }
         if (all.All(p => p.Code != caProject)) caProject = all.Any(p => p.Code == "SLV") ? "SLV" : all[0].Code;
         var proj = all.First(p => p.Code == caProject);
+        var P = proj.Code;
+        void Redraw() => Draw("📜 Contract area");
+
         var pr = page.Add(Th.Row(false));
         pr.Controls.Add(Th.L("Project:", 10, Th.Text));
         var cb = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 320, BackColor = Th.Card, ForeColor = Th.Text, FlatStyle = FlatStyle.Flat };
         foreach (var p in all) cb.Items.Add($"{p.Code} · {p.Name}");
         cb.SelectedIndex = all.IndexOf(proj);
-        cb.SelectedIndexChanged += (_, _) => { caProject = all[cb.SelectedIndex].Code; Draw("📜 Contract area"); };
+        cb.SelectedIndexChanged += (_, _) => { caProject = all[cb.SelectedIndex].Code; caTab = "All governing"; Redraw(); };
         pr.Controls.Add(cb);
+        pr.Controls.Add(Th.B("📋 Review a submittal vs contract…", () => new ContractReviewForm(P, null).Show(), true));
 
-        var entries = ContractArea.Of(proj.Code);
-        var order = ContractArea.Order(proj.Code);
+        var reg = ContractRegister.Get(P);
         var status = Th.L("", 9.5f, Th.Muted);
-
-        // the folders
-        page.Add(Th.Section($"📁 Folders of the {proj.Code} contract area · click a cell to change it"));
-        var g = Grid(300);
-        g.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Folder", ReadOnly = true, Width = 230 });
-        var roleCol = new DataGridViewComboBoxColumn { HeaderText = "Role ✎", Width = 200, FlatStyle = FlatStyle.Flat, DisplayStyle = DataGridViewComboBoxDisplayStyle.DropDownButton };
-        roleCol.Items.AddRange(ContractArea.Roles);
-        g.Columns.Add(roleCol);
-        g.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Rank", ReadOnly = true, Width = 50 });
-        g.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "Latest only ✎", Width = 80 });
-        g.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "Subfolders ✎", Width = 80 });
-        g.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "For Nova: what these documents are ✎", Width = 340 });
-        g.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Why (what Nova saw)", ReadOnly = true, Width = 300 });
-        void Fill()
-        {
-            g.Rows.Clear();
-            foreach (var e in entries.OrderBy(e => ContractArea.GroupOf(e.Role)).ThenBy(e => e.Rank == 0 ? 99 : e.Rank))
-            {
-                e.Rank = ContractArea.DefaultRank(e.Role, order);
-                var i = g.Rows.Add(e.Path, ContractArea.Roles.Contains(e.Role) ? e.Role : "Reference only", e.Rank > 0 ? e.Rank.ToString() : "—", e.Latest, e.Subs, e.Desc, e.Evidence);
-                g.Rows[i].Tag = e;
-                if (!ContractArea.Governs(e.Role)) g.Rows[i].DefaultCellStyle.ForeColor = Th.Muted;
-            }
-        }
-        Fill();
-        page.Add(g, true);
-        void Pull()
-        {
-            g.EndEdit();
-            foreach (DataGridViewRow r in g.Rows)
-            {
-                if (r.Tag is not ContractEntry e) continue;
-                e.Role = r.Cells[1].Value?.ToString() ?? e.Role; e.Latest = r.Cells[3].Value is true; e.Subs = r.Cells[4].Value is true; e.Desc = r.Cells[5].Value?.ToString() ?? "";
-                e.Rank = ContractArea.DefaultRank(e.Role, order);
-            }
-        }
-        var br = page.Add(Th.Row());
-        CancellationTokenSource cts = null;
-        void Review(List<ContractEntry> found)
-        {
-            if (found.Count == 0) { status.Text = "Nothing new to propose."; return; }
-            using var f = new ContractProposeForm(proj.Code, found);
-            if (f.ShowDialog(this) != DialogResult.OK) return;
-            Pull();
-            foreach (var e in f.Result)
-            {
-                entries.RemoveAll(x => x.Path.Equals(e.Path, StringComparison.OrdinalIgnoreCase));
-                entries.Add(e);
-            }
-            if (f.NotThese.Count > 0) ContractArea.NotAgain(proj.Code, f.NotThese);
-            Fill();
-            status.Text = $"✓ {f.Result.Count} folder(s) added — press 💾 Save to keep them in 🧠 Nova Brain.";
-        }
-        void Busy(Func<CancellationToken, List<ContractEntry>> job)
-        {
-            cts?.Cancel(); var my = cts = new CancellationTokenSource();
-            status.Text = "📖 Reading the first pages…";
-            Task.Run(() => job(my.Token), my.Token).ContinueWith(t => Program.UiContext.Post(_ =>
-            {
-                if (status.IsDisposed) return;
-                if (t.IsCanceled || my.IsCancellationRequested) { status.Text = "Stopped."; return; }
-                if (t.IsFaulted) { status.Text = "⚠ " + t.Exception?.GetBaseException().Message; return; }
-                status.Text = "";
-                Review(t.Result);
-            }, null));
-        }
         void Say(string s) => Program.UiContext.Post(_ => { if (!status.IsDisposed) status.Text = s; }, null);
-        br.Controls.Add(Th.B("✦ Nova proposes", () => Busy(ct => ContractArea.Candidates(proj, Say, ct)), true));
-        br.Controls.Add(Th.B("➕ Add a folder…", () =>
+
+        // ① the contract areas
+        page.Add(Th.Section("① Contract areas — everything inside is read and labelled"));
+        var areas = ContractRegister.Areas(P);
+        var lbA = new ListBox { Width = 980, Height = Math.Max(50, Math.Min(8, areas.Count + 1) * 22), BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.FixedSingle, Font = Th.F(10) };
+        IdxRefreshStats();
+        foreach (var a in areas)
         {
-            using var d = new FolderBrowserDialog { Description = "A folder of the " + proj.Code + " contract (its subfolders get a role each)", SelectedPath = proj.Folders.FirstOrDefault(Directory.Exists) ?? "" };
+            var n = reg?.Docs.Count(d => d.Path.StartsWith(a.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase)) ?? 0;
+            idxStats.TryGetValue(Projects.ReadAll.KeyOf(a), out var st);
+            var read = st == null || st.Readable == 0 ? "" : st.Done >= st.Readable ? " · ✓ read 100%" : $" · 📖 read {100L * st.Done / st.Readable}%";
+            lbA.Items.Add($"📁 {a}   ·   {n:N0} files{read}{(Projects.ReadAll.IsNetwork(a) ? " · 🌐" : "")}");
+        }
+        if (areas.Count == 0) lbA.Items.Add("(no contract area yet — ➕ Add a contract area: the folders that hold the contract, the specs, the BOQ, the drawings…)");
+        page.Add(lbA);
+        var ra = page.Add(Th.Row());
+        ra.Controls.Add(Th.B("➕ Add a contract area…", () =>
+        {
+            using var d = new FolderBrowserDialog { Description = "A folder that holds contract documents of " + P + " (specs, BOQ, drawings, PTC, addenda… — all of it is read)", SelectedPath = proj.Folders.FirstOrDefault(Directory.Exists) ?? "" };
             if (d.ShowDialog(this) != DialogResult.OK) return;
             if (Projects.Private.IsMatch(d.SelectedPath)) { MessageBox.Show(this, "🔒 That folder looks private — Nova never reads it.", "Nova Enhance"); return; }
-            var path = d.SelectedPath;
-            var subs = MessageBox.Show(this, "Give each SUBFOLDER its own role?\n\nYes = one role per subfolder (e.g. Vol 1 Agreement · Vol 2 Conditions · Vol 3 Specs)\nNo = one role for the whole folder", "📜 Contract area", MessageBoxButtons.YesNoCancel);
-            if (subs == DialogResult.Cancel) return;
-            Busy(ct => subs == DialogResult.Yes ? ContractArea.Propose(proj.Code, path, Say, ct) : new List<ContractEntry> { ContractArea.ProposeOne(proj.Code, path, ct) });
-        }));
-        br.Controls.Add(Th.B("🗑 Remove", () =>
-        {
-            if (g.CurrentRow?.Tag is not ContractEntry e) return;
-            Pull(); entries.Remove(e); Fill();
-            status.Text = "Removed — press 💾 Save to keep the change.";
-        }));
-        br.Controls.Add(Th.B("■ Stop", () => cts?.Cancel()));
-        br.Controls.Add(Th.B("💾 Save", () =>
-        {
-            Pull();
-            try { ContractArea.Save(proj.Code, entries, order); status.Text = $"✓ Saved in 🧠 Nova Brain · {entries.Count} folder(s) · Nova reads the governing ones first."; Projects.ReadAll.Now(); }
-            catch (Exception e) { status.Text = "⚠ " + e.Message; }
+            try { ContractRegister.SetAreas(P, areas.Append(d.SelectedPath).ToList()); Projects.ReadAll.Now(); Redraw(); } catch (Exception e) { status.Text = "⚠ " + e.Message; }
         }, true));
+        ra.Controls.Add(Th.B("🗑 Remove", () =>
+        {
+            if (lbA.SelectedIndex < 0 || lbA.SelectedIndex >= areas.Count) return;
+            try { ContractRegister.SetAreas(P, areas.Where((_, i) => i != lbA.SelectedIndex).ToList()); Redraw(); } catch (Exception e) { status.Text = "⚠ " + e.Message; }
+        }));
+        ra.Controls.Add(Th.B("🚫 Leave a subfolder out…", () =>
+        {
+            using var d = new FolderBrowserDialog { Description = "A subfolder Nova should never use (renders, old backups…)", SelectedPath = areas.FirstOrDefault() ?? "" };
+            if (d.ShowDialog(this) != DialogResult.OK) return;
+            var c = ContractArea.Cfg(P);
+            var ex = c["exclude"] as System.Text.Json.Nodes.JsonArray ?? new System.Text.Json.Nodes.JsonArray();
+            ex.Add(d.SelectedPath.TrimEnd('\\')); c["exclude"] = ex;
+            try { ContractArea.SaveCfg(P, c); ContractRegister.Invalidate(P); Redraw(); } catch (Exception e) { status.Text = "⚠ " + e.Message; }
+        }));
+        ra.Controls.Add(Th.B("⟳ Label everything again", () => { ContractRegister.Invalidate(P); status.Text = "🏷 labelling…"; }));
+
+        // ② the register
+        var built = reg == null ? "not built yet" : $"updated {reg.Built:dd MMM HH:mm}";
+        page.Add(Th.Section($"② Contract register — built by Nova · {reg?.Files ?? 0:N0} files → {reg?.Docs.Count(d => d.Governing) ?? 0:N0} governing documents · {built}"));
+        if (reg == null) { Note(ContractRegister.Building(P) ? "🏷 Nova is labelling the documents… this page refreshes by itself." : "Add a contract area above."); }
+        else
+        {
+            var types = ContractRegister.Types(P);
+            var cards = page.Add(new FlowLayoutPanel { AutoSize = true, WrapContents = true, MaximumSize = new Size(1000, 0), BackColor = Th.Bg });
+            var gov = reg.Docs.Where(d => d.Governing).ToList();
+            var counts = new List<(string Label, int N, string Tab)>
+            {
+                ("Agreement & LoA", gov.Count(d => d.Type == "Agreement & LoA"), "Agreement & LoA"), ("PTC", gov.Count(d => d.Type == "PTC"), "PTC"),
+                ("Conditions", gov.Count(d => d.Type.StartsWith("Conditions")), "Conditions"), ("Employer's req.", gov.Count(d => d.Type == "Employer's requirements"), "Employer's requirements"),
+                ("Spec documents", gov.Count(d => d.Type == "Specifications"), "Specifications"), ("BOQ", gov.Count(d => d.Type == "BOQ"), "BOQ"),
+                ("Addenda", gov.Count(d => d.Type == "Addenda / bulletins"), "Addenda / bulletins"), ("Drawings · latest", gov.Count(d => d.Type.StartsWith("Drawings")), "Drawings"),
+                ("EI · VO · VE · RFI", gov.Count(d => d.Type.StartsWith("Changes")), "Changes"),
+            };
+            foreach (var t in types) counts.Add((t.Name + (t.Acts == "check" ? " ✓" : ""), reg.Docs.Count(d => d.Type == t.Name && d.Governing), t.Name));
+            counts.Add(("Letters · reference", reg.Docs.Count(d => d.Status == "reference"), "Reference"));
+            foreach (var (label, n, tab) in counts)
+            {
+                var card = new Panel { Width = 104, Height = 54, BackColor = Color.FromArgb(0x1B, 0x20, 0x30), Margin = new Padding(0, 0, 6, 6), Cursor = Cursors.Hand };
+                var top = new Panel { Dock = DockStyle.Top, Height = 3, BackColor = Th.Accent };
+                var nl = new Label { Text = n.ToString("N0"), Font = Th.F(14, true), ForeColor = Th.Text, Location = new Point(8, 6), AutoSize = true };
+                var tl = new Label { Text = label, Font = Th.F(8), ForeColor = Th.Muted, Location = new Point(8, 32), AutoSize = true, MaximumSize = new Size(96, 0) };
+                card.Controls.AddRange(new Control[] { top, nl, tl });
+                var tb = tab;
+                foreach (Control c in new Control[] { card, nl, tl }) c.Click += (_, _) => { caTab = tb; Redraw(); };
+                cards.Controls.Add(card);
+            }
+            var eyeN = reg.Eyes.Sum(e => e.Paths.Count);
+            var tabs = page.Add(Th.Row());
+            foreach (var t in new[] { "All governing", "Specifications", "BOQ", "Drawings", "Changes", "Superseded", "Reference", "Never governs", "⚠ Needs your eye" })
+                tabs.Controls.Add(Th.B((caTab == t ? "● " : "") + (t == "⚠ Needs your eye" ? $"⚠ Needs your eye ({eyeN})" : t), () => { caTab = t; Redraw(); }, caTab == t));
+            if (caTab == "⚠ Needs your eye") EyePanel(P, reg, types, status, Say);
+            else
+            {
+                var fr = page.Add(Th.Row(false));
+                fr.Controls.Add(Th.L("🔎 Filter:", 10, Th.Text));
+                var fb = Th.Box(false); fb.Width = 380; fb.Text = caFilter; fr.Controls.Add(fb);
+                var g = Grid(330);
+                foreach (var (h, w) in new[] { ("Document", 300), ("Type", 170), ("Disc.", 50), ("Rev", 60), ("Date", 90), ("Status", 160), ("How Nova knows", 330), ("Folder", 260) })
+                    g.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = h, Width = w, ReadOnly = true });
+                IEnumerable<RegDoc> Pick() => caTab switch
+                {
+                    "All governing" => reg.Docs.Where(d => d.Governing),
+                    "Superseded" => reg.Docs.Where(d => d.Status == "superseded"),
+                    "Reference" => reg.Docs.Where(d => d.Status == "reference"),
+                    "Never governs" => reg.Docs.Where(d => d.Status == "never governs"),
+                    "Conditions" => reg.Docs.Where(d => d.Type.StartsWith("Conditions") && d.Governing),
+                    "Drawings" => reg.Docs.Where(d => d.Type.StartsWith("Drawings") && d.Governing),
+                    "Changes" => reg.Docs.Where(d => d.Type.StartsWith("Changes") && d.Governing),
+                    _ => reg.Docs.Where(d => d.Type == caTab && d.Status != "superseded"),
+                };
+                void Fill()
+                {
+                    g.Rows.Clear();
+                    var f = fb.Text.Trim();
+                    var rows = Pick().Where(d => f.Length == 0 || d.Path.Contains(f, StringComparison.OrdinalIgnoreCase) || d.Type.Contains(f, StringComparison.OrdinalIgnoreCase))
+                        .OrderBy(d => ContractRegister.Level(P, d.Type) is var l and > 0 ? l : 50).ThenBy(d => d.Type).ThenBy(d => d.Name).Take(3000).ToList();
+                    foreach (var d in rows)
+                    {
+                        var stt = d.Status == "superseded" ? "superseded by " + d.By : d.Governing ? "⚖ " + d.Status : d.Status;
+                        var i = g.Rows.Add(d.Name, d.Type + (d.Custom ? " ➕" : ""), d.Disc, d.Rev, d.Date.ToString("dd MMM yyyy"), stt, (d.Sure ? "" : "? ") + d.How, Path.GetFileName(Path.GetDirectoryName(d.Path) ?? ""));
+                        g.Rows[i].Tag = d; g.Rows[i].Cells[0].ToolTipText = d.Path;
+                        g.Rows[i].Cells[5].Style.ForeColor = d.Governing ? Th.Good : Th.Muted;
+                        if (!d.Governing) g.Rows[i].DefaultCellStyle.ForeColor = Th.Muted;
+                    }
+                    status.Text = $"{rows.Count:N0} shown{(rows.Count == 3000 ? " (first 3,000 — filter to narrow)" : "")} · double-click opens · select rows and ✎ Set the type to correct Nova";
+                }
+                fb.TextChanged += (_, _) => { caFilter = fb.Text; Fill(); };
+                Fill();
+                g.CellDoubleClick += (_, e) => { if (e.RowIndex >= 0 && g.Rows[e.RowIndex].Tag is RegDoc d) Shell.Open(d.Path); };
+                page.Add(g, true);
+                var gb = page.Add(Th.Row());
+                gb.Controls.Add(Th.B("✎ Set the type…", () =>
+                {
+                    var sel = g.SelectedRows.Cast<DataGridViewRow>().Select(r => r.Tag as RegDoc).Where(d => d != null).Select(d => d.Path).ToList();
+                    if (sel.Count == 0) return;
+                    TypeMenu(P, types, t => { try { ContractRegister.Decide(P, sel, t); status.Text = $"✓ {sel.Count} file(s) set to {t} — Nova remembers it."; } catch (Exception e) { status.Text = "⚠ " + e.Message; } }).Show(Cursor.Position);
+                }));
+                gb.Controls.Add(Th.B("📂 Open the folder", () => { if (g.CurrentRow?.Tag is RegDoc d) Shell.Open(Path.GetDirectoryName(d.Path) ?? ""); }));
+            }
+        }
         page.Add(status);
 
-        // the order of precedence
-        page.Add(Th.Section("⚖ Order of precedence · when two documents disagree, the higher one governs"));
+        // ③ the order of precedence (with your own types and “= same level”)
+        page.Add(Th.Section("③ Order of precedence · when two documents disagree, the higher one governs"));
+        var order = ContractArea.Order(P).ToList();
         var ob = page.Add(Th.Row(false));
-        var lb = new ListBox { Width = 380, Height = 200, BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.FixedSingle, Font = Th.F(10) };
-        void Lines() { lb.Items.Clear(); for (int i = 0; i < order.Count; i++) lb.Items.Add($"{i + 1}   {order[i]}"); }
+        var lb = new ListBox { Width = 470, Height = 260, BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.FixedSingle, Font = Th.F(10) };
+        void Lines()
+        {
+            var sel = lb.SelectedIndex; lb.Items.Clear();
+            int lvl = 0;
+            var ts = ContractRegister.Types(P);
+            foreach (var o in order)
+            {
+                var same = o.StartsWith("=") && lvl > 0; if (!same) lvl++;
+                var t = ts.FirstOrDefault(x => x.Name == ContractRegister.Bare(o));
+                lb.Items.Add($"{(same ? "= " + lvl : lvl.ToString()),-5} {ContractRegister.Bare(o)}{(t != null ? $"   ➕ yours · {(t.Acts == "check" ? "check list" : t.Acts)}" : "")}");
+            }
+            if (sel >= 0 && sel < lb.Items.Count) lb.SelectedIndex = sel;
+        }
         Lines();
         ob.Controls.Add(lb);
         var side = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false };
+        void Saved(string msg = "✓ Order saved.") { try { ContractArea.Save(P, ContractArea.Of(P), order); ContractRegister.Invalidate(P); status.Text = msg; } catch (Exception e) { status.Text = "⚠ " + e.Message; } }
         void MoveRow(int d)
         {
             var i = lb.SelectedIndex; var j = i + d;
             if (i < 0 || j < 0 || j >= order.Count) return;
-            (order[i], order[j]) = (order[j], order[i]); Lines(); lb.SelectedIndex = j;
-            Pull(); Fill();
+            (order[i], order[j]) = (order[j], order[i]); lb.SelectedIndex = -1; Lines(); lb.SelectedIndex = j; Saved();
         }
         side.Controls.Add(Th.B("↑ Up", () => MoveRow(-1)));
         side.Controls.Add(Th.B("↓ Down", () => MoveRow(1)));
+        side.Controls.Add(Th.B("= Same level as above", () =>
+        {
+            var i = lb.SelectedIndex; if (i <= 0) return;
+            order[i] = order[i].StartsWith("=") ? ContractRegister.Bare(order[i]) : "=" + order[i]; Lines(); Saved();
+        }));
+        side.Controls.Add(Th.B("➕ Add a document type…", () =>
+        {
+            using var f = new DocTypeForm(P, null, order);
+            if (f.ShowDialog(this) == DialogResult.OK) Redraw();
+        }, true));
+        side.Controls.Add(Th.B("✎ Edit", () =>
+        {
+            if (lb.SelectedIndex < 0) return;
+            var name = ContractRegister.Bare(order[lb.SelectedIndex]);
+            var t = ContractRegister.Types(P).FirstOrDefault(x => x.Name == name);
+            if (t == null) { status.Text = "Built-in types keep their name — move them with ↑ ↓, or add your own type."; return; }
+            using var f = new DocTypeForm(P, t, order);
+            if (f.ShowDialog(this) == DialogResult.OK) Redraw();
+        }));
+        side.Controls.Add(Th.B("🗑 Remove", () =>
+        {
+            if (lb.SelectedIndex < 0) return;
+            var name = ContractRegister.Bare(order[lb.SelectedIndex]);
+            if (ContractRegister.Types(P).Any(x => x.Name == name))
+            {
+                if (MessageBox.Show(this, $"Remove your type “{name}”? Its documents are labelled again without it.", "📜 Contract area", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
+                try { ContractRegister.RemoveType(P, name); Redraw(); } catch (Exception e) { status.Text = "⚠ " + e.Message; }
+            }
+            else { order.RemoveAt(lb.SelectedIndex); Lines(); Saved("✓ Removed from the order (it no longer governs by rank)."); }
+        }));
         side.Controls.Add(Th.B("📖 Read it from the contract", () =>
         {
             status.Text = "📖 Looking for the clause that ranks the documents…";
-            var my = cts = new CancellationTokenSource();
-            ContractArea.OrderFromContract(proj.Code, Say, my.Token).ContinueWith(t => Program.UiContext.Post(_ =>
+            ContractArea.OrderFromContract(P, Say, CancellationToken.None).ContinueWith(t => Program.UiContext.Post(_ =>
             {
                 if (status.IsDisposed) return;
                 if (t.IsFaulted || t.IsCanceled) { status.Text = "⚠ " + (t.Exception?.GetBaseException().Message ?? "stopped"); return; }
                 var (o, clause) = t.Result;
                 if (o == null) { status.Text = clause; return; }
+                foreach (var ty in ContractRegister.Types(P)) if (!o.Contains(ty.Name)) o.Add(ty.Name);
                 if (MessageBox.Show(this, "Nova found the order in the contract (" + clause + "):\n\n" + string.Join("\n", o.Select((x, i) => $"{i + 1}  {x}")) + "\n\nUse this order?", "⚖ Order of precedence", MessageBoxButtons.YesNo) != DialogResult.Yes) { status.Text = ""; return; }
-                order.Clear(); order.AddRange(o); Lines(); Pull(); Fill();
-                try { ContractArea.Save(proj.Code, entries, order, clause); status.Text = "✓ Order saved · " + clause; } catch (Exception e) { status.Text = "⚠ " + e.Message; }
+                order.Clear(); order.AddRange(o); Lines();
+                try { ContractArea.Save(P, ContractArea.Of(P), order, clause); ContractRegister.Invalidate(P); status.Text = "✓ Order saved · " + clause; } catch (Exception e) { status.Text = "⚠ " + e.Message; }
             }, null));
-        }, true));
-        side.Controls.Add(Th.B("↺ The usual order", () => { order.Clear(); order.AddRange(ContractArea.DefaultOrder); Lines(); Pull(); Fill(); }));
+        }));
+        side.Controls.Add(Th.B("↺ The usual order", () => { order.Clear(); order.AddRange(ContractArea.DefaultOrder); foreach (var ty in ContractRegister.Types(P)) order.Add(ty.Name); Lines(); Saved(); }));
         ob.Controls.Add(side);
-        var clauseNow = ContractArea.OrderClause(proj.Code);
-        Note((clauseNow.Length > 0 ? "📌 " + clauseNow + " · " : "") + "After signing, a change (EI, VO, PMI, VE, an RFI answer) wins on its own item — the newest first. Drafts, tender (IFT) sets and reference folders never govern. Press 💾 Save after changing the order.");
+        var clauseNow = ContractArea.OrderClause(P);
+        Note((clauseNow.Length > 0 ? "📌 " + clauseNow + " · " : "") + "After signing, a change (EI, VO, PMI, VE, an RFI answer) wins on its own item — the newest first. Drafts and tender (IFT) never govern; letters are reference only. Every change is saved at once.");
 
-        // 🧪 which document governs?
-        page.Add(Th.Section("🧪 Which document governs? · try it (files already read — instant, no AI)"));
+        // ④ which document governs?
+        page.Add(Th.Section("④ 🧪 Which document governs? · files already read — instant, no AI"));
         var tr = page.Add(Th.Row(false));
         var q = Th.Box(false); q.Width = 420; q.Text = "waterproofing membrane thickness";
         tr.Controls.Add(q);
@@ -330,19 +409,92 @@ partial class SettingsForm
         tr.Controls.Add(Th.B("⚖ Which governs?", () =>
         {
             outBox.Controls.Clear();
-            var hits = ContractArea.GovernsTest(proj.Code, q.Text);
-            if (hits.Count == 0) { outBox.Controls.Add(Th.Wrap("Nothing found in the contract-area files read so far. (Save the contract area, then let 📖 reading finish — 📶 Indexing progress shows how far it is.)", 9.5f, Th.Muted)); page.FitAll(); return; }
+            var words = System.Text.RegularExpressions.Regex.Split(q.Text, @"[^\p{L}\p{N}\.\-]+").Where(w => w.Length > 2).ToList();
+            var (hits, notUsed) = ContractRegister.Governs(P, words);
+            if (hits.Count == 0) { outBox.Controls.Add(Th.Wrap("Nothing found in the contract documents read so far (📶 Indexing progress shows how far the reading is).", 9.5f, Th.Muted)); page.FitAll(); return; }
             var top = true;
             foreach (var h in hits)
             {
-                var lab = Th.Wrap($"{(top ? "⚖ GOVERNS → " : "      ")}{h.Role}{(h.Rank > 0 ? " (rank " + h.Rank + ")" : "")} · {Path.GetFileName(h.Path)} · {h.Loc}\n      “{h.Text.Replace("\n", " ").Trim()}…”", 9.5f, top ? Th.Good : Th.Text);
-                lab.Cursor = Cursors.Hand; var hp = h.Path; lab.Click += (_, _) => Shell.Open(hp);
+                var lab = Th.Wrap($"{(top ? "⚖ GOVERNS → " : "      ")}{h.Doc.Type}{(h.Level is > 0 and < 50 ? " (level " + h.Level + ")" : "")} · {h.Doc.Name}{(h.Doc.Rev.Length > 0 ? " · " + h.Doc.Rev : "")} · {h.Loc}\n      “{h.Text.Replace("\n", " ").Trim()[..Math.Min(240, h.Text.Replace("\n", " ").Trim().Length)]}…”", 9.5f, top ? Th.Good : Th.Text);
+                lab.Cursor = Cursors.Hand; var hp = h.Doc.Path; lab.Click += (_, _) => Shell.Open(hp);
                 outBox.Controls.Add(lab);
                 top = false;
             }
+            if (notUsed.Count > 0) outBox.Controls.Add(Th.Wrap("Not used: " + string.Join(" · ", notUsed), 9, Th.Muted));
             page.FitAll();
         }, true));
         page.Add(outBox, true);
+
+        // live: the register finished → refresh the page
+        Action<string> upd = null;
+        upd = p => Program.UiContext.Post(_ => { if (status.IsDisposed) { ContractRegister.Updated -= upd; return; } if (p == P) Redraw(); }, null);
+        ContractRegister.Updated += upd;
+        var tm = new System.Windows.Forms.Timer { Interval = 1500 };
+        tm.Tick += (_, _) => { if (status.IsDisposed) { tm.Stop(); tm.Dispose(); ContractRegister.Updated -= upd; return; } var ph = ContractRegister.Phase(P); if (ph.Length > 0) status.Text = ph; };
+        tm.Start();
+    }
+
+    ContextMenuStrip TypeMenu(string P, List<DocType> types, Action<string> pick)
+    {
+        var m = new ContextMenuStrip();
+        foreach (var t in ContractRegister.BuiltIn.Concat(types.Select(x => x.Name))) { var tt = t; m.Items.Add(tt, null, (_, _) => pick(tt)); }
+        return m;
+    }
+
+    void EyePanel(string P, ContractReg reg, List<DocType> types, Label status, Action<string> say)
+    {
+        Note("Only what Nova could not settle by itself. Each answer is kept in 🧠 Nova Brain, so the same case is not asked again.");
+        if (reg.Eyes.Count == 0) { Note("✓ Nothing to check — Nova settled every document.", Th.Good); return; }
+        foreach (var e in reg.Eyes)
+        {
+            var box = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, BackColor = Color.FromArgb(0x1B, 0x20, 0x30), Padding = new Padding(10, 6, 10, 6), Margin = new Padding(0, 4, 0, 4) };
+            box.Controls.Add(Th.L(e.Title, 10.5f, e.Kind == "scan" ? Th.Warn : Th.Text));
+            box.Controls.Add(Th.Wrap(string.Join(" · ", e.Paths.Take(8).Select(Path.GetFileName)) + (e.Paths.Count > 8 ? $" · … and {e.Paths.Count - 8} more" : ""), 9.5f, Th.Text));
+            box.Controls.Add(Th.Wrap(e.Detail, 9, Th.Muted));
+            var row = new FlowLayoutPanel { AutoSize = true, WrapContents = true, MaximumSize = new Size(980, 0) };
+            var paths = e.Paths;
+            void Done(string answer, IEnumerable<string> which = null) { try { ContractRegister.Decide(P, which ?? paths, answer); status.Text = "✓ Kept — Nova labels again…"; } catch (Exception x) { status.Text = "⚠ " + x.Message; } }
+            switch (e.Kind)
+            {
+                case "scan":
+                    row.Controls.Add(Th.B("✦ Read with Gemini OCR (page images, your consent)", () =>
+                    {
+                        if (MessageBox.Show(this, $"Send the PAGE IMAGES of {paths.Count} scanned file(s) to Google Gemini to read them? (🔒 private folders never; nothing else is sent.)", "✦ Gemini OCR", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
+                        Task.Run(() => ContractRegister.ReadScans(paths, say, CancellationToken.None)).ContinueWith(t => say(t.IsFaulted ? "⚠ " + t.Exception?.GetBaseException().Message : $"✓ {t.Result} page(s) read with Gemini — labelling again…"));
+                    }, true));
+                    row.Controls.Add(Th.B("⏳ Try local OCR again (up to 10 min each, when idle)", () => { Ocr.Forgive(paths, true); Projects.ReadAll.Now(); Done("!skip"); status.Text = "✓ Nova tries Windows OCR again with more patience."; }));
+                    row.Controls.Add(Th.B("Skip", () => Done("!skip")));
+                    break;
+                case "dup":
+                    row.Controls.Add(Th.B("Use the newest of each", () =>
+                    {
+                        var older = reg.Docs.Where(d => paths.Contains(d.Path)).GroupBy(d => d.Type + "|" + d.Key).SelectMany(g => g.OrderByDescending(d => d.Date).Skip(1)).Select(d => d.Path).ToList();
+                        Done("!old", older);
+                    }, true));
+                    row.Controls.Add(Th.B("Open them", () => { foreach (var p in paths.Take(6)) Shell.Open(p); }));
+                    break;
+                case "draft":
+                    row.Controls.Add(Th.B("Signed — they govern", () => Done("!signed"), true));
+                    row.Controls.Add(Th.B("Draft — never governs", () => Done("Draft")));
+                    row.Controls.Add(Th.B("Open", () => { foreach (var p in paths.Take(4)) Shell.Open(p); }));
+                    break;
+                default:
+                    var canAi = Ai.Active() != null && !Ai.QuotaOut && FolderAsk.Sees != "never";
+                    var ab = Th.B("✦ Ask the AI (first 1,500 characters only)", () =>
+                    {
+                        if (FolderAsk.Sees == "ask" && MessageBox.Show(this, $"Send the file name and the first ~1,500 characters of up to 30 documents to the AI to know their type? (Never whole documents; 🔒 private folders never.)", "✦ AI", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
+                        ContractRegister.AskAi(P, paths.Take(30).ToList(), say, CancellationToken.None).ContinueWith(t => say(t.IsFaulted ? "⚠ " + t.Exception?.GetBaseException().Message : $"✓ The AI labelled {t.Result} — labelling again…"));
+                    }, true);
+                    ab.Enabled = canAi;
+                    row.Controls.Add(ab);
+                    row.Controls.Add(Th.B("✎ Set the type…", () => TypeMenu(P, types, t => Done(t)).Show(Cursor.Position)));
+                    row.Controls.Add(Th.B("Reference only", () => Done(ContractRegister.Letters)));
+                    row.Controls.Add(Th.B("Open the first", () => Shell.Open(paths[0])));
+                    break;
+            }
+            box.Controls.Add(row);
+            page.Add(box);
+        }
     }
 
     static DataGridView Grid(int height)
@@ -442,5 +594,108 @@ class ContractProposeForm : NovaForm
         if (!canAi && unclear.Count > 0) status.Text = Ai.QuotaOut ? "💳 AI quota used up — confirm the unclear ones yourself." : "✦ AI off for folders (Settings → Email & AI) — confirm the unclear ones yourself.";
         Controls.Add(g); Controls.Add(bottom); Controls.Add(top);
         FormClosing += (_, _) => cts?.Cancel();
+    }
+}
+
+/// <summary>➕ Your own kind of contract document (e.g. Approved Vendor List): name, how Nova recognizes it, where it ranks, what it does.</summary>
+class DocTypeForm : NovaForm
+{
+    public DocTypeForm(string project, DocType edit, List<string> order)
+    {
+        Text = (edit == null ? "➕ Add a document type · " : "✎ Edit a document type · ") + project;
+        Width = 820; Height = 720; StartPosition = FormStartPosition.CenterParent;
+        var t = edit ?? new DocType();
+        var flow = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(14), BackColor = Th.Bg };
+        Label H(string s) { var l = Th.L(s, 10.5f, Th.Text); l.Font = Th.F(10.5f, true); l.Margin = new Padding(0, 10, 0, 2); return l; }
+        TextBox Box(string v, int w = 740) { var b = Th.Box(false); b.Width = w; b.Text = v; return b; }
+        flow.Controls.Add(Th.Wrap("Nova finds these documents in your contract areas by itself and keeps the latest revision.", 9.5f, Th.Muted));
+        flow.Controls.Add(H("1 · Name"));
+        var name = Box(t.Name); flow.Controls.Add(name);
+        flow.Controls.Add(H("2 · How Nova recognizes it — words separated by commas (Nova proposes them; edit freely)"));
+        flow.Controls.Add(Th.L("In the file name:", 9.5f, Th.Muted));
+        var nw = Box(string.Join(", ", t.NameWords)); flow.Controls.Add(nw);
+        flow.Controls.Add(Th.L("Inside page 1:", 9.5f, Th.Muted));
+        var pw = Box(string.Join(", ", t.PageWords)); flow.Controls.Add(pw);
+        flow.Controls.Add(Th.L("Document code (optional), e.g. AVL in SLV-ZUC-AVL-001:", 9.5f, Th.Muted));
+        var code = Box(t.Code, 160); flow.Controls.Add(code);
+        flow.Controls.Add(H("3 · Where it ranks"));
+        var levels = ContractRegister.Levels(project).Where(l => l.Type != t.Name).ToList();
+        var rank = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 520, BackColor = Th.Card, ForeColor = Th.Text, FlatStyle = FlatStyle.Flat };
+        var choices = new List<(int At, bool Same)>();
+        for (int i = 0; i < levels.Count; i++)
+        {
+            rank.Items.Add($"above {levels[i].Type} (level {levels[i].Level})"); choices.Add((i, false));
+            rank.Items.Add($"= same level as {levels[i].Type} (level {levels[i].Level})"); choices.Add((i, true));
+        }
+        rank.Items.Add("at the end"); choices.Add((levels.Count, false));
+        var cur = order.FindIndex(o => ContractRegister.Bare(o) == t.Name);
+        var specs = levels.FindIndex(l => l.Type == "Specifications");
+        rank.SelectedIndex = cur >= 0 ? Math.Min(rank.Items.Count - 1, Math.Max(0, (order[cur].StartsWith("=") ? (cur - 1) * 2 + 1 : cur * 2))) : t.Acts == "check" && specs >= 0 ? specs * 2 + 1 : rank.Items.Count - 1;
+        flow.Controls.Add(rank);
+        flow.Controls.Add(H("4 · What it does in a review"));
+        var acts = new[] { ("governs", "⚖ Governs — its text wins like any contract document"), ("check", "✓ Check list — the brand / manufacturer / product in a submittal must be on it"), ("reference", "📎 Reference only — shown, never decides") };
+        var radios = acts.Select(a => new RadioButton { Text = a.Item2, AutoSize = true, ForeColor = Th.Text, Font = Th.F(10), Checked = t.Acts == a.Item1 }).ToList();
+        foreach (var r in radios) flow.Controls.Add(r);
+        void SetActs(string a) { for (int i = 0; i < acts.Length; i++) radios[i].Checked = acts[i].Item1 == a; }
+        flow.Controls.Add(H("For Nova (one sentence: what these documents are, how to use them)"));
+        var desc = Box(t.Desc); flow.Controls.Add(desc);
+        name.Leave += (_, _) =>
+        {
+            if (edit != null || name.Text.Trim().Length < 3 || nw.Text.Trim().Length > 0) return;
+            var s = ContractRegister.Suggest(name.Text);
+            nw.Text = string.Join(", ", s.NameWords); pw.Text = string.Join(", ", s.PageWords); code.Text = s.Code;
+            if (s.Desc.Length > 0 && t.Desc.Length == 0) desc.Text = s.Desc;
+            SetActs(s.Acts);
+        };
+        var found = Th.Wrap("", 9.5f, Th.Good); found.MaximumSize = new Size(760, 0);
+        DocType Read() => new()
+        {
+            Name = name.Text.Trim(), Code = code.Text.Trim(), Desc = desc.Text.Trim(),
+            Acts = acts[Math.Max(0, radios.FindIndex(r => r.Checked))].Item1,
+            NameWords = nw.Text.Split(',').Select(x => x.Trim()).Where(x => x.Length > 1).Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+            PageWords = pw.Text.Split(',').Select(x => x.Trim()).Where(x => x.Length > 2).Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+        };
+        var row = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0, 10, 0, 0) };
+        row.Controls.Add(Th.B("🔎 Find them now", () =>
+        {
+            var d = Read(); if (d.Name.Length == 0) return;
+            found.Text = "🔎 looking in your contract areas…";
+            Task.Run(() => ContractRegister.Preview(project, d)).ContinueWith(tk => Program.UiContext.Post(_ =>
+            {
+                if (found.IsDisposed) return;
+                var l = tk.IsFaulted ? new List<RegDoc>() : tk.Result;
+                found.Text = l.Count == 0 ? "Nothing found yet with these words (files Nova hasn't listed or read yet are not counted)." :
+                    $"🔎 Found now ({l.Count}{(l.Count > 60 ? "+" : "")}):\n" + string.Join("\n", l.OrderByDescending(x => x.Governing).Take(8).Select(x => $"{(x.Governing ? "✓" : "·")} {x.Name} · {x.Date:dd MMM yyyy} · {(x.Status == "superseded" ? "superseded by " + x.By : x.Status)} · {x.How}"));
+            }, null));
+        }));
+        row.Controls.Add(Th.B(edit == null ? "💾 Add to " + project : "💾 Save", () =>
+        {
+            var d = Read();
+            if (d.Name.Length < 2) { found.Text = "⚠ Give it a name."; return; }
+            if (ContractRegister.BuiltIn.Contains(d.Name)) { found.Text = "⚠ That name is a built-in type — choose another."; return; }
+            if (d.NameWords.Count == 0 && d.PageWords.Count == 0 && d.Code.Length == 0) { found.Text = "⚠ Give at least one word or a code, so Nova can recognize it."; return; }
+            var o = order.Where(x => ContractRegister.Bare(x) != t.Name && ContractRegister.Bare(x) != d.Name).ToList();
+            var (at, same) = choices[Math.Max(0, rank.SelectedIndex)];
+            // map the chosen level position back to the list (levels has the same items as o, in order)
+            var idx = Math.Min(at, o.Count);
+            if (same) { idx = Math.Min(at + 1, o.Count); while (idx < o.Count && o[idx].StartsWith("=")) idx++; o.Insert(idx, "=" + d.Name); }
+            else
+            {
+                o.Insert(idx, d.Name);
+                if (idx + 1 < o.Count && o[idx + 1].StartsWith("=")) { /* the one below kept its “same level as” the new one: fine */ }
+            }
+            try
+            {
+                ContractRegister.SaveType(project, d, edit?.Name);
+                ContractArea.Save(project, ContractArea.Of(project), o);
+                ContractRegister.Invalidate(project);
+                DialogResult = DialogResult.OK;
+            }
+            catch (Exception e) { found.Text = "⚠ " + e.Message; }
+        }, true));
+        row.Controls.Add(Th.B("Cancel", () => DialogResult = DialogResult.Cancel));
+        flow.Controls.Add(row);
+        flow.Controls.Add(found);
+        Controls.Add(flow);
     }
 }

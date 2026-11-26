@@ -393,6 +393,7 @@ class NovaContext : ApplicationContext
             UiWatch.Step("minute check: my work"); Work.Tick();
             UiWatch.Step("minute check: prompts"); Prompts.Tick();
             UiWatch.Step("minute check: send check"); SendCheck.Ensure();
+            UiWatch.Step("minute check: contract register"); ContractRegister.Tick();
             UiWatch.Step("idle");
             if (ticks++ % 60 == 0 && Updater.Due) { UiWatch.Step("hourly: update check"); await Updater.Check(); Updater.Offer(false); UiWatch.Step("idle"); }
         }

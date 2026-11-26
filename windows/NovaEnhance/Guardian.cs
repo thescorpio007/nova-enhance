@@ -130,7 +130,7 @@ static class Guard
         var i = Array.IndexOf(args, "--guardian");
         if (i < 0 || i + 1 >= args.Length || !int.TryParse(args[i + 1], out var pid)) return 0;
         Process nova;
-        try { nova = Process.GetProcessById(pid); } catch { return 0; }
+        try { nova = Process.GetProcessById(pid); _ = nova.Handle; } catch { return 0; }   // the handle is kept: the exit code stays readable
         var restarts = new List<DateTime>();
         int frozenChecks = 0;
         while (true)
@@ -189,10 +189,11 @@ static class Guard
             {
                 var e = log.Entries[i];
                 if (DateTime.Now - e.TimeGenerated > TimeSpan.FromMinutes(3)) break;
-                if (e.Source != "Application Error" && e.Source != ".NET Runtime") continue;
+                if (e.Source is not ("Application Error" or ".NET Runtime" or "Application Hang" or "Windows Error Reporting")) continue;
                 var m = e.Message ?? "";
                 if (!m.Contains("NovaEnhance", StringComparison.OrdinalIgnoreCase)) continue;
                 string F(string label) { var x = System.Text.RegularExpressions.Regex.Match(m, label + @"[^:]*:\s*([^\r\n]+)"); return x.Success ? x.Groups[1].Value.Trim() : ""; }
+                if (e.Source == "Application Hang") return "\r\n  ⚙ Windows: the window was not responding and was closed (Application Hang) — see the 🧊 freeze line before it";
                 var mod = F("Faulting module name"); var code = F("Exception code"); var path = F("Faulting module path");
                 if (mod.Length > 0) return $"\r\n  ⚙ faulting module: {mod} · exception {code}{(path.Length > 0 ? " · " + path : "")}";
                 return "\r\n  ⚙ .NET: " + (m.Length > 600 ? m[..600] : m).Replace("\r\n", " ");
@@ -217,6 +218,14 @@ static class Guard
             File.Delete(CrashFile);
             if (text.Length == 0) return "";
             var last = Activity.Read(1).TakeLast(15).Select(o => $"{o["start"]} · {o["feature"]} · {o["title"]} · {o["ms"]} ms · {o["result"]}");
+            // 🧊 a freeze just before the close is usually the cause (Windows or you closed a window that was not responding)
+            try
+            {
+                var fz = Path.Combine(Paths.Logs, "ui-freeze.txt");
+                if (File.Exists(fz) && DateTime.Now - File.GetLastWriteTime(fz) < TimeSpan.FromMinutes(20))
+                    text += "\r\n  🧊 just before: " + string.Join(" | ", File.ReadAllLines(fz).TakeLast(2));
+            }
+            catch { }
             var lastCrash = Path.Combine(Paths.Logs, "last-crash.txt");
             var trace = File.Exists(lastCrash) && DateTime.Now - File.GetLastWriteTime(lastCrash) < TimeSpan.FromMinutes(15) ? File.ReadAllText(lastCrash) : "";
             Log.Error("🛡 guardian", new Exception(text + "\r\n\r\nLast tasks before it:\r\n" + string.Join("\r\n", last) + (trace.Length > 0 ? "\r\n\r\nTechnical trace:\r\n" + trace : "")));
@@ -310,9 +319,13 @@ static class UiWatch
         new Thread(() =>
         {
             DateTime? since = null; string what = ""; bool wrote30 = false;
+            var loop = DateTime.UtcNow;
             while (true)
             {
                 Thread.Sleep(1000);
+                // 💤 the PC slept (this thread did not run either): not a freeze — start counting again
+                if (DateTime.UtcNow - loop > TimeSpan.FromSeconds(10)) { Interlocked.Exchange(ref beat, DateTime.UtcNow.Ticks); since = null; }
+                loop = DateTime.UtcNow;
                 var silent = DateTime.UtcNow - new DateTime(Interlocked.Read(ref beat), DateTimeKind.Utc);
                 if (silent > TimeSpan.FromSeconds(5))
                 {

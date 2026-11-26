@@ -40,7 +40,16 @@ static class ContractArea
     static readonly Regex SetRx = new(@"\[contract\.([a-z0-9\-_.]+?)\.(\w+)\s*=\s*([^\]]+)\]", RegexOptions.IgnoreCase);
     static Dictionary<string, (List<ContractEntry> Entries, List<string> Order, string Clause)> cache;
     static readonly object L = new();
+    static Dictionary<string, JsonObject> cfgs = new(StringComparer.OrdinalIgnoreCase);
     static ContractArea() { Brain.Changed += () => { lock (L) { cache = null; first = null; } }; }
+
+    /// <summary>The project's settings for the register: contract areas, your own document types, your answers (Needs your eye).</summary>
+    public static JsonObject Cfg(string project)
+    {
+        Load();
+        lock (L) return cfgs.TryGetValue(project ?? "", out var j) ? (JsonObject)j.DeepClone() : new JsonObject();
+    }
+    public static void SaveCfg(string project, JsonObject cfg) => Save(project, Of(project), Order(project), OrderClause(project), cfg);
 
     static Dictionary<string, (List<ContractEntry>, List<string>, string)> Load()
     {
@@ -48,6 +57,7 @@ static class ContractArea
         {
             if (cache != null) return cache;
             var res = new Dictionary<string, (List<ContractEntry>, List<string>, string)>(StringComparer.OrdinalIgnoreCase);
+            var cf = new Dictionary<string, JsonObject>(StringComparer.OrdinalIgnoreCase);
             try
             {
                 foreach (var (sec, r) in Brain.Rules(Brain.Snapshot()))
@@ -59,6 +69,7 @@ static class ContractArea
                         if (!res.TryGetValue(p, out var t)) res[p] = t = (new List<ContractEntry>(), new List<string>(), "");
                         if (what == "order") { res[p] = (t.Item1, val.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList(), t.Item3); continue; }
                         if (what == "clause") { res[p] = (t.Item1, t.Item2, Encoding.UTF8.GetString(Convert.FromBase64String(val))); continue; }
+                        if (what == "cfg") { try { cf[p] = JsonNode.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(val))) as JsonObject ?? new JsonObject(); } catch { } continue; }
                         try
                         {
                             var j = JsonNode.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(val))) as JsonObject;
@@ -74,6 +85,7 @@ static class ContractArea
                 }
             }
             catch (Exception e) { Log.Warn("contract area", "read: " + e.Message); }
+            cfgs = cf;
             return cache = res;
         }
     }
@@ -83,8 +95,9 @@ static class ContractArea
     public static string OrderClause(string project) => Load().TryGetValue(project ?? "", out var t) ? t.Item3 : "";
 
     /// <summary>Saves a project's contract area into 🧠 Nova Brain (one rule per folder + the order) — a version is kept before.</summary>
-    public static void Save(string project, List<ContractEntry> entries, List<string> order, string clause = null)
+    public static void Save(string project, List<ContractEntry> entries, List<string> order, string clause = null, JsonObject cfg = null)
     {
+        cfg ??= Cfg(project);
         if (!Brain.Unlocked) throw new InvalidOperationException("Open 🧠 Nova Brain first (its password) — the contract area is kept inside it.");
         var p = project.ToUpperInvariant();
         var key = Regex.Replace(p.ToLowerInvariant(), @"[^a-z0-9\-_]", "");
@@ -120,6 +133,14 @@ static class ContractArea
             });
             n++;
         }
+        if (cfg.Count > 0)
+            rules.Add(new JsonObject
+            {
+                ["id"] = $"CA-{p}-X", ["title"] = $"{p} · contract areas, your document types and answers", ["by"] = "You · 📜 Contract area", ["when"] = now,
+                ["text"] = $"{p}: contract areas " + string.Join(" · ", (cfg["areas"] as JsonArray ?? new JsonArray()).Select(a => a?.ToString())) +
+                           ((cfg["types"] as JsonArray)?.Count > 0 ? "; your document types: " + string.Join(", ", (cfg["types"] as JsonArray).Select(t => t?["name"]?.ToString())) : "") +
+                           $". [contract.{key}.cfg = {Convert.ToBase64String(Encoding.UTF8.GetBytes(cfg.ToJsonString()))}]"
+            });
         Brain.Commit(b, "You · 📜 Contract area", $"{p}: {entries.Count} folder(s) · order of precedence");
         lock (L) { cache = null; first = null; }
     }
@@ -131,14 +152,23 @@ static class ContractArea
     {
         lock (L) if (first != null && DateTime.Now - firstAt < TimeSpan.FromMinutes(2)) return first;
         var res = new List<string>();
-        try { foreach (var (_, t) in Load()) res.AddRange(t.Item1.Where(e => Governs(e.Role)).OrderBy(e => e.Rank == 0 ? 99 : e.Rank).Select(e => e.Path)); } catch { }
+        try
+        {
+            foreach (var (proj, t) in Load())
+            {
+                res.AddRange(ContractRegister.Areas(proj));
+                res.AddRange(t.Item1.Where(e => Governs(e.Role)).OrderBy(e => e.Rank == 0 ? 99 : e.Rank).Select(e => e.Path));
+            }
+            res = res.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        }
+        catch { }
         lock (L) { first = res; firstAt = DateTime.Now; }
         return res;
     }
 
     // ------------------------------------------------------------------ ✦ proposing a role: the name, then the first pages
 
-    static readonly (Regex Rx, string Role, int W)[] NameRules =
+    internal static readonly (Regex Rx, string Role, int W)[] NameRules =
     {
         (new(@"\bdraft\b|\b_td\b|for comments", RegexOptions.IgnoreCase), "Draft", 3),
         (new(@"render|photo|picture|_old\b|\bold\b|backup|archive|superseded|recycle", RegexOptions.IgnoreCase), "Exclude", 3),
@@ -160,7 +190,7 @@ static class ContractArea
         (new(@"\bplans?\b|drawings?", RegexOptions.IgnoreCase), "Drawings · IFC", 1),
     };
 
-    static readonly (Regex Rx, string Role, int W, string Tag)[] PageRules =
+    internal static readonly (Regex Rx, string Role, int W, string Tag)[] PageRules =
     {
         (new(@"form of agreement|this agreement is made|contract agreement|letter of acceptance|letter of award", RegexOptions.IgnoreCase), "Agreement & LoA", 4, "agreement"),
         (new(@"post[\s\-]?tender clarification", RegexOptions.IgnoreCase), "PTC", 4, "post-tender clarifications"),
@@ -176,7 +206,7 @@ static class ContractArea
         (new(@"baseline (programme|schedule)|gantt|critical path", RegexOptions.IgnoreCase), "Programme / schedule", 3, "programme"),
         (new(@"\bdraft\b|for comments|not for construction", RegexOptions.IgnoreCase), "Draft", 3, "draft"),
     };
-    static readonly Regex Signed = new(@"for and on behalf|signed|signature|witness|contract document|stamp", RegexOptions.IgnoreCase);
+    internal static readonly Regex Signed = new(@"for and on behalf|signed|signature|witness|contract document|stamp", RegexOptions.IgnoreCase);
     static readonly Regex DateRx = new(@"\b(\d{1,2})(st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(20\d\d)\b|\b(20\d\d)[\-/\.](\d{2})[\-/\.](\d{2})\b", RegexOptions.IgnoreCase);
     static readonly string[] SampleExt = { ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".msg" };
 

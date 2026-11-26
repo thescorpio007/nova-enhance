@@ -370,6 +370,23 @@ static class Smoke
             Ok(ContractArea.DefaultRank("Agreement & LoA") == 1 && ContractArea.DefaultRank("BOQ") == 9, "contract area: the usual order of precedence");
             try { Directory.Delete(ca, true); } catch { }
         }
+        {
+            // 📜 contract register: each DOCUMENT gets its type (not the folder)
+            var area = @"C:\NovaTest\Contract";
+            Projects.FileRow Row(string rel) => new() { Path = area + "\\" + rel, Name = Path.GetFileName(rel), Modified = new DateTime(2025, 3, 7), Size = 1000 };
+            var areas = new List<string> { area };
+            var avl = new DocType { Name = "Approved Vendor List", Code = "AVL", Acts = "check", NameWords = new() { "vendor list" } };
+            var none = new Dictionary<string, string>();
+            var d1 = ContractRegister.Label("TST", Row(@"_Drawings\SLV-MZA-AR-DRW-GF-TLT-20118_Rev04-IFC.pdf"), new(), none, areas);
+            Ok(d1.Type.StartsWith("Drawings"), "contract register: a numbered drawing is a drawing (" + d1.Type + ")");
+            var d2 = ContractRegister.Label("TST", Row(@"Vendors\SLV-ZUC-AVL-001_R02 Approved Vendor List.pdf"), new() { avl }, none, areas);
+            Ok(d2.Type == "Approved Vendor List" && d2.Custom && d2.Acts == "check", "contract register: your own type (Approved Vendor List) is found by its code");
+            var d3 = ContractRegister.Label("TST", Row(@"_TD draft\Vol 1 notes.docx"), new(), none, areas);
+            Ok(d3.Type == "Draft", "contract register: a weak guess inside a draft folder is a draft (" + d3.Type + ")");
+            var d4 = ContractRegister.Label("TST", Row(@"misc\anything.pdf"), new(), new() { [area + @"\misc\anything.pdf"] = "BOQ" }, areas);
+            Ok(d4.Type == "BOQ" && d4.How.Contains("your answer"), "contract register: your answer wins");
+            Ok(ContractRegister.Level("TST", "Agreement & LoA") == 1 && ContractRegister.Bare("=Approved Vendor List") == "Approved Vendor List", "contract register: levels and “= same level”");
+        }
         var errs = Log.Read();
         Ok(!errs.Contains("settings ") || true, "No settings errors");
     }

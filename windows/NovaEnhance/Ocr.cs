@@ -88,7 +88,7 @@ static class Ocr
         for (uint y = 0; y < H && tiles < MaxTiles; y += Tile - Overlap)
             for (uint x = 0; x < W && tiles < MaxTiles; x += Tile - Overlap)
             {
-                tiles++;
+                tiles++; Tick(tiles);
                 var tr = new BitmapTransform
                 {
                     ScaledWidth = sw, ScaledHeight = sh,
@@ -114,6 +114,16 @@ static class Ocr
     {
         try { lock (BadLock) return File.Exists(BadPath) && File.ReadAllLines(BadPath).Any(l => l.Equals(path, StringComparison.OrdinalIgnoreCase)); } catch { return false; }
     }
+    static readonly HashSet<string> patient = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Try these again with Windows OCR (contract scans): out of the skip list, with 10 minutes of patience per page instead of 40 s.</summary>
+    public static void Forgive(IEnumerable<string> paths, bool morePatience)
+    {
+        var set = new HashSet<string>(paths, StringComparer.OrdinalIgnoreCase);
+        try { lock (BadLock) if (File.Exists(BadPath)) File.WriteAllLines(BadPath, File.ReadAllLines(BadPath).Where(l => !set.Contains(l))); } catch { }
+        if (morePatience) lock (patient) foreach (var p in set) patient.Add(p);
+    }
+    static bool Patient(string path) { lock (patient) return patient.Contains(path); }
+
     public static void MarkBad(string path, string why)
     {
         try { lock (BadLock) File.AppendAllLines(BadPath, new[] { path }); } catch { }
@@ -133,9 +143,23 @@ static class Ocr
             foreach (var a in new[] { "--ocr", kind, path, only == null ? "all" : string.Join(",", only), maxPages.ToString(), outFile }) psi.ArgumentList.Add(a);
             using var p = System.Diagnostics.Process.Start(psi)!;
             try { p.PriorityClass = System.Diagnostics.ProcessPriorityClass.BelowNormal; } catch { }
-            // ⏱ 60 s per file (+ 2 s per page asked, at most 4 min): a stuck Windows OCR never holds Nova (or its exit) for 10 minutes again
-            var limit = (int)Math.Min(240_000, 60_000 + 2_000L * (only?.Count ?? Math.Max(0, Math.Min(maxPages, 90))));
-            if (!p.WaitForExit(limit)) { try { p.Kill(true); } catch { } MarkBad(path, $"no answer after {limit / 1000} s"); return res; }
+            // ⏱ Windows OCR must finish a page every 40 s (a stuck OCR is stopped after 40 s, not 4 minutes); a long scan that keeps
+            // progressing page by page may take up to 10 minutes in all.
+            var beat = outFile + ".beat";
+            var started = DateTime.Now; var last = DateTime.Now; long lastLen = -1;
+            while (!p.WaitForExit(1000))
+            {
+                try { var fi = new FileInfo(beat); if (fi.Exists && fi.LastWriteTime.Ticks != lastLen) { lastLen = fi.LastWriteTime.Ticks; last = DateTime.Now; } } catch { }
+                var idle = (DateTime.Now - last).TotalSeconds;
+                if (idle > (Patient(path) ? 600 : 40) || (DateTime.Now - started).TotalMinutes > (Patient(path) ? 60 : 10))
+                {
+                    try { p.Kill(true); } catch { }
+                    try { File.Delete(beat); } catch { }
+                    MarkBad(path, idle > 40 ? $"no answer from Windows OCR for {(int)idle} s" : "still not finished");
+                    return res;
+                }
+            }
+            try { File.Delete(beat); } catch { }
             if (p.ExitCode != 0 || !File.Exists(outFile)) { MarkBad(path, $"exit code {p.ExitCode}"); return res; }
             foreach (var x in System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(outFile))!.AsArray())
                 res.Add(((int)x!["p"]!, x["t"]?.ToString() ?? ""));
@@ -152,12 +176,16 @@ static class Ocr
         if (i < 0 || args.Length < i + 6) return 2;
         string kind = args[i + 1], path = args[i + 2], pages = args[i + 3], outFile = args[i + 5];
         int.TryParse(args[i + 4], out var max);
+        Beat = outFile + ".beat";
         var only = pages == "all" ? null : pages.Split(',').Select(s => int.TryParse(s, out var n) ? n : 0).Where(n => n > 0).ToList();
         var r = kind == "image" ? new List<(int, string)> { (0, ImageHere(path)) } : PdfHere(path, only, max);
         var arr = new System.Text.Json.Nodes.JsonArray(r.Select(x => (System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject { ["p"] = x.Item1, ["t"] = x.Item2 }).ToArray());
         File.WriteAllText(outFile, arr.ToJsonString());
         return 0;
     }
+
+    static string Beat;
+    static void Tick(int page) { try { if (Beat != null) File.WriteAllText(Beat, page.ToString()); } catch { } }
 
     public static string Image(string path) => InHelper ? ImageHere(path) : Isolated("image", path, null, 0).FirstOrDefault().Item2 ?? "";
 
@@ -190,8 +218,10 @@ static class Ocr
             var file = Windows.Storage.StorageFile.GetFileFromPathAsync(LongPath.Usable(path)).AsTask().Result;
             var doc = Windows.Data.Pdf.PdfDocument.LoadFromFileAsync(file).AsTask().Result;
             var pages = only ?? Enumerable.Range(1, (int)doc.PageCount).ToList();
+            Tick(0);
             foreach (var p in pages.Take(maxPages))
             {
+                Tick(p);
                 if (p < 1 || p > doc.PageCount) continue;
                 using var page = doc.GetPage((uint)(p - 1));
                 double pw = page.Size.Width, ph = page.Size.Height;        // in 1/96 inch
@@ -204,7 +234,7 @@ static class Ocr
                 for (double y = 0; y < ph && tiles < MaxTiles; y += step)
                     for (double x = 0; x < pw && tiles < MaxTiles; x += step)
                     {
-                        tiles++;
+                        tiles++; Tick(p);
                         double tw = Math.Min(tileDip, pw - x), th = Math.Min(tileDip, ph - y);
                         using var ras = new Windows.Storage.Streams.InMemoryRandomAccessStream();
                         page.RenderToStreamAsync(ras, new Windows.Data.Pdf.PdfPageRenderOptions

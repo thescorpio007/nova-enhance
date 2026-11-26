@@ -78,6 +78,18 @@ class GuidedSearchForm : NovaForm
     readonly List<(Button B, string Title)> opts = new();
     readonly TextBox optFilter;
     readonly Button stopBtn;
+    // 🔎 the hint (“what are you looking for?”): every choice is searched at once while you choose
+    readonly TextBox hint;
+    readonly Label hintInfo;
+    readonly CheckBox novaOnly;
+    readonly Panel resPanel;
+    readonly FlowLayoutPanel resList;
+    readonly Label resHead;
+    readonly List<List<Projects.FileRow>> optSets = new();
+    readonly List<string> optBase = new();
+    readonly System.Windows.Forms.Timer hintTimer = new() { Interval = 600 };
+    CancellationTokenSource hintCts, readCts;
+    static readonly Dictionary<string, (List<string> Words, string Shown)> aiWords = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>⏱ Nova is working: the time counts in the line under the steps, and ■ Stop shows.</summary>
     void Working(bool on) { if (!stopBtn.IsDisposed) stopBtn.Visible = on; }
@@ -98,7 +110,7 @@ class GuidedSearchForm : NovaForm
         top.Controls.Add(Th.B("📂 Classic finder", () => Screens.FindFile("")));
         top.Controls.Add(Th.B("📐 Learn", () => Screens.FilingLearn(project?.Code)));
         top.Controls.Add(Th.B("⚙", () => Screens.Settings("🎯 Guided mode")));
-        stopBtn = Th.B("■ Stop", () => { cts?.Cancel(); Working(false); note.Text = "■ Stopped — pick again, or ← Back."; });
+        stopBtn = Th.B("■ Stop", () => { cts?.Cancel(); readCts?.Cancel(); Working(false); note.Text = "■ Stopped — pick again, or ← Back."; });
         stopBtn.Visible = false;
         top.Controls.Add(stopBtn);
         var crumbs = new Panel { Dock = DockStyle.Top, Height = 54, BackColor = Th.Bg, Padding = new Padding(16, 2, 16, 2) };
@@ -113,6 +125,26 @@ class GuidedSearchForm : NovaForm
         optFilter.TextChanged += (_, _) => FilterOpts();
         optFilter.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; var first = opts.FirstOrDefault(o => o.B.Visible && !o.B.IsDisposed); first.B?.PerformClick(); } };
         crumbs.Controls.Add(optFilter); crumbs.Controls.SetChildIndex(optFilter, 0);
+        // 🔎 the hint box: on every step; Nova searches every choice at once (names + what it already read), the AI only reads the hint
+        crumbs.Height = 156;
+        var hintRow = new Panel { Dock = DockStyle.Top, Height = 34, BackColor = Color.FromArgb(0x1B, 0x20, 0x30), Padding = new Padding(8, 4, 8, 4) };
+        var hl = Th.L("🔎 What are you looking for?", 10, Th.AccentText, true); hl.Dock = DockStyle.Left; hl.AutoSize = true; hl.Padding = new Padding(0, 4, 8, 0);
+        hint = Th.Box(false); if (hint is SpellBox hs) hs.Off = true;
+        hint.Dock = DockStyle.Fill; hint.Font = Th.F(11); hint.PlaceholderText = "optional — e.g. baby changing station · fire rated door · 08 71 00 (Nova counts it in every choice below)";
+        novaOnly = Th.Check("⚡ Nova only (no AI)", Store.Bool("win_guided_novaonly", false), v => { Store.SetBool("win_guided_novaonly", v); ApplyHint(); });
+        novaOnly.Dock = DockStyle.Right;
+        hintRow.Controls.Add(hint); hintRow.Controls.Add(novaOnly); hintRow.Controls.Add(hl);
+        hintInfo = new Label { Dock = DockStyle.Top, Height = 22, Font = Th.F(9), ForeColor = Th.Muted, AutoEllipsis = true, UseMnemonic = false };
+        crumbs.Controls.Add(hintInfo); crumbs.Controls.SetChildIndex(hintInfo, 0);
+        crumbs.Controls.Add(hintRow); crumbs.Controls.SetChildIndex(hintRow, 0);
+        crumbs.Controls.SetChildIndex(optFilter, 0);
+        hint.TextChanged += (_, _) => { hintTimer.Stop(); hintTimer.Start(); };
+        hint.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; hintTimer.Stop(); ApplyHint(); } };
+        hintTimer.Tick += (_, _) => { hintTimer.Stop(); ApplyHint(); };
+        resPanel = new Panel { Dock = DockStyle.Right, Width = 460, BackColor = Color.FromArgb(0x17, 0x1B, 0x26), Padding = new Padding(10, 8, 10, 8), Visible = false };
+        resHead = new Label { Dock = DockStyle.Top, Height = 26, Font = Th.F(10.5f, true), ForeColor = Th.Text, Text = "📌 Best results so far", UseMnemonic = false };
+        resList = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, BackColor = resPanel.BackColor };
+        resPanel.Controls.Add(resList); resPanel.Controls.Add(resHead);
 
         findBar = new Panel { Dock = DockStyle.Top, Height = 120, BackColor = Color.FromArgb(0x0E, 0x11, 0x17), Padding = new Padding(16, 8, 16, 6), Visible = false };
         // ✎ A real typing box: starts at the lines of Settings → 🎯 Guided mode, grows while you type; drag the bar under it to make it bigger.
@@ -132,7 +164,8 @@ class GuidedSearchForm : NovaForm
         findGrip.DoubleClick += (_, _) => { dragged = 0; Store.SetInt("win_guided_inh", 0); FitFind(); };
 
         body = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(14, 6, 14, 14), BackColor = Th.Bg };
-        Controls.Add(body); Controls.Add(findGrip); Controls.Add(findBar); Controls.Add(crumbs); Controls.Add(top);
+        Controls.Add(body); Controls.Add(resPanel); Controls.Add(findGrip); Controls.Add(findBar); Controls.Add(crumbs); Controls.Add(top);
+        Resize += (_, _) => resPanel.Width = Math.Max(320, ClientSize.Width * 2 / 5);
         dragged = Store.Int("win_guided_inh", 0);
         findBar.Resize += (_, _) => FitFind();
         Resize += (_, _) => { foreach (Control c in body.Controls) c.Width = RowWidth; };
@@ -141,12 +174,12 @@ class GuidedSearchForm : NovaForm
         KeyDown += (_, e) =>
         {
             if (e.KeyCode == Keys.Escape) { if (step > 0) Back(); else Close(); return; }
-            if (query.Focused || optFilter.Focused) return;
+            if (query.Focused || optFilter.Focused || hint.Focused) return;
             var n = e.KeyCode is >= Keys.D1 and <= Keys.D9 ? e.KeyCode - Keys.D0 : e.KeyCode is >= Keys.NumPad1 and <= Keys.NumPad9 ? e.KeyCode - Keys.NumPad0 : 0;
             if (n > 0 && n <= numbered.Count) { e.SuppressKeyPress = true; numbered[n - 1](); }   // type the number = pick it
             if (e.KeyCode == Keys.Back && step > 0) { e.SuppressKeyPress = true; Back(); }
         };
-        FormClosed += (_, _) => cts?.Cancel();
+        FormClosed += (_, _) => { cts?.Cancel(); hintCts?.Cancel(); readCts?.Cancel(); hintTimer.Dispose(); };
         Shown += (_, _) => Go(0);
     }
 
@@ -191,7 +224,7 @@ class GuidedSearchForm : NovaForm
         body.SuspendLayout();
         foreach (Control c in body.Controls.Cast<Control>().ToList()) c.Dispose();
         body.Controls.Clear();
-        numbered.Clear(); opts.Clear();
+        numbered.Clear(); opts.Clear(); optSets.Clear(); optBase.Clear();
         if (optFilter != null && optFilter.Text.Length > 0) optFilter.Text = "";
         note.Text = hint;
         Crumb();
@@ -204,15 +237,17 @@ class GuidedSearchForm : NovaForm
     }
 
     /// <summary>A numbered option: click it, or type its number.</summary>
-    Button Opt(string title, string sub, Action pick)
+    Button Opt(string title, string sub, Action pick, List<Projects.FileRow> files = null)
     {
         var n = numbered.Count + 1;
         numbered.Add(pick);
-        var b = Th.B($"{n}   {title}" + (sub.Length > 0 ? "\n      " + sub : ""), pick);
-        b.AutoSize = false; b.Width = RowWidth; b.Height = sub.Length > 0 ? 50 : 36; b.TextAlign = ContentAlignment.MiddleLeft; b.Font = Th.F(10);
-        b.Margin = new Padding(0, 0, 0, 5);
+        var text = $"{n}   {title}" + (sub.Length > 0 ? "   ·   " + sub : "");
+        var b = Th.B(text, pick);
+        b.AutoSize = false; b.Width = RowWidth; b.Height = 34; b.TextAlign = ContentAlignment.MiddleLeft; b.Font = Th.F(10);   // compact: 20+ choices fit
+        b.Margin = new Padding(0, 0, 0, 3);
         body.Controls.Add(b);
         opts.Add((b, title + " " + sub));
+        optSets.Add(files); optBase.Add(text);
         return b;
     }
 
@@ -234,7 +269,14 @@ class GuidedSearchForm : NovaForm
         if (step == 0) Where();
         else if (step == 1) What();
         else if (step == 2) Narrow();
-        else { Clear($"{inNarrow.Count:N0} files in this area · type a number, words or a clause, then Enter. Names first, then inside the text."); query.Focus(); NextOptions(null); }
+        else
+        {
+            Clear($"{inNarrow.Count:N0} files in this area · type a number, words or a clause, then Enter. Names first, then inside the text.");
+            query.Focus();
+            if (query.Text.Trim().Length == 0 && hint.Text.Trim().Length > 1) { query.Text = hint.Text.Trim(); Find(); return; }
+            NextOptions(null);
+            ApplyHint();
+        }
     }
 
     void Back()
@@ -319,10 +361,11 @@ class GuidedSearchForm : NovaForm
                 cat = c; whatLabel = c.Label; inWhat = list;
                 if (list.Count <= 40 || c.Key == "all" && list.Count <= 80) { inNarrow = list; narrowLabel = ""; Go(3); }
                 else Go(2);
-            });
+            }, list);
             if (list.Count == 0) ob.ForeColor = Th.Muted;   // ☑ always offered, greyed when this area has none
         }
         body.ResumeLayout();
+        ApplyHint();
     }
 
     /// <summary>The path inside the chosen folders (the project folder itself is not a hint).</summary>
@@ -347,14 +390,15 @@ class GuidedSearchForm : NovaForm
         var groups = await Task.Run(() => Groups(cat.Key, inWhat));
         if (IsDisposed) return; Working(false); if (my.IsCancellationRequested) return;
         body.SuspendLayout();
-        Opt($"All of them", $"{inWhat.Count:N0} files", () => { inNarrow = inWhat; narrowLabel = "all"; Go(3); });
+        Opt($"All of them", $"{inWhat.Count:N0} files", () => { inNarrow = inWhat; narrowLabel = "all"; Go(3); }, inWhat);
         foreach (var (label, list) in groups)
         {
             var l = list;
-            var b = Opt(label, $"{l.Count:N0} files", () => { inNarrow = l; narrowLabel = label; Go(3); });
+            var b = Opt(label, $"{l.Count:N0} files", () => { inNarrow = l; narrowLabel = label; Go(3); }, l);
             if (l.Count == 0) b.ForeColor = Th.Muted;
         }
         body.ResumeLayout();
+        ApplyHint();
     }
 
     /// <summary>📐 Filing kind → the "What" choice.</summary>
@@ -639,6 +683,185 @@ class GuidedSearchForm : NovaForm
         });
         Opt("End here", "closes this window", () => { clock.Ended = true; Close(); });
         body.ScrollControlIntoView(body.Controls[body.Controls.Count - 1]);
+    }
+
+    // ------------------------------------------------------------------ 🔎 the hint: every choice searched at once, while you choose
+
+    record HintRes(Dictionary<int, int> Counts, List<(string Path, string Name, string Loc, string Goto, string Text, string Rev, string Tag)> Best, List<string> Unread, int Hits, int Choices);
+    static readonly string[] ReadableExt = { ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".xlsm", ".pptx", ".msg", ".rtf", ".txt" };
+
+    async void ApplyHint()
+    {
+        if (hint == null || IsDisposed) return;
+        hintCts?.Cancel();
+        var q = hint.Text.Trim();
+        if (q.Length < 2)
+        {
+            for (int i = 0; i < opts.Count && i < optBase.Count; i++) if (!opts[i].B.IsDisposed) opts[i].B.Text = optBase[i];
+            hintInfo.Text = ""; resPanel.Visible = false;
+            return;
+        }
+        if (step == 0) { hintInfo.Text = $"✓ Pick the project — Nova then counts “{q}” in every choice."; resPanel.Visible = false; return; }
+        var my = hintCts = new CancellationTokenSource();
+        var sets = optSets.ToList(); var buttons = opts.Select(o => o.B).ToList(); var bases = optBase.ToList();
+        var scope = step == 3 ? inNarrow.ToList()
+            : sets.Where(x => x != null).SelectMany(x => x).GroupBy(f => f.Path, StringComparer.OrdinalIgnoreCase).Select(g => g.First()).ToList();
+        var fold = folders.ToList();
+        var words = Words(q);
+        var t0 = DateTime.Now;
+        hintInfo.Text = "⏳ Nova searches every choice for “" + q + "”…";
+        // ✦ the AI reads the HINT only (never your files), once per hint — other words your documents may use
+        var extra = new List<string>(); var shown = "";
+        var useAi = !novaOnly.Checked && Ai.Active() != null && !Ai.QuotaOut && FolderAsk.Sees != "never" && !Projects.Private.IsMatch(q);
+        if (useAi)
+        {
+            bool have;
+            lock (aiWords) { have = aiWords.TryGetValue(q, out var c0); if (have) { extra = c0.Words; shown = c0.Shown; } }
+            if (!have)
+            {
+                try
+                {
+                    var sys = "A construction project's document search. Give the other words and codes the project documents may use for what the user looks for " +
+                              "(synonyms, abbreviations, spec section numbers like 10 28 00, typical document words) and the likely disciplines. Reply JSON only: {\"words\":[\"…\"],\"disciplines\":[\"…\"]} — at most 8 words.";
+                    var j = Ai.ParseJson(await SmartSearch.CloudChat(sys, q, 8, my.Token));
+                    extra = (j["words"] as System.Text.Json.Nodes.JsonArray)?.Select(x => x?.ToString() ?? "").Where(x => x.Length > 1 && !Projects.Private.IsMatch(x)).Take(8).ToList() ?? new();
+                    var disc = (j["disciplines"] as System.Text.Json.Nodes.JsonArray)?.Select(x => x?.ToString() ?? "").Where(x => x.Length > 0).Take(3).ToList() ?? new();
+                    shown = string.Join(" · ", extra) + (disc.Count > 0 ? " · disciplines: " + string.Join(", ", disc) : "");
+                    lock (aiWords) aiWords[q] = (extra, shown);
+                }
+                catch (Exception e) { shown = Ai.QuotaOut ? "💳 AI quota used up — Nova only" : ""; if (!(e is OperationCanceledException)) Log.Warn("guided hint", e.Message); }
+            }
+        }
+        if (my.IsCancellationRequested || IsDisposed) return;
+        HintRes r;
+        try { r = await Task.Run(() => HintCount(q, scope, sets, fold, words, extra, my.Token)); }
+        catch (OperationCanceledException) { return; }
+        catch (Exception e) { hintInfo.Text = "⚠ " + e.Message; return; }
+        if (my.IsCancellationRequested || IsDisposed) return;
+
+        // the choices: their hits, the best first (the first “All of them” stays on top), 0 = faded
+        body.SuspendLayout();
+        var withSets = Enumerable.Range(0, Math.Min(buttons.Count, sets.Count)).Where(i => sets[i] != null && !buttons[i].IsDisposed).ToList();
+        int maxN = r.Counts.Count == 0 ? 0 : withSets.Where(i => !bases[i].Contains("All of them")).Select(i => r.Counts.GetValueOrDefault(i)).DefaultIfEmpty(0).Max();
+        foreach (var i in withSets)
+        {
+            var n = r.Counts.GetValueOrDefault(i);
+            buttons[i].Text = bases[i] + $"   ·   {(n > 0 ? n.ToString("N0") + (n == 1 ? " hit" : " hits") : "0")}{(n > 0 && n == maxN && !bases[i].Contains("All of them") ? "  ⭐" : "")}";
+            buttons[i].ForeColor = n > 0 ? Th.Text : Th.Muted;
+        }
+        var movable = withSets.Where(i => !(step == 2 && bases[i].Contains("All of them"))).ToList();
+        var slots = movable.Select(i => body.Controls.GetChildIndex(buttons[i])).OrderBy(x => x).ToList();
+        var sorted = movable.OrderByDescending(i => r.Counts.GetValueOrDefault(i)).ThenBy(i => i).ToList();
+        for (int k = 0; k < sorted.Count; k++) body.Controls.SetChildIndex(buttons[sorted[k]], slots[k]);
+        body.ResumeLayout();
+
+        hintInfo.Text = $"✓ {r.Hits:N0} hit(s) · searched {(r.Choices > 0 ? r.Choices + " choices" : scope.Count.ToString("N0") + " files")} at once · {(DateTime.Now - t0).TotalSeconds:0.0} s" +
+                        (shown.Length > 0 ? "   ·   ✦ AI understood (the hint only, no files): " + shown : "") +
+                        (r.Unread.Count > 0 ? $"   ·   📖 {r.Unread.Count:N0} files here are not read inside yet" : "");
+        // 📌 best results so far
+        resPanel.Visible = true;
+        resList.SuspendLayout();
+        foreach (Control c in resList.Controls.Cast<Control>().ToList()) c.Dispose();
+        resList.Controls.Clear();
+        resHead.Text = $"📌 Best results so far · {r.Hits:N0} hit(s) · newest revision first";
+        var w = Math.Max(260, resPanel.ClientSize.Width - 34);
+        foreach (var b in r.Best)
+        {
+            var t = Th.L($"{b.Name}{(b.Rev.Length > 0 ? " · " + b.Rev : "")}", 9.5f, Th.Text, true); t.MaximumSize = new Size(w, 0); t.Cursor = Cursors.Hand;
+            var sub = Th.L((b.Tag.Length > 0 ? b.Tag + "  ·  " : "") + (b.Text.Length > 0 ? $"📄 {b.Loc} “{b.Text}”" : "📛 by its name"), 8.5f, Th.Muted); sub.MaximumSize = new Size(w, 0); sub.Margin = new Padding(3, 0, 3, 8); sub.Cursor = Cursors.Hand;
+            var bb = b;
+            void Go_() => Open(bb.Path, bb.Text.Length > 0 ? new Seg(bb.Loc, bb.Text, bb.Goto) : null, q);
+            t.Click += (_, _) => Go_(); sub.Click += (_, _) => Go_();
+            resList.Controls.Add(t); resList.Controls.Add(sub);
+        }
+        if (r.Best.Count == 0) resList.Controls.Add(Th.Wrap("Nothing yet in the names and the files already read.", 9.5f, Th.Muted));
+        if (r.Unread.Count > 0)
+        {
+            var note2 = Th.Wrap($"📖 {r.Unread.Count:N0} files of this choice are not read inside yet (names only). Read them now so nothing is missed? Scanned PDFs: Nova gives up after 40 s without progress.", 9, Th.Warn);
+            note2.MaximumSize = new Size(w, 0);
+            resList.Controls.Add(note2);
+            var unread = r.Unread;
+            resList.Controls.Add(Th.B($"📖 Read these {unread.Count:N0} now", () => ReadNow(unread), true));
+        }
+        resList.ResumeLayout();
+    }
+
+    HintRes HintCount(string q, List<Projects.FileRow> scope, List<List<Projects.FileRow>> sets, List<string> fold, List<string> words, List<string> extra, CancellationToken ct)
+    {
+        var inScope = new HashSet<string>(scope.Select(f => f.Path), StringComparer.OrdinalIgnoreCase);
+        // inside: one full-text query per folder (what Nova already read) — the hint and the AI's words
+        var inside = new Dictionary<string, FolderIndex.Passage>(StringComparer.OrdinalIgnoreCase);
+        var terms = words.Concat(extra.SelectMany(e => e.Contains(' ') ? new[] { e } : new[] { e })).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        foreach (var f in fold)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                foreach (var p in FolderIndex.Retrieve(f, terms, 600, 1))
+                    if ((inScope.Count == 0 || inScope.Contains(p.Path)) && !Projects.Private.IsMatch(p.Path) && (!inside.TryGetValue(p.Path, out var o) || o.Score < p.Score)) inside[p.Path] = p;
+            }
+            catch { }
+        }
+        var num = Revisions.Number(q);
+        bool NameHit(Projects.FileRow f)
+        {
+            var name = f.Name.ToLowerInvariant(); var rel = Rel(f.Path).ToLowerInvariant();
+            if (num.Length > 0 && name.Contains(num.ToLowerInvariant())) return true;
+            if (words.Count > 0 && words.Count(w => name.Contains(w) || rel.Contains(w)) >= Math.Min(2, words.Count) && words.Any(w => name.Contains(w))) return true;
+            return extra.Any(e => e.Length >= 3 && name.Contains(e.ToLowerInvariant()));
+        }
+        var hitSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var f in scope) { ct.ThrowIfCancellationRequested(); if (inside.ContainsKey(f.Path) || NameHit(f)) hitSet.Add(f.Path); }
+        var counts = new Dictionary<int, int>();
+        int choices = 0;
+        for (int i = 0; i < sets.Count; i++) if (sets[i] != null) { counts[i] = sets[i].Count(f => hitSet.Contains(f.Path)); choices++; }
+        // the best: inside passages first, then names; only the latest revision of each document
+        var rows = scope.Where(f => hitSet.Contains(f.Path)).Select(f =>
+        {
+            inside.TryGetValue(f.Path, out var p);
+            var d = Revisions.Parse(f.Path, f.Modified.Ticks);
+            return (f, p, d, score: (p?.Score ?? 0) + (NameHit(f) ? 5 : 0));
+        }).ToList();
+        var latest = rows.GroupBy(x => x.d.Key).Select(g => g.OrderByDescending(x => x.d.Rank.Item1).ThenByDescending(x => x.d.Rank.Item2, StringComparer.Ordinal).ThenByDescending(x => x.f.Modified).First());
+        var best = latest.OrderByDescending(x => x.p != null).ThenByDescending(x => x.score).ThenByDescending(x => x.f.Modified).Take(25).Select(x =>
+        {
+            var lb = labels.TryGetValue(x.f.Path, out var l0) ? l0 : Filing.Classify(x.f.Path);
+            var tag = string.Join(" · ", new[] { lb.Disc, lb.Kind, lb.Stage }.Where(v => v.Length > 0));
+            var text = x.p == null ? "" : Snip(x.p.Text, terms);
+            return (x.f.Path, x.f.Name, x.p?.Loc ?? "", x.p?.Goto ?? "", text, x.d.Rev, tag);
+        }).ToList();
+        // 📖 not read inside yet (readable files of this choice)
+        var read = FolderIndex.ReadPaths(fold);
+        var unread = scope.Where(f => ReadableExt.Contains(Path.GetExtension(f.Name).ToLowerInvariant()) && !read.Contains(f.Path) && !Projects.Private.IsMatch(f.Path)).Select(f => f.Path).ToList();
+        return new HintRes(counts, best, unread, hitSet.Count, choices);
+    }
+
+    static string Snip(string t, List<string> terms)
+    {
+        t = Regex.Replace(t ?? "", @"\s+", " ");
+        var i = terms.Select(w => t.IndexOf(w, StringComparison.OrdinalIgnoreCase)).Where(x => x >= 0).DefaultIfEmpty(0).Min();
+        var a = Math.Max(0, i - 50);
+        var s = t.Substring(a, Math.Min(170, t.Length - a));
+        return (a > 0 ? "…" : "") + s + (a + 170 < t.Length ? "…" : "");
+    }
+
+    /// <summary>📖 Reads the files of this choice not read yet (one after the other, in the background), then counts again.</summary>
+    void ReadNow(List<string> paths)
+    {
+        readCts?.Cancel(); var my = readCts = new CancellationTokenSource();
+        Working(true);
+        var ui = SynchronizationContext.Current;
+        Task.Run(() =>
+        {
+            int n = 0;
+            foreach (var p in paths)
+            {
+                if (my.IsCancellationRequested) break;
+                n++;
+                ui?.Post(_ => { if (!hintInfo.IsDisposed) hintInfo.Text = $"📖 Reading {n:N0} of {paths.Count:N0} · {Path.GetFileName(p)}  (■ Stop to end)"; }, null);
+                try { Projects.Read(p, my.Token); } catch (OperationCanceledException) { break; } catch { }
+            }
+        }).ContinueWith(_ => ui?.Post(_ => { if (IsDisposed) return; Working(false); ApplyHint(); }, null));
     }
 
     /// <summary>Starts at a project already known (from an email or a folder).</summary>

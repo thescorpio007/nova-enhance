@@ -401,17 +401,28 @@ static class Projects
         st.Expected = Math.Max(st.Expected, st.Files); st.Started = DateTime.Now;
         st.Phase = "listing"; st.Files = 0;
         using var c = Db();
-        var tx = c.BeginTransaction();
-        using var cmd = c.CreateCommand();
-        cmd.CommandText = "INSERT OR REPLACE INTO pnames(path,root,name,ext,size,mtime,seen) VALUES($p,$r,$n,$e,$s,$m,$t)";
-        var pp = cmd.Parameters.Add("$p", SqliteType.Text); var pr = cmd.Parameters.Add("$r", SqliteType.Text); var pn = cmd.Parameters.Add("$n", SqliteType.Text);
-        var pe = cmd.Parameters.Add("$e", SqliteType.Text); var ps = cmd.Parameters.Add("$s", SqliteType.Integer); var pm = cmd.Parameters.Add("$m", SqliteType.Integer);
-        cmd.Parameters.AddWithValue("$t", stamp);
-        pr.Value = rk;
-        cmd.Transaction = tx;
-        int batch = 0, files = 0;
+        // The names are collected FIRST (walking a network folder can take minutes) and saved in short batches: the index is never held
+        // while the folders are walked — other jobs (Search inside a folder, the reading) no longer get “database is locked”.
+        var rows = new List<(string Path, string Name, string Ext, long Size, long Mtime)>(3000);
+        int files = 0;
+        void Flush()
+        {
+            if (rows.Count == 0) return;
+            using var tx = FolderIndex.BeginWait(c, ct);
+            using var cmd = c.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = "INSERT OR REPLACE INTO pnames(path,root,name,ext,size,mtime,seen) VALUES($p,$r,$n,$e,$s,$m,$t)";
+            var pp = cmd.Parameters.Add("$p", SqliteType.Text); var pn = cmd.Parameters.Add("$n", SqliteType.Text);
+            var pe = cmd.Parameters.Add("$e", SqliteType.Text); var ps = cmd.Parameters.Add("$s", SqliteType.Integer); var pm = cmd.Parameters.Add("$m", SqliteType.Integer);
+            cmd.Parameters.AddWithValue("$r", rk); cmd.Parameters.AddWithValue("$t", stamp);
+            foreach (var r in rows) { pp.Value = r.Path; pn.Value = r.Name; pe.Value = r.Ext; ps.Value = r.Size; pm.Value = r.Mtime; cmd.ExecuteNonQuery(); }
+            tx.Commit();
+            rows.Clear();
+            st.Files = files;
+        }
         var stack = new Stack<string>();
         stack.Push(root);
+        var flushed = DateTime.Now;
         while (stack.Count > 0)
         {
             ct.ThrowIfCancellationRequested();
@@ -422,19 +433,22 @@ static class Projects
             {
                 if (i is DirectoryInfo d) { if (!Private.IsMatch(d.Name) && (d.Attributes & FileAttributes.ReparsePoint) == 0) stack.Push(d.FullName); continue; }
                 if (i is not FileInfo f || Skip(f.FullName)) continue;
-                pp.Value = f.FullName; pn.Value = f.Name; pe.Value = f.Extension.ToLowerInvariant();
-                try { ps.Value = f.Length; pm.Value = f.LastWriteTime.Ticks; } catch { ps.Value = 0L; pm.Value = 0L; }
-                cmd.ExecuteNonQuery();
+                long size = 0, mt = 0;
+                try { size = f.Length; mt = f.LastWriteTime.Ticks; } catch { }
+                rows.Add((f.FullName, f.Name, f.Extension.ToLowerInvariant(), size, mt));
                 files++;
-                if (++batch >= 3000) { tx.Commit(); tx.Dispose(); tx = c.BeginTransaction(); cmd.Transaction = tx; batch = 0; st.Files = files; }
             }
+            if (rows.Count >= 3000 || (rows.Count > 0 && DateTime.Now - flushed > TimeSpan.FromSeconds(20))) { Flush(); flushed = DateTime.Now; }
         }
-        tx.Commit(); tx.Dispose();
+        Flush();
+        using (var dtx = FolderIndex.BeginWait(c, ct))
         using (var del = c.CreateCommand())
         {
+            del.Transaction = dtx;
             del.CommandText = "DELETE FROM pnames WHERE root=$r AND seen<>$t";
             del.Parameters.AddWithValue("$r", rk); del.Parameters.AddWithValue("$t", stamp);
             del.ExecuteNonQuery();
+            dtx.Commit();
         }
         st.Files = files; st.Expected = files; st.Read = CountRead(root); st.Last = DateTime.Now; st.Phase = "listed";
     }

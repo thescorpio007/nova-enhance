@@ -270,6 +270,44 @@ static class FolderIndex
         catch { return null; }
     }
 
+    /// <summary>The first words Nova read in a file (its title, page 1) — no disk access, only the index. "" when never read.</summary>
+    public static string FirstText(string path, int chars = 1500)
+    {
+        try
+        {
+            using var c = Open();
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "SELECT s.text FROM segs s JOIN files f ON f.id=s.file_id WHERE f.path=$p ORDER BY s.id LIMIT 4";
+            cmd.Parameters.AddWithValue("$p", path);
+            var sb = new System.Text.StringBuilder();
+            using var r = cmd.ExecuteReader();
+            while (r.Read() && sb.Length < chars) if (!r.IsDBNull(0)) sb.Append(r.GetString(0)).Append('\n');
+            return sb.Length > chars ? sb.ToString(0, chars) : sb.ToString();
+        }
+        catch { return ""; }
+    }
+
+    /// <summary>The files under these folders Nova has already read inside (paths), from the index only.</summary>
+    public static HashSet<string> ReadPaths(IEnumerable<string> roots)
+    {
+        var res = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            using var c = Open();
+            foreach (var root in roots)
+            {
+                var pre = Prefix(NormalRoot(root));
+                using var cmd = c.CreateCommand();
+                cmd.CommandText = "SELECT path FROM files WHERE lower(substr(path,1,$n))=lower($p)";
+                cmd.Parameters.AddWithValue("$n", pre.Length); cmd.Parameters.AddWithValue("$p", pre);
+                using var r = cmd.ExecuteReader();
+                while (r.Read()) res.Add(r.GetString(0));
+            }
+        }
+        catch { }
+        return res;
+    }
+
     /// <summary>Keeps what a feature read from a file, for every other feature (and for Search inside a folder, which then skips it).</summary>
     public static void Remember(string path, List<Seg> segs)
     {
@@ -288,7 +326,7 @@ static class FolderIndex
             var fi = new FileInfo(path);
             if (!fi.Exists) return;
             using var c = Open();
-            using var tx = c.BeginTransaction();
+            using var tx = BeginWait(c, CancellationToken.None);
             var existing = Scalar(c, "SELECT id FROM files WHERE path=$p", ("$p", path));
             if (existing != null) DeleteFile(c, Convert.ToInt64(existing));
             Exec(c, "INSERT INTO files(path,size,mtime,kind,note,remote) VALUES($p,$s,$m,$k,$n,NULL)",
@@ -551,6 +589,23 @@ static class FolderIndex
 
     class ReadResult { public Item It; public List<Seg> Segs; public string Note = ""; public Problem Problem; public bool ContentRead; }
 
+    /// <summary>Starts a write on the index, WAITING while another job holds it (the names listing, the background reading) — never fails with
+    /// “database is locked”: after 8 s it says “⏳ index busy — waiting…” and tries again, up to 10 minutes.</summary>
+    public static SqliteTransaction BeginWait(SqliteConnection c, CancellationToken ct, Action<string> say = null)
+    {
+        var t0 = DateTime.Now;
+        for (int i = 0; ; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            try { var t = c.BeginTransaction(); if (i > 0) say?.Invoke(""); return t; }
+            catch (SqliteException e) when (e.SqliteErrorCode is 5 or 6 && DateTime.Now - t0 < TimeSpan.FromMinutes(10))
+            {
+                say?.Invoke($"⏳ Nova's index is busy (another job is saving) — waiting {(int)(DateTime.Now - t0).TotalSeconds + 8} s…");
+                Thread.Sleep(Math.Min(5000, 500 + 500 * i));
+            }
+        }
+    }
+
     static void SearchLocked(string root, Matcher m, HashSet<string> kinds, Action<FileHit> onHit, Action<string> onRemove, Progress pg, CancellationToken ct, Options opt)
     {
         var pre = Prefix(root);
@@ -634,7 +689,7 @@ static class FolderIndex
             foreach (var r in results.GetConsumingEnumerable(ct))
             {
                 var it = r.It;
-                tx ??= c.BeginTransaction();
+                tx ??= BeginWait(c, ct, w => pg.Phase = w.Length == 0 ? "Reading files…" : w);
                 try
                 {
                     // Replace whatever the index holds for this file (also when another search saved it meanwhile).
@@ -670,7 +725,7 @@ static class FolderIndex
                 Interlocked.Add(ref pg.Bytes, it.Size);
                 if (++batch >= 15 || results.Count == 0) { tx.Commit(); tx.Dispose(); tx = null; batch = 0; }
             }
-            tx ??= c.BeginTransaction();
+            tx ??= BeginWait(c, ct, w => pg.Phase = w.Length == 0 ? "Reading files…" : w);
             // Files deleted from the folder leave the index (only when no filter hid them).
             if (!ct.IsCancellationRequested && opt.NoFilters)
                 foreach (var (path, k) in known)
