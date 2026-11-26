@@ -157,7 +157,8 @@
       var s = el("div", "srcs");
       m.sources.forEach(function (src, i) {
         var a = el("span", null, "[" + (i + 1) + "] " + src.label);
-        a.title = "Open";
+        a.title = "Open · right-click or ⋯ = every option";
+        if (src.path && src.kind !== "email") { a.setAttribute("data-path", src.path); a.setAttribute("data-loc", src.loc || ""); a.setAttribute("data-go", src.goto || ""); }
         a.onclick = function () { post({ t: "openSource", src: src }); };
         s.appendChild(a);
       });
@@ -223,6 +224,7 @@
             if (sources[i]) {
               c.title = sources[i].label + (sources[i].kind === "email" ? "\nclick: open in Nova · Ctrl+click: open in Outlook" : "");
               c.onclick = function (e) { post({ t: "openSource", src: sources[i], ctrl: !!(e && e.ctrlKey) }); };
+              if (sources[i].path && sources[i].kind !== "email") { c.setAttribute("data-path", sources[i].path); c.setAttribute("data-loc", sources[i].loc || ""); c.setAttribute("data-go", sources[i].goto || ""); }
               if (sources[i].kind === "email" && sources[i].entry) { c.setAttribute("data-entry", sources[i].entry); c.setAttribute("data-store", sources[i].store || ""); }
             }
             into.appendChild(c);
@@ -299,6 +301,7 @@
       d.appendChild(el("div", "lt", m.text));
       (m.sources || []).forEach(function (src) {
         var a = el("a", "lh", (src.kind === "email" ? "✉ " : src.kind === "passage" ? "📄 " : "📎 ") + (src.label || src.path || ""));
+        if (src.path && src.kind !== "email") { a.setAttribute("data-path", src.path); a.setAttribute("data-loc", src.loc || ""); a.setAttribute("data-go", src.goto || ""); }
         a.onclick = function (e) { post({ t: "openSource", src: src, ctrl: !!(e && e.ctrlKey) }); };
         d.appendChild(a);
       });

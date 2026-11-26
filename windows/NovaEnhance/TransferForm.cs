@@ -79,6 +79,7 @@ class TransferForm : NovaForm
         if (j.State == "failed") { btns.Controls.Add(Th.B("↻ Retry failed files", () => Transfer.RetryFailed(j), true)); btns.Controls.Add(Th.B("▶ Run again", () => Transfer.Resume(j))); }
         if (j.LogFile.Length > 0) btns.Controls.Add(Th.B("📄 Log", () => { if (File.Exists(j.LogFile)) Shell.Open(j.LogFile); }));
         btns.Controls.Add(Th.B("📂 Open destination", () => { if (Directory.Exists(j.Dest)) Shell.Open(j.Dest); }));
+        if (!string.IsNullOrEmpty(j.Dest)) btns.Controls.Add(FileMenu.Dots(() => j.Dest));
         if (j.State is "done" or "failed" or "cancelled") btns.Controls.Add(Th.B("🗑", () => Transfer.Forget(j)));
         p.Controls.AddRange(new Control[] { title, bar, info, cur, btns });
         return (p, title, bar, info, cur, btns, Shape(j));

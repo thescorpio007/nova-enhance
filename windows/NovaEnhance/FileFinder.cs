@@ -305,7 +305,12 @@ class FileFinderForm : NovaForm
             lv.Sort();
         };
         lv.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) { OpenSel(); e.Handled = true; } if (e.Control && e.KeyCode == Keys.A) { foreach (ListViewItem i in lv.Items) i.Selected = true; e.Handled = true; } };
-        lv.MouseUp += (_, e) => { if (e.Button == MouseButtons.Right && Sel().Count > 0) Menu().Show(lv, e.Location); };
+        lv.MouseUp += (_, e) =>
+        {
+            if (e.Button != MouseButtons.Right || Sel().Count == 0) return;
+            if (Sel().Count == 1) FileMenu.Show(FileCheck.Resolve(Sel()[0].F.Path) ?? Sel()[0].F.Path, lv, lv.PointToScreen(e.Location)); else Menu().Show(lv, e.Location);
+        };
+        lv.KeyDown += (_, e) => { if ((e.KeyCode == Keys.Apps || e.Shift && e.KeyCode == Keys.F10) && Sel().Count == 1) { e.SuppressKeyPress = true; FileMenu.Show(Sel()[0].F.Path, lv, lv.PointToScreen(new Point(40, 30))); } };
 
         // Bottom — count and actions.
         var bottom = new Panel { Dock = DockStyle.Bottom, Height = 44, BackColor = Color.FromArgb(0x0E, 0x11, 0x16) };

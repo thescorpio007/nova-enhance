@@ -291,7 +291,17 @@ class FolderSearchForm : NovaForm
             Prompts.Xlsx(x, $"{sel.Count} files", head, data);
             Shell.Open(x);
         });
-        menu.Opening += (_, _) => { var n = filesList.SelectedItems.Count; menu.Items[0].Text = n > 1 ? $"Open ({n})" : "Open"; };
+        menu.Opening += (_, e) =>
+        {
+            var n = filesList.SelectedItems.Count; menu.Items[0].Text = n > 1 ? $"Open ({n})" : "Open";
+            // 📄 one file: Nova's file menu (the same in every window) — at the first hit's page
+            if (n == 1 && Selected() is { } h && string.IsNullOrEmpty(h.Remote))
+            {
+                e.Cancel = true;
+                var pc = h.Pieces.FirstOrDefault();
+                FileMenu.Show(h.Path, filesList, Cursor.Position, new FileMenu.At { Loc = pc?.Loc ?? "", Goto = pc?.Goto ?? "", Text = pc?.Text ?? "", Term = matcher?.Query ?? "" });
+            }
+        };
         filesList.KeyDown += (_, e) => { if (e.Control && e.KeyCode == Keys.A) { foreach (ListViewItem i in filesList.Items) i.Selected = true; e.Handled = true; } };
         filesList.ContextMenuStrip = menu;
         problemsList = NewList(("File", 300), ("Problem", 330), ("What you can do", 240));

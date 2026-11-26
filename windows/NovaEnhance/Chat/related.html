@@ -63,12 +63,12 @@ h2{margin:0;font-size:19px}.muted{color:#9AA3B5;font-size:12.5px}
     $("sub").textContent = m.revs.length + " revision(s) · " + m.count + " email(s) · every folder and archive · from Nova's index in " + m.secs + " s";
     var fb = $("files"); fb.innerHTML = "";
     if (m.files && m.files.length) {
-      var fc = el("div", "rev"); var fh = el("h4"); fh.appendChild(el("span", null, "📄 Files")); fh.appendChild(el("span", "muted", m.files.length + " in your project folders · contract weight first · click = open"));
+      var fc = el("div", "rev"); var fh = el("h4"); fh.appendChild(el("span", null, "📄 Files")); fh.appendChild(el("span", "muted", m.files.length + " in your project folders · contract weight first · click = open · right-click or ⋯ = every option"));
       fh.onclick = function () { fc.classList.toggle("shut"); }; fc.appendChild(fh);
       m.files.forEach(function (f) {
         var r = el("div", "fl ev");
         r.appendChild(el("span", null, f.cad ? "📐" : "📄"));
-        var s = el("span", "s", f.name); s.title = f.path; r.appendChild(s);
+        var s = el("span", "s", f.name); s.title = f.path; r.appendChild(s); r.setAttribute("data-path", f.path);
         r.appendChild(el("span", null, f.rev ? "rev " + f.rev : ""));
         r.appendChild(el("span", "pill " + (f.status === "latest" ? "ok" : "gr"), f.status || "—"));
         r.appendChild(el("span", "who", f.src || ""));

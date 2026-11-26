@@ -1090,7 +1090,7 @@ class MyPcActivity : BaseActivity() {
 
     private fun deepSource(n: Int, s: DeepPhone.Src) {
         val c = this
-        val k = Ui.card(c).apply { setOnClickListener { openSrc(s) } }
+        val k = Ui.card(c).apply { setOnClickListener { openSrc(s) }; s.file?.let { fl -> setOnLongClickListener { fileMenu(fl.path, ""); true } } }
         k.addView(Ui.text(c, "[$n] " + (when (s.kind) { "mail" -> "✉ "; "drive" -> "☁ "; else -> "📂 " }) + s.title, 14f, Ui.TEXT, true))
         k.addView(Ui.text(c, s.sub.replace('\\', '›'), 11.5f, Ui.MUTED))
         k.addView(Ui.text(c, "matched: " + s.terms.joinToString(" · "), 11.5f, Ui.GOOD))
@@ -1124,13 +1124,42 @@ class MyPcActivity : BaseActivity() {
     private fun findFile(x: PhoneSearch.Item) {
         val c = this
         val f = x.file ?: return
-        val k = Ui.card(c).apply { setOnClickListener { fetch(JSONObject().put("path", f.path)) } }
-        k.addView(Ui.text(c, x.name, 14f, Ui.TEXT, true))
+        val k = Ui.card(c).apply { setOnClickListener { fetch(JSONObject().put("path", f.path)) }; setOnLongClickListener { fileMenu(f.path, x.docNo); true } }
+        val top = Ui.row(c)
+        top.addView(Ui.text(c, x.name, 14f, Ui.TEXT, true), Ui.lp(0, weight = 1f))
+        top.addView(Ui.text(c, "  ⋯  ", 16f, Ui.ACCENT, true).apply { setOnClickListener { fileMenu(f.path, x.docNo) } })
+        k.addView(top)
         val folders = f.path.replace('/', '\\').split('\\').dropLast(1).filter { it.isNotBlank() && !it.endsWith(":") }.takeLast(3).joinToString(" › ")
         k.addView(Ui.text(c, folders + " · " + "%.1f MB".format(f.size / 1e6) + (if (f.m > 0) " · " + SimpleDateFormat("dd MMM yyyy", Locale.UK).format(Date(f.m)) else ""), 11.5f, Ui.MUTED))
         tags(x).let { if (it.isNotBlank()) k.addView(Ui.text(c, it, 11.5f, Ui.GOOD)) }
         if (f.snippet.isNotBlank() && x.score < 6) k.addView(Ui.text(c, f.snippet, 11.5f, Ui.MUTED))
         body.addView(k, Ui.lp(top = Ui.dp(c, 6)))
+    }
+
+    /** 📄 The file menu (long-press or ⋯): the same choices as on the PC, the ones that make sense on a phone. Designed by A.HAMROUNI */
+    private fun fileMenu(path: String, number: String) {
+        val c = this
+        val name = path.replace('/', '\\').substringAfterLast('\\')
+        val folder = path.replace('/', '\\').substringBeforeLast('\\', "")
+        val no = number.ifBlank { Regex("[A-Z0-9]{2,6}(-[A-Z0-9]{1,8}){3,}").find(name.uppercase())?.value ?: "" }
+        fun copy(label: String, t: String) {
+            (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText(label, t))
+            say("⧉ Copied: $t")
+        }
+        val items = mutableListOf<Pair<String, () -> Unit>>(
+            "📖 Open" to { fetch(JSONObject().put("path", path)) },
+            "⧉ Copy the name" to { copy("name", name) },
+            "⧉ Copy the full path" to { copy("path", path) },
+            "⧉ Copy the folder path" to { copy("folder", folder) },
+        )
+        if (no.isNotEmpty()) {
+            items.add("⧉ Copy the number ($no)" to { copy("number", no) })
+            items.add("🔗 Find related (revisions + emails)" to { runFind(no) })
+        }
+        items.add("💬 Ask Nova about it" to { agentAsk("Tell me about $name — what it is, its revision and status, and the related emails.") })
+        android.app.AlertDialog.Builder(c).setTitle("📄 $name")
+            .setItems(items.map { it.first }.toTypedArray()) { _, i -> items[i].second() }
+            .setNegativeButton("Close", null).show()
     }
 
     private fun findMail(x: PhoneSearch.Item) {

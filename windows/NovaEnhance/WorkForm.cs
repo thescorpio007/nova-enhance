@@ -271,6 +271,7 @@ class WorkForm : NovaForm
             });
             open.Font = Th.F(9); open.Margin = new Padding(6, 0, 0, 0);
             row.Controls.Add(open, 3, 0);
+            if (i.Kind != "mail" && !string.IsNullOrEmpty(i.Path)) { var ip = i.Path; FileMenu.Attach(open, _ => ip, _ => new FileMenu.At { Loc = i.Loc ?? "", Goto = i.Goto ?? "" }); FileMenu.Attach(row, _ => ip); }
             var sub = i.Why.Length > 0 ? "✓ " + i.Why : (i.Summary.Length > 0 ? "✦ " + i.Summary : "") + (i.Att.Length > 0 ? "  📎 " + i.Att.Split(';')[0] : "");
             if (sub.Length > 0)
             {

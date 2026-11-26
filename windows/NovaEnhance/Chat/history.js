@@ -143,6 +143,7 @@
       d.appendChild(el("div", "grp", "Sources · " + src.length + " (click to open)"));
       src.forEach(function (x, i) {
         var s = el("div", "src", "[" + (i + 1) + "] " + (x.kind === "email" ? "✉ " : "📄 ") + (x.label || x.path || ""));
+        if (x.path && x.kind !== "email") { s.setAttribute("data-path", x.path); s.setAttribute("data-loc", x.loc || ""); s.setAttribute("data-go", x.goto || ""); }
         s.onclick = function () { post({ t: "src", src: x }); };
         d.appendChild(s);
       });

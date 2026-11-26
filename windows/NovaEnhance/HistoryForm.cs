@@ -73,6 +73,8 @@ class HistoryForm : NovaForm
                     if (e != null) { e.Remove("state"); e["status"] = SearchHistory.Status(SearchHistory.Get(id)); Post(new JsonObject { ["t"] = "entry", ["e"] = e }); }
                     break;
                 case "src": NovaChat.OpenSource(m["src"] as JsonObject); break;
+                case "filemenu": WebPage.FileMenuFrom(m, this); break;
+                case "rowmenu": WebPage.RowMenu(m, this); break;
                 case "copy": Clipboard.SetText(m["text"]?.ToString() is { Length: > 0 } t ? t : " "); break;
                 case "del": SearchHistory.Delete(id); Reload(); break;
                 case "clear":

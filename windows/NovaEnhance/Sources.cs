@@ -257,6 +257,7 @@ class SourcesForm : NovaForm
         list = new ListView { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.None, Font = Th.F(9.5f), HideSelection = false };
         foreach (var (h, w) in new[] { ("Name", 200), ("Project", 70), ("Kind", 110), ("Reads", 90), ("Offline", 70), ("Status", 140), ("Folder", 380) }) list.Columns.Add(h, w);
         list.SelectedIndexChanged += (_, _) => { if (list.SelectedItems.Count > 0 && list.SelectedItems[0].Tag is ProjectSource s) Pick(s.Path, s); };
+        FileMenu.Attach(list, p => (p is { } pt ? list.GetItemAt(pt.X, pt.Y) : list.SelectedItems.Cast<ListViewItem>().FirstOrDefault())?.Tag is ProjectSource ps ? ps.Path : null);
         var ed = new Stack { Dock = DockStyle.Bottom, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(10, 8, 10, 8), BackColor = Th.Bg };
         pathBox = new TextBox { ReadOnly = true, Width = 600, BackColor = Th.Card2, ForeColor = Th.Muted, BorderStyle = BorderStyle.FixedSingle };
         nameBox = new TextBox { Width = 260, BackColor = Th.Card2, ForeColor = Th.Text, BorderStyle = BorderStyle.FixedSingle };

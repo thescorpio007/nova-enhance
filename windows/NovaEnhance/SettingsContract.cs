@@ -115,6 +115,8 @@ partial class SettingsForm
             btns.Controls.Add(Th.B("↻ List again", () => Projects.Indexer.Relist(ff)));
             btns.Controls.Add(Th.B("📂 Open", () => Shell.Open(ff)));
             card.Controls.AddRange(new Control[] { title, path, pill, l1, b1, l2, b2, cur, btns });
+            btns.Controls.Add(FileMenu.Dots(() => ff));
+            foreach (var cc in new Control[] { card, title, path }) FileMenu.Attach(cc, _ => ff);
             holder.Controls.Add(card);
             cards.Add(() =>
             {
@@ -167,6 +169,8 @@ partial class SettingsForm
     // ------------------------------------------------------------------ 📜 Contract area (by document)
 
     static string caProject = "", caTab = "All governing", caFilter = "";
+    /// <summary>Opens the register of a project filtered on a number or name (from the 📄 file menu: ⚖ Which document governs it?).</summary>
+    public static void CaShow(string project, string filter) { caProject = project; caTab = "All governing"; caFilter = filter ?? ""; }
 
     void ContractPage()
     {
@@ -320,6 +324,7 @@ partial class SettingsForm
                 fb.TextChanged += (_, _) => { caFilter = fb.Text; Fill(); };
                 Fill();
                 g.CellDoubleClick += (_, e) => { if (e.RowIndex >= 0 && g.Rows[e.RowIndex].Tag is RegDoc d) Shell.Open(d.Path); };
+                FileMenu.AttachGrid(g, r => (r.Tag as RegDoc)?.Path);
                 page.Add(g, true);
                 var gb = page.Add(Th.Row());
                 gb.Controls.Add(Th.B("✎ Set the type…", () =>
@@ -510,6 +515,7 @@ partial class SettingsForm
             if (e.RowIndex < 0 || g.Rows[e.RowIndex].Tag is not NovaIndex.VendorRow r) return;
             try { Opener.Open(new FileHit { Path = r.Path }, new PieceHit { Loc = "page " + r.Page, Goto = "page:" + r.Page, Text = r.Row, Matches = new() }, fb.Text.Trim()); } catch { Shell.Open(r.Path); }
         };
+        FileMenu.AttachGrid(g, r => (r.Tag as NovaIndex.VendorRow)?.Path, r => r.Tag is NovaIndex.VendorRow vr ? new FileMenu.At { Loc = "page " + vr.Page, Goto = "page:" + vr.Page, Text = vr.Row } : null);
         Fill();
         page.Add(g, true);
     }

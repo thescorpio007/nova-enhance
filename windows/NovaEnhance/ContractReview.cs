@@ -53,7 +53,7 @@ class ContractReviewForm : NovaForm
         var l = Th.Wrap(text, size, color ?? Th.Text);
         l.MaximumSize = new Size(Math.Max(600, outp.ClientSize.Width - 40), 0);
         if (bold) l.Font = Th.F(size, true);
-        if (open != null) { l.Cursor = Cursors.Hand; l.Click += (_, _) => Shell.Open(open); }
+        if (open != null) { l.Cursor = Cursors.Hand; l.Click += (_, _) => Shell.Open(open); FileMenu.Attach(l, _ => open); }
         outp.Controls.Add(l);
     }
 

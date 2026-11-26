@@ -1418,6 +1418,7 @@ class AskForm : NovaForm
                 void Open(object _, EventArgs __) => OpenFileRow(row);
                 card.Click += Open; t.Click += Open; sub.Click += Open;
                 card.DoubleClick += (_, _) => { if (row.Path.Length > 0) Shell.Open(row.Path); };
+                if (row.Path.Length > 0) { var rp = row.Path; foreach (Control cc in new Control[] { card, t, sub }) FileMenu.Attach(cc, _ => rp); }
                 new ToolTip().SetToolTip(t, row.Path.Length > 0 ? row.Path + "\nClick: preview · double-click: open" : Short(row.Text));
                 filesBox.Controls.Add(card);
             }
