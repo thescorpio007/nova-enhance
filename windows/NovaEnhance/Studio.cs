@@ -98,7 +98,9 @@ static class Studio
         var runs = await GhGet(h, $"repos/{Repo}/actions/runs?per_page=1&branch=main", ct);
         var last = (runs["workflow_runs"] as JsonArray)?.FirstOrDefault();
         var concl = last?["conclusion"]?.ToString() ?? last?["status"]?.ToString() ?? "—";
-        return $"{(n > 0 && concl is "success" or "in_progress" or "queued" ? "✓" : "⚠")} {n} workflow(s) · last build #{last?["run_number"]} {concl} · {last?["display_title"]?.ToString() is { } t ? Clip(t, 50) : ""}";
+        var title = Clip(last?["display_title"]?.ToString() ?? "", 50);
+        var good = n > 0 && concl is "success" or "in_progress" or "queued";
+        return $"{(good ? "✓" : "⚠")} {n} workflow(s) · last build #{last?["run_number"]} {concl} · {title}";
     }
 
     /// <summary>🧰 Git · .NET SDK · Node.js · the coding agent — their versions (empty = missing).</summary>
