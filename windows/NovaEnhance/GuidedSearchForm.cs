@@ -650,11 +650,11 @@ class GuidedSearchForm : NovaForm
         bt.Controls.Add(Th.B("📖 Open at this clause", () => Open(c.Path, c.Seg, q), true));
         bt.Controls.Add(Th.B("⧉ Copy the text", () => { try { Clipboard.SetText(c.Seg.Text ?? " "); note.Text = "⧉ Copied"; } catch { } }));
         bt.Controls.Add(Th.B("✦ Ask about it", () => Screens.HubAttach(c.Path)));
-        var at = new FileMenu.At { Loc = c.Seg.Loc ?? "", Goto = c.Seg.Goto ?? "", Text = c.Seg.Text ?? "", Term = q };
-        bt.Controls.Add(FileMenu.Dots(() => c.Path, at));
+        var fat = new FileMenu.At { Loc = c.Seg.Loc ?? "", Goto = c.Seg.Goto ?? "", Text = c.Seg.Text ?? "", Term = q };
+        bt.Controls.Add(FileMenu.Dots(() => c.Path, fat));
         foreach (Control x in bt.Controls) { x.MinimumSize = new Size(0, 26); x.Font = Th.F(8.5f, true); x.Margin = new Padding(0, 0, 6, 0); }
         p.Controls.AddRange(new Control[] { t, s, bt });
-        foreach (var cc in new Control[] { p, t, s }) FileMenu.Attach(cc, _ => c.Path, _ => at);
+        foreach (var cc in new Control[] { p, t, s }) FileMenu.Attach(cc, _ => c.Path, _ => fat);
     }
 
     void Open(string path, Seg seg, string term)
