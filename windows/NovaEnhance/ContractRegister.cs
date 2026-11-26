@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
@@ -28,7 +29,9 @@ class RegDoc
     public string Path = "", Name = "", Type = "", Disc = "", Rev = "", Key = "", Status = "", By = "", How = "", Acts = "";
     public DateTime Date;
     public long Size;
-    public bool Sure, Custom, Draftish, SignedLook, ForcedOld, SignedOk;
+    public bool Sure, Custom, Draftish, SignedLook, ForcedOld, SignedOk, Tender, Executed;
+    public string Guess = "", Stamps = "", EvidenceText = "";
+    public int Evidence;   // 4 🔏 contract document stamped by all parties · 3 stamped by some / executed folder · 2 number + title · 1 name only
     public (int, string) Rank;
     public bool Governing => Status.StartsWith("governs");
 }
@@ -61,12 +64,13 @@ static class ContractRegister
 {
     public const string Letters = "Letters / reference";
     public const string Submittals = "Submittals (not contract)";
+    public const string Stamped = "Contract document · stamped";
 
     /// <summary>The built-in types, in the register's order.</summary>
     public static readonly string[] BuiltIn =
     {
         "Agreement & LoA", "PTC", "Conditions · particular", "Conditions · general", "Employer's requirements", "Specifications", "Drawings · contract", "BOQ",
-        "Addenda / bulletins", "Drawings · IFC", "Changes (EI · VO · PMI · VE · RFI)", "Programme / schedule", "Authority approvals",
+        "Addenda / bulletins", Stamped, "Drawings · IFC", "Changes (EI · VO · PMI · VE · RFI)", "Programme / schedule", "Authority approvals",
         "Drawings · IFT (tender)", "Draft", Letters, Submittals, "Exclude",
     };
     static readonly HashSet<string> Never = new() { "Drawings · IFT (tender)", "Draft", "Exclude" };
@@ -223,34 +227,51 @@ static class ContractRegister
         var excl = Excluded(project);
         var types = Types(project);
         var decide = Decisions(project);
+        var cfg = ContractArea.Cfg(project);
+        var folderRules = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (cfg["folders"] is JsonObject fo) foreach (var (k, v) in fo) folderRules[k] = v?.ToString() ?? "";
         Say(project, "📇 listing the documents of the contract areas…");
         List<Projects.FileRow> files;
-        try { files = Projects.Catalogue(areas, 400_000); } catch { files = new(); }
+        try { files = Projects.Catalogue(areas.Concat(folderRules.Keys), 400_000); } catch { files = new(); }
+        // 📌 files you chose outside the areas (“use only this file”)
+        foreach (var x in (cfg["extra"] as JsonArray ?? new JsonArray()).Select(e => e?.ToString() ?? "").Where(e => e.Length > 0))
+            try { var fi = new FileInfo(x); if (fi.Exists) files.Add(new Projects.FileRow { Path = x, Name = fi.Name, Size = fi.Length, Modified = fi.LastWriteTime }); } catch { }
         files = files.Where(f => !excl.Any(x => f.Path.StartsWith(x + "\\", StringComparison.OrdinalIgnoreCase)) && !Projects.Private.IsMatch(f.Path) && !Pictures.IsMatch(f.Name))
                      .GroupBy(f => f.Path, StringComparer.OrdinalIgnoreCase).Select(g => g.First()).ToList();
         reg.Files = files.Count;
+        // 📐 the labels come from the shared Nova index (worked out once, saved for every feature)
+        var labels = NovaIndex.Labels(areas.Concat(folderRules.Keys), files, ct, s => Say(project, s));
         int n = 0;
         foreach (var f in files)
         {
             ct.ThrowIfCancellationRequested();
             if (++n % 500 == 0) Say(project, $"🏷 labelling {n:N0} of {files.Count:N0}…");
-            reg.Docs.Add(Label(project, f, types, decide, areas));
+            reg.Docs.Add(Label(project, f, types, decide, areas, labels.GetValueOrDefault(f.Path), folderRules));
         }
+        ApplyStamps(project, reg, decide, ct);
         Say(project, "⚖ finding the latest revisions…");
         Supersede(reg);
+        // 📋 check lists (vendor lists…): their rows go into the index
+        foreach (var d in reg.Docs.Where(d => d.Governing && d.Custom && d.Acts == "check"))
+        {
+            ct.ThrowIfCancellationRequested();
+            Say(project, "📋 reading the rows of " + d.Name + "…");
+            NovaIndex.IndexVendors(project, d);
+        }
         Eyes(project, reg, decide);
         Say(project, "");
         return reg;
     }
 
     /// <summary>The type of one file: your answer › your types › page 1 › the 📐 filing labels › the name › the folder path.</summary>
-    public static RegDoc Label(string project, Projects.FileRow f, List<DocType> types, Dictionary<string, string> decide, List<string> areas = null)
+    public static RegDoc Label(string project, Projects.FileRow f, List<DocType> types, Dictionary<string, string> decide, List<string> areas = null,
+                               FileLabels lbIn = null, Dictionary<string, string> folderRules = null)
     {
         areas ??= Areas(project);
         var d = new RegDoc { Path = f.Path, Name = f.Name, Size = f.Size, Date = f.Modified };
         var ext = Path.GetExtension(f.Name).ToLowerInvariant();
-        FileLabels lb;
-        try { lb = Filing.Classify(f.Path); } catch { lb = new FileLabels(); }
+        FileLabels lb = lbIn;
+        if (lb == null) try { lb = Filing.Classify(f.Path); } catch { lb = new FileLabels(); }
         d.Disc = Short(lb.Disc); d.Rev = lb.Rev;
         try { var k = Revisions.Parse(f.Path, f.Modified.Ticks); d.Key = k.Key; d.Rank = k.Rank; if (d.Rev.Length == 0) d.Rev = k.Rev; } catch { d.Key = Path.GetFileNameWithoutExtension(f.Name).ToLowerInvariant(); }
         if (lb.Number.Length > 0) d.Key = lb.Number.ToLowerInvariant();
@@ -262,34 +283,52 @@ static class ContractRegister
         if (ans == "!old") d.ForcedOld = true;
         if (ans == "!signed") d.SignedOk = true;
         d.Draftish = !d.SignedOk && (DraftPath.IsMatch("\\" + rel + "\\") || DraftPath.IsMatch(Path.GetFileNameWithoutExtension(f.Name)));
+        d.Executed = ExecPath.IsMatch(rel);
+        d.Tender = !d.Executed && TenderPath.IsMatch("\\" + rel + "\\") && !IfcWord.IsMatch(rel);
+        if (d.Executed) { d.Evidence = 3; d.EvidenceText = "folder “" + Clip(ExecPath.Match(rel).Value, 30) + "”"; }
 
         // 1 · your answer
         if (ans.Length > 0 && !ans.StartsWith("!"))
         {
             d.Type = ans; d.Sure = true; d.How = "✓ your answer"; d.Custom = types.Any(t => t.Name == ans);
             d.Acts = types.FirstOrDefault(t => t.Name == ans)?.Acts ?? "";
+            d.Tender = false; d.Draftish = false;
             return d;
         }
+        // 1b · your folder (everything inside = this type, also new files later)
+        if (folderRules != null)
+            foreach (var (fold, ft) in folderRules)
+                if (f.Path.StartsWith(fold.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase))
+                {
+                    d.Type = ft; d.Sure = true; d.How = "📁 your folder “" + Path.GetFileName(fold.TrimEnd('\\')) + "”"; d.Custom = types.Any(t => t.Name == ft);
+                    d.Acts = types.FirstOrDefault(t => t.Name == ft)?.Acts ?? "";
+                    d.Tender = false; d.Draftish = false;
+                    return d;
+                }
+        var notType = ans.StartsWith("!not:") ? ans[5..] : "";
         var page = Readable.Contains(ext) ? FolderIndex.FirstText(f.Path, 1500) : "";
         if (page.Length > 0 && ContractArea.Signed.IsMatch(page)) d.SignedLook = true;
         var stem = Path.GetFileNameWithoutExtension(f.Name);
+        var nStem = Norm(stem); var nPage = page.Length > 0 ? Norm(page) : ""; var nRel = Norm(rel);
 
-        // 2 · your own types (name words, document code, words on page 1)
-        foreach (var t in types)
+        // 2 · your own types — loose: “vendor list” = “Vendors_List” = “vendors-list”; the type's name counts too; then the folder names
+        foreach (var t in types.Where(t => t.Name != notType))
         {
-            var nw = t.NameWords.FirstOrDefault(w => stem.Contains(w, StringComparison.OrdinalIgnoreCase));
+            var words = t.NameWords.Append(t.Name).Select(Norm).Where(w => w.Length > 1).Distinct().ToList();
+            var nw = words.FirstOrDefault(w => Has(nStem, w));
             var code = t.Code.Length > 0 && Regex.IsMatch(stem, @"(^|[\-_\s])" + Regex.Escape(t.Code) + @"([\-_\s]|$)", RegexOptions.IgnoreCase);
-            var pw = page.Length > 0 ? t.PageWords.FirstOrDefault(w => page.Contains(w, StringComparison.OrdinalIgnoreCase)) : null;
-            if (nw != null || code || pw != null)
+            var pw = nPage.Length > 0 ? t.PageWords.FirstOrDefault(w => Has(nPage, Norm(w))) : null;
+            var fw = nw == null && pw == null && !code ? words.FirstOrDefault(w => Has(nRel, w)) : null;
+            if (nw != null || code || pw != null || fw != null)
             {
-                d.Type = t.Name; d.Custom = true; d.Acts = t.Acts; d.Sure = pw != null || code || nw != null;
-                d.How = pw != null ? $"📄 p.1 “{pw}”" : code ? $"code “{t.Code}” in the name" : $"name “{nw}”";
-                return d;
+                d.Type = t.Name; d.Custom = true; d.Acts = t.Acts; d.Sure = true;
+                d.How = pw != null ? $"📄 p.1 “{pw}”" : code ? $"code “{t.Code}” in the name" : nw != null ? $"name “{nw}”" : $"folder “{fw}”";
+                break;
             }
         }
 
         // 3 · page 1 (the title the document gives itself)
-        if (page.Length > 0)
+        if (d.Type.Length == 0 && page.Length > 0)
         {
             foreach (var (rx, role, w, tag) in ContractArea.PageRules)
             {
@@ -348,12 +387,25 @@ static class ContractRegister
             if (best.Rx != null) { d.Type = best.Role == "Reference only" ? Letters : best.Role; d.Sure = false; d.How = $"folder “{Clip(best.Rx.Match(rel).Value)}”"; }
         }
         if (d.Type.Length == 0) { d.Type = Docs.Contains(ext) ? "" : Letters; d.Sure = false; d.How = d.Type.Length == 0 ? "no number, no clear title" : "not a document"; }
+        d.Guess = d.Type;
+        if (d.Evidence < 2 && lb.Number.Length > 0 && d.Sure) { d.Evidence = 2; d.EvidenceText = "number " + lb.Number; }
+        if (d.Evidence < 1) { d.Evidence = 1; d.EvidenceText = d.Sure ? "name / page 1" : "name only"; }
 
         // a draft folder never makes a signed, numbered IFC / contract document a draft — but a draft-looking path wins over a weak guess
         if (d.Draftish && !d.Sure && d.Type != Letters) { d.Type = "Draft"; d.How += " · in a draft folder"; }
         else if (d.Draftish && d.Sure && d.Type is not ("Draft" or "Drawings · IFT (tender)") && TenderOrDraftFolder(rel) && !IfcWord.IsMatch(stem)) { d.Type = "Draft"; d.How += " · draft folder “" + Clip(rel, 40) + "”"; }
         return d;
     }
+
+    static readonly Regex ExecPath = new(@"executed|stamped|signed contract|contract documents? stamped", RegexOptions.IgnoreCase);
+
+    /// <summary>Loose form for matching: lower case, _ - . and spaces as one space, plural “s” dropped (vendors list = vendor_list).</summary>
+    public static string Norm(string s)
+    {
+        s = Regex.Replace((s ?? "").ToLowerInvariant(), @"[_\-\.\s/\\]+", " ").Trim();
+        return Regex.Replace(s, @"(?<=\p{L}{3})s\b", "");
+    }
+    static bool Has(string hay, string w) => w.Length > 1 && (" " + hay + " ").Contains(" " + w + " ") || w.Length > 4 && hay.Contains(w);
 
     static bool TenderOrDraftFolder(string rel) => Regex.IsMatch(rel, @"(^|[\\_\s\-])(draft|_?td)([\\_\s\-]|$)", RegexOptions.IgnoreCase);
     static string Clip(string s, int n = 50) { s = Regex.Replace(s ?? "", @"\s+", " ").Trim(); return s.Length > n ? s[..n] + "…" : s; }
@@ -363,15 +415,69 @@ static class ContractRegister
         "Plumbing" => "PL", "Fire & life safety" => "FLS", "Façade" => "FA", "Lighting" => "LT", "Signage" => "SG", "Civil works" => "CV", "" => "", _ => disc.Length > 4 ? disc[..4] : disc,
     };
 
+    // ------------------------------------------------------------------ 🔏 stamps (the strongest evidence)
+
+    public static readonly (string Role, string Label)[] StampRolesList =
+        { ("contract", "🔏 Contract document"), ("client", "🏛 Client"), ("contractor", "🏗 Contractor"), ("consultant", "📐 Consultant"), ("other", "Other stamp"), ("ignore", "Not a stamp (logo…)") };
+
+    /// <summary>Your named stamps: fingerprint → (role, name). Kept in 🧠 Nova Brain with the project.</summary>
+    public static Dictionary<string, (string Role, string Name)> StampRoles(string project)
+    {
+        var d = new Dictionary<string, (string, string)>();
+        if (ContractArea.Cfg(project)["stamps"] is JsonObject o)
+            foreach (var (k, v) in o) d[k] = (v?["role"]?.ToString() ?? "", v?["name"]?.ToString() ?? "");
+        return d;
+    }
+    public static void SaveStamps(string project, Dictionary<string, (string Role, string Name)> roles)
+    {
+        var c = ContractArea.Cfg(project);
+        var o = new JsonObject();
+        foreach (var (k, v) in roles) o[k] = new JsonObject { ["role"] = v.Role, ["name"] = v.Name };
+        c["stamps"] = o;
+        ContractArea.SaveCfg(project, c);
+        Invalidate(project);
+    }
+
+    /// <summary>Reads the stamps of the contract-area PDFs (fingerprints of the pictures on page 1 and the last page, saved in the index):
+    /// “Contract document” + every party → 🔏 governs, even without a number or in a draft / tender folder. Up to 3,000 new PDFs per pass.</summary>
+    static void ApplyStamps(string project, ContractReg reg, Dictionary<string, string> decide, CancellationToken ct)
+    {
+        var roles = StampRoles(project);
+        if (roles.Count == 0) return;
+        var parties = roles.Values.Select(v => v.Role).Where(r => r is "client" or "contractor" or "consultant").Distinct().ToList();
+        int budget = 3000, n = 0;
+        foreach (var d in reg.Docs.Where(d => d.Name.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) && d.Type != Submittals))
+        {
+            ct.ThrowIfCancellationRequested();
+            var st = NovaIndex.Stamps(d.Path, d.Size, d.Date.Ticks, false);
+            if (st == null && budget > 0) { budget--; if (++n % 100 == 0) Say(project, $"🔏 reading the stamps of {n:N0} documents…"); st = NovaIndex.Stamps(d.Path, d.Size, d.Date.Ticks, true); }
+            if (st == null) continue;
+            var found = st.Where(roles.ContainsKey).Select(h => roles[h]).Where(r => r.Role is not ("ignore" or "other")).ToList();
+            if (found.Count == 0) continue;
+            var has = found.Select(f => f.Role).Distinct().ToList();
+            var all = has.Contains("contract") && parties.All(has.Contains) || decide.GetValueOrDefault(d.Path) == "!valid";
+            d.Stamps = string.Join(" · ", found.GroupBy(f => f.Role).Select(g => g.First().Name.Length > 0 ? g.First().Name : StampRolesList.First(x => x.Role == g.Key).Label));
+            d.Evidence = all ? 4 : Math.Max(d.Evidence, 3);
+            d.EvidenceText = all ? "🔏 contract document · stamped by all parties" : "🔏 stamped: " + d.Stamps;
+            if (all)
+            {
+                d.Tender = false; d.Draftish = false; d.Sure = true;
+                if (d.Type is "" or "Draft" or "Drawings · IFT (tender)" or Letters or "Exclude")
+                    d.Type = d.Guess is "" or "Draft" or "Drawings · IFT (tender)" or Letters or "Exclude" ? Stamped : d.Guess;
+                d.How = "🔏 stamps · " + d.How;
+            }
+        }
+    }
+
     /// <summary>Same document (number) → only the latest revision governs; the others are “superseded by …”.</summary>
     static void Supersede(ContractReg reg)
     {
         foreach (var d in reg.Docs)
-            d.Status = d.Type.Length == 0 ? "unclear" : Never.Contains(d.Type) ? "never governs" : Refs.Contains(d.Type) || d.Acts == "reference" ? "reference" : d.Acts == "check" ? "governs · check list" : "governs";
+            d.Status = d.Type.Length == 0 ? "unclear" : Never.Contains(d.Type) || d.Tender && d.Evidence < 4 ? "never governs" : Refs.Contains(d.Type) || d.Acts == "reference" ? "reference" : d.Acts == "check" ? "governs · check list" : "governs";
         foreach (var d in reg.Docs.Where(d => d.ForcedOld && d.Governing)) { d.Status = "superseded"; d.By = "the copy you chose"; }
         foreach (var g in reg.Docs.Where(d => d.Governing && d.Key.Length > 3).GroupBy(d => d.Type + "|" + d.Key))
         {
-            var list = g.OrderByDescending(d => d.Rank.Item1).ThenByDescending(d => d.Rank.Item2, StringComparer.Ordinal).ThenByDescending(d => d.Date).ToList();
+            var list = g.OrderByDescending(d => d.Rank.Item1).ThenByDescending(d => d.Rank.Item2, StringComparer.Ordinal).ThenByDescending(d => d.Evidence).ThenByDescending(d => d.Date).ToList();
             var top = list[0];
             foreach (var d in list.Skip(1))
             {
@@ -391,6 +497,9 @@ static class ContractRegister
         var dups = reg.Docs.Where(d => d.Governing && d.Key.Length > 3).GroupBy(d => d.Type + "|" + d.Key)
             .Select(g => g.Where(d => d.Status != "superseded").ToList()).Where(l => l.Count > 1 && l.Select(d => d.Size).Distinct().Count() > 1 && !l.Any(d => Asked(d.Path))).ToList();
         if (dups.Count > 0) reg.Eyes.Add(new EyeItem { Kind = "dup", Title = $"⚖ Two “latest” copies of the same document ({dups.Count})", Detail = "Same number and revision, different file dates or sizes. Choose the one that governs; the other becomes “superseded”.", Paths = dups.SelectMany(l => l.OrderByDescending(d => d.Date).Select(d => d.Path)).ToList() });
+        // 🔏 stamped by some parties only (a contract document should carry every party's stamp)
+        var partial = reg.Docs.Where(d => d.Governing && d.Evidence == 3 && d.Stamps.Length > 0 && !Asked(d.Path)).ToList();
+        if (partial.Count > 0) reg.Eyes.Add(new EyeItem { Kind = "stamps", Title = $"🔏 Not stamped by all parties ({partial.Count})", Detail = "These carry some stamps but not “Contract Document” with every party (Client · Contractor · Consultant). Is the document valid?", Paths = partial.Select(d => d.Path).ToList() });
         // ✍ in a draft folder but looks signed
         var drafts = reg.Docs.Where(d => d.Type == "Draft" && d.SignedLook && !Asked(d.Path)).ToList();
         if (drafts.Count > 0) reg.Eyes.Add(new EyeItem { Kind = "draft", Title = $"✍ Draft or signed? ({drafts.Count})", Detail = "The folder says draft, but page 1 has a signature block or a “contract document” stamp.", Paths = drafts.Select(d => d.Path).ToList() });
@@ -463,21 +572,42 @@ static class ContractRegister
 
     // ------------------------------------------------------------------ disk
 
+    static JsonObject DocJson(RegDoc d) => new()
+    {
+        ["t"] = d.Type, ["di"] = d.Disc, ["r"] = d.Rev, ["k"] = d.Key, ["s"] = d.Status, ["b"] = d.By, ["h"] = d.How, ["a"] = d.Acts,
+        ["d"] = d.Date.Ticks, ["z"] = d.Size, ["su"] = d.Sure, ["c"] = d.Custom, ["r1"] = d.Rank.Item1, ["r2"] = d.Rank.Item2,
+        ["ev"] = d.Evidence, ["et"] = d.EvidenceText, ["st"] = d.Stamps,
+    };
+    static RegDoc FromJson(string path, JsonNode x) => new()
+    {
+        Path = path, Name = Path.GetFileName(path),
+        Type = x?["t"]?.ToString() ?? "", Disc = x?["di"]?.ToString() ?? "", Rev = x?["r"]?.ToString() ?? "", Key = x?["k"]?.ToString() ?? "",
+        Status = x?["s"]?.ToString() ?? "", By = x?["b"]?.ToString() ?? "", How = x?["h"]?.ToString() ?? "", Acts = x?["a"]?.ToString() ?? "",
+        Date = new DateTime(x?["d"]?.GetValue<long>() ?? 0), Size = x?["z"]?.GetValue<long>() ?? 0, Sure = x?["su"]?.GetValue<bool>() ?? false, Custom = x?["c"]?.GetValue<bool>() ?? false,
+        Rank = (x?["r1"]?.GetValue<int>() ?? 0, x?["r2"]?.ToString() ?? ""),
+        Evidence = x?["ev"]?.GetValue<int>() ?? 1, EvidenceText = x?["et"]?.ToString() ?? "", Stamps = x?["st"]?.ToString() ?? "",
+    };
+
+    /// <summary>The register goes into the shared 🗄 Nova index (every feature can read it), not a file of its own.</summary>
     static void SaveDisk(ContractReg r)
     {
         try
         {
-            var j = new JsonObject
+            using var c = FolderIndex.Open();
+            using var tx = FolderIndex.BeginWait(c, CancellationToken.None);
+            FolderIndex.Exec(c, "DELETE FROM creg WHERE project=$j", ("$j", r.Project));
+            using (var cmd = c.CreateCommand())
             {
-                ["project"] = r.Project, ["built"] = r.Built.ToString("o"), ["files"] = r.Files,
-                ["docs"] = new JsonArray(r.Docs.Select(d => (JsonNode)new JsonObject
-                {
-                    ["p"] = d.Path, ["t"] = d.Type, ["di"] = d.Disc, ["r"] = d.Rev, ["k"] = d.Key, ["s"] = d.Status, ["b"] = d.By, ["h"] = d.How, ["a"] = d.Acts,
-                    ["d"] = d.Date.Ticks, ["z"] = d.Size, ["su"] = d.Sure, ["c"] = d.Custom, ["r1"] = d.Rank.Item1, ["r2"] = d.Rank.Item2,
-                }).ToArray()),
-                ["eyes"] = new JsonArray(r.Eyes.Select(e => (JsonNode)new JsonObject { ["k"] = e.Kind, ["t"] = e.Title, ["d"] = e.Detail, ["p"] = new JsonArray(e.Paths.Select(p => (JsonNode)p).ToArray()) }).ToArray()),
-            };
-            File.WriteAllText(FilePath(r.Project), j.ToJsonString());
+                cmd.Transaction = tx;
+                cmd.CommandText = "INSERT OR REPLACE INTO creg(project,path,j) VALUES($j,$p,$x)";
+                cmd.Parameters.AddWithValue("$j", r.Project);
+                var pp = cmd.Parameters.Add("$p", SqliteType.Text); var px = cmd.Parameters.Add("$x", SqliteType.Text);
+                foreach (var d in r.Docs) { pp.Value = d.Path; px.Value = DocJson(d).ToJsonString(); cmd.ExecuteNonQuery(); }
+            }
+            var eyes = new JsonArray(r.Eyes.Select(e => (JsonNode)new JsonObject { ["k"] = e.Kind, ["t"] = e.Title, ["d"] = e.Detail, ["p"] = new JsonArray(e.Paths.Select(p => (JsonNode)p).ToArray()) }).ToArray());
+            FolderIndex.Exec(c, "INSERT OR REPLACE INTO cregmeta(project,built,files,eyes) VALUES($j,$b,$f,$e)", ("$j", r.Project), ("$b", r.Built.Ticks), ("$f", r.Files), ("$e", eyes.ToJsonString()));
+            tx.Commit();
+            try { File.Delete(FilePath(r.Project)); } catch { }
         }
         catch (Exception e) { Log.Warn("contract register", "save: " + e.Message); }
     }
@@ -486,21 +616,24 @@ static class ContractRegister
     {
         try
         {
-            var f = FilePath(project);
-            if (!File.Exists(f)) return null;
-            var j = JsonNode.Parse(File.ReadAllText(f)) as JsonObject;
-            var r = new ContractReg { Project = project, Built = DateTime.TryParse(j?["built"]?.ToString(), out var b) ? b : DateTime.MinValue, Files = j?["files"]?.GetValue<int>() ?? 0 };
-            foreach (var x in j?["docs"] as JsonArray ?? new JsonArray())
-                r.Docs.Add(new RegDoc
+            using var c = FolderIndex.Open();
+            using var m = c.CreateCommand();
+            m.CommandText = "SELECT built,files,eyes FROM cregmeta WHERE project=$j";
+            m.Parameters.AddWithValue("$j", project);
+            ContractReg r = null;
+            using (var mr = m.ExecuteReader())
+                if (mr.Read())
                 {
-                    Path = x?["p"]?.ToString() ?? "", Type = x?["t"]?.ToString() ?? "", Disc = x?["di"]?.ToString() ?? "", Rev = x?["r"]?.ToString() ?? "", Key = x?["k"]?.ToString() ?? "",
-                    Status = x?["s"]?.ToString() ?? "", By = x?["b"]?.ToString() ?? "", How = x?["h"]?.ToString() ?? "", Acts = x?["a"]?.ToString() ?? "",
-                    Date = new DateTime(x?["d"]?.GetValue<long>() ?? 0), Size = x?["z"]?.GetValue<long>() ?? 0, Sure = x?["su"]?.GetValue<bool>() ?? false, Custom = x?["c"]?.GetValue<bool>() ?? false,
-                    Rank = (x?["r1"]?.GetValue<int>() ?? 0, x?["r2"]?.ToString() ?? ""),
-                    Name = Path.GetFileName(x?["p"]?.ToString() ?? ""),
-                });
-            foreach (var e in j?["eyes"] as JsonArray ?? new JsonArray())
-                r.Eyes.Add(new EyeItem { Kind = e?["k"]?.ToString() ?? "", Title = e?["t"]?.ToString() ?? "", Detail = e?["d"]?.ToString() ?? "", Paths = (e?["p"] as JsonArray)?.Select(p => p?.ToString() ?? "").ToList() ?? new() });
+                    r = new ContractReg { Project = project, Built = new DateTime(mr.GetInt64(0)), Files = mr.GetInt32(1) };
+                    foreach (var e in JsonNode.Parse(mr.GetString(2)) as JsonArray ?? new JsonArray())
+                        r.Eyes.Add(new EyeItem { Kind = e?["k"]?.ToString() ?? "", Title = e?["t"]?.ToString() ?? "", Detail = e?["d"]?.ToString() ?? "", Paths = (e?["p"] as JsonArray)?.Select(p => p?.ToString() ?? "").ToList() ?? new() });
+                }
+            if (r == null) return null;
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "SELECT path,j FROM creg WHERE project=$j";
+            cmd.Parameters.AddWithValue("$j", project);
+            using var rd = cmd.ExecuteReader();
+            while (rd.Read()) try { r.Docs.Add(FromJson(rd.GetString(0), JsonNode.Parse(rd.GetString(1)))); } catch { }
             return r;
         }
         catch { return null; }
@@ -514,7 +647,7 @@ static class ContractRegister
         var n = name.ToLowerInvariant();
         var words = new List<string> { n };
         if (n.Contains("vendor") || n.Contains("manufactur") || n.Contains("supplier"))
-        { words.AddRange(new[] { "vendor list", "avl", "approved manufacturers", "approved suppliers", "approved vendors" }); t.Code = "AVL"; t.Acts = "check"; t.PageWords.AddRange(new[] { "Approved Vendor List", "List of Approved Manufacturers", "Approved Suppliers" }); t.Desc = "Approved manufacturers per spec section. A submittal with a brand not listed needs a substitution request."; }
+        { words.AddRange(new[] { "vendors list", "vendor list", "avl", "approved manufacturers", "approved suppliers", "approved vendors" }); t.Code = "AVL"; t.Acts = "check"; t.PageWords.AddRange(new[] { "List of Manufacturers", "List of Acceptable Vendors", "Approved Vendor List", "Approved Suppliers" }); t.Desc = "Approved manufacturers per spec section. A submittal with a brand not listed needs a substitution request."; }
         else if (n.Contains("finish")) { words.AddRange(new[] { "finishes schedule", "finish schedule", "schedule of finishes" }); t.Acts = "check"; t.PageWords.Add("Schedule of Finishes"); }
         else if (n.Contains("room data")) { words.AddRange(new[] { "room data sheet", "rds" }); t.Code = "RDS"; t.PageWords.Add("Room Data Sheet"); }
         else if (n.Contains("authority")) { words.AddRange(new[] { "authority", "adcd", "municipality", "civil defence", "noc" }); t.PageWords.Add("Civil Defence"); }
@@ -533,11 +666,14 @@ static class ContractRegister
         foreach (var f in files)
         {
             var stem = Path.GetFileNameWithoutExtension(f.Name);
-            if (!t.NameWords.Any(w => stem.Contains(w, StringComparison.OrdinalIgnoreCase)) && !(t.Code.Length > 0 && Regex.IsMatch(stem, @"(^|[\-_\s])" + Regex.Escape(t.Code) + @"([\-_\s]|$)", RegexOptions.IgnoreCase))) continue;
+            var nStem = Norm(stem); var nDir = Norm(Path.GetDirectoryName(f.Path) ?? "");
+            var words = t.NameWords.Append(t.Name).Select(Norm).Where(w => w.Length > 1).Distinct().ToList();
+            if (!words.Any(w => Has(nStem, w) || Has(nDir, w)) && !(t.Code.Length > 0 && Regex.IsMatch(stem, @"(^|[\-_\s])" + Regex.Escape(t.Code) + @"([\-_\s]|$)", RegexOptions.IgnoreCase))) continue;
             res.Add(Label(project, f, new List<DocType> { t }, new(), areas));
             if (res.Count > 60) break;
         }
         var reg = new ContractReg { Docs = res };
+        try { ApplyStamps(project, reg, new(), CancellationToken.None); } catch { }
         Supersede(reg);
         return res;
     }

@@ -3,7 +3,7 @@ namespace NovaEnhance;
 /// <summary>Settings, split into sections like the phone app.</summary>
 partial class SettingsForm : NovaForm
 {
-    static readonly string[] AllSections = { "🧠 Nova Brain", "🔐 Admin", "AI & API keys", "⚙ AI for each feature", "About me", "Enhancement", "Email & AI", "📥 Email index", "🗂 Mailboxes & archives", "📂 Folders in the index", "📁 Email projects", "Folder search", "📁 Projects", "📶 Indexing progress", "📜 Contract area", "🌐 Office VPN", "🗂 Project sources", "📦 Transfer engine", "🎯 Guided mode", "✦ Prompts", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "🧪 Activity history", "🔌 Test connector", "📱 Phone link", "About" };
+    static readonly string[] AllSections = { "🧠 Nova Brain", "🔐 Admin", "AI & API keys", "⚙ AI for each feature", "About me", "Enhancement", "Email & AI", "📥 Email index", "🗂 Mailboxes & archives", "📂 Folders in the index", "📁 Email projects", "Folder search", "📁 Projects", "📶 Indexing progress", "📜 Contract area", "🗄 Nova index", "🌐 Office VPN", "🗂 Project sources", "📦 Transfer engine", "🎯 Guided mode", "✦ Prompts", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "🧪 Activity history", "🔌 Test connector", "📱 Phone link", "About" };
     /// <summary>🧪 Activity history and 🔌 Test connector are advanced tools: shown only when switched on (About → Advanced tools).</summary>
     static readonly string[] AdvancedSections = { "🧪 Activity history", "🔌 Test connector" };
     static string[] Sections = Visible();
@@ -31,7 +31,7 @@ partial class SettingsForm : NovaForm
             var sel = (e.State & DrawItemState.Selected) != 0;
             using var bg = new SolidBrush(sel ? Th.Card2 : nav.BackColor);
             e.Graphics.FillRectangle(bg, e.Bounds);
-            var subPage = (e.Index > 0 && Array.IndexOf(Sections, "Email & AI") is var ea && e.Index > ea && e.Index <= ea + 4) || Sections[e.Index] is "⚙ AI for each feature" or "📶 Indexing progress" or "📜 Contract area";
+            var subPage = (e.Index > 0 && Array.IndexOf(Sections, "Email & AI") is var ea && e.Index > ea && e.Index <= ea + 4) || Sections[e.Index] is "⚙ AI for each feature" or "📶 Indexing progress" or "📜 Contract area" or "🗄 Nova index";
             var ind = subPage ? 34 : 16;
             TextRenderer.DrawText(e.Graphics, Sections[e.Index], Th.F(subPage ? 9.8f : 10.5f, sel), new Rectangle(e.Bounds.X + ind, e.Bounds.Y, e.Bounds.Width - ind, e.Bounds.Height),
                 sel ? Color.White : Color.FromArgb(0xC9, 0xCE, 0xD8), TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix);
@@ -94,6 +94,7 @@ partial class SettingsForm : NovaForm
                 case "📁 Projects": ProjectsPage(); break;
                 case "📶 Indexing progress": IndexingPage(); break;
                 case "📜 Contract area": ContractPage(); break;
+                case "🗄 Nova index": IndexPage(); break;
                 case "🌐 Office VPN": VpnPage(); break;
                 case "🗂 Project sources": SourcesPage(); break;
                 case "📦 Transfer engine": TransferPage(); break;

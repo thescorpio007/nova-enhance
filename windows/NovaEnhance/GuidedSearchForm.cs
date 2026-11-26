@@ -334,13 +334,16 @@ class GuidedSearchForm : NovaForm
         Working(true);
         var groups = await Task.Run(() =>
         {
-            labels = new Dictionary<string, FileLabels>(StringComparer.OrdinalIgnoreCase);
+            // 📐 from the shared Nova index: worked out once, saved — only new or changed files are labelled now
+            Dictionary<string, FileLabels> known;
+            try { known = NovaIndex.Labels(folders, files, my.Token, s => { try { BeginInvoke(new Action(() => { if (!note.IsDisposed) note.Text = s; })); } catch { } }); }
+            catch (OperationCanceledException) { known = new(StringComparer.OrdinalIgnoreCase); }
+            labels = new Dictionary<string, FileLabels>(known, StringComparer.OrdinalIgnoreCase);
             var res = Cats.ToDictionary(c => c.Key, _ => new List<Projects.FileRow>());
             foreach (var f in files)
             {
                 if (my.IsCancellationRequested) break;
-                var lb = Filing.Classify(f.Path);
-                labels[f.Path] = lb;
+                if (!labels.TryGetValue(f.Path, out var lb)) labels[f.Path] = lb = Filing.Classify(f.Path);
                 var k = lb.Kind.Length > 0 && KindCat.TryGetValue(lb.Kind, out var kc) ? kc : null;
                 if (k != null) res[k].Add(f);
                 else foreach (var c in Cats) if (c.Match != null && c.Key != "all" && c.Match.IsMatch(Rel(f.Path))) { res[c.Key].Add(f); break; }

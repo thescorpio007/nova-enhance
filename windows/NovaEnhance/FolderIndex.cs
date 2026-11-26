@@ -160,6 +160,16 @@ static class FolderIndex
                 Exec(c, "CREATE TABLE IF NOT EXISTS segs(id INTEGER PRIMARY KEY, file_id INTEGER, loc TEXT, go TEXT, text TEXT);");
                 Exec(c, "CREATE INDEX IF NOT EXISTS segs_file ON segs(file_id);");
                 Exec(c, "CREATE TABLE IF NOT EXISTS roots(path TEXT PRIMARY KEY, last INTEGER, files INTEGER);");
+                // 🗄 the shared layers of the Nova index (every feature reads them first and saves back what it worked out)
+                Exec(c, "CREATE TABLE IF NOT EXISTS labels(path TEXT PRIMARY KEY, size INTEGER, mtime INTEGER, ver TEXT, j TEXT);");
+                Exec(c, "CREATE TABLE IF NOT EXISTS evid(path TEXT PRIMARY KEY, size INTEGER, mtime INTEGER, stamps TEXT, pages INTEGER, at INTEGER);");
+                Exec(c, "CREATE TABLE IF NOT EXISTS vendors(id INTEGER PRIMARY KEY, project TEXT, path TEXT, page INTEGER, division TEXT, product TEXT, row TEXT);");
+                Exec(c, "CREATE INDEX IF NOT EXISTS vendors_path ON vendors(path);");
+                Exec(c, "CREATE TABLE IF NOT EXISTS vendsrc(path TEXT PRIMARY KEY, size INTEGER, mtime INTEGER, rows INTEGER);");
+                Exec(c, "CREATE TABLE IF NOT EXISTS links(a TEXT, b TEXT, kind TEXT, note TEXT, at INTEGER, PRIMARY KEY(a, b, kind));");
+                Exec(c, "CREATE INDEX IF NOT EXISTS links_b ON links(b);");
+                Exec(c, "CREATE TABLE IF NOT EXISTS creg(project TEXT, path TEXT, j TEXT, PRIMARY KEY(project, path));");
+                Exec(c, "CREATE TABLE IF NOT EXISTS cregmeta(project TEXT PRIMARY KEY, built INTEGER, files INTEGER, eyes TEXT);");
                 try
                 {
                     Exec(c, "CREATE VIRTUAL TABLE IF NOT EXISTS segs_fts USING fts5(text, content='segs', content_rowid='id', tokenize='unicode61 remove_diacritics 2');");
@@ -172,7 +182,7 @@ static class FolderIndex
         return c;
     }
 
-    static void Exec(SqliteConnection c, string sql, params (string, object)[] ps)
+    internal static void Exec(SqliteConnection c, string sql, params (string, object)[] ps)
     {
         using var cmd = c.CreateCommand();
         cmd.CommandText = sql;
@@ -180,7 +190,7 @@ static class FolderIndex
         cmd.ExecuteNonQuery();
     }
 
-    static object Scalar(SqliteConnection c, string sql, params (string, object)[] ps)
+    internal static object Scalar(SqliteConnection c, string sql, params (string, object)[] ps)
     {
         using var cmd = c.CreateCommand();
         cmd.CommandText = sql;
@@ -203,7 +213,7 @@ static class FolderIndex
         return res;
     }
 
-    static string Prefix(string root) => root.TrimEnd('\\') + "\\";
+    internal static string Prefix(string root) => root.TrimEnd('\\') + "\\";
 
     /// <summary>Forgets a folder: its files leave the index (unless another remembered folder holds them).</summary>
     /// <summary>Forgets one file so the next search reads it again (e.g. after turning OCR on).</summary>
@@ -219,7 +229,7 @@ static class FolderIndex
         using var c = Open();
         var pre = Prefix(root);
         var others = Roots().Select(r => r.Path).Where(p => !p.Equals(root, StringComparison.OrdinalIgnoreCase)).Select(Prefix).ToList();
-        using var tx = c.BeginTransaction();
+        using var tx = BeginWait(c, CancellationToken.None);
         var ids = new List<(long, string)>();
         using (var cmd = c.CreateCommand())
         {
@@ -349,7 +359,7 @@ static class FolderIndex
             using var c = Open();
             if (oldDir != null && newDir != null)
             {
-                using (var tx = c.BeginTransaction())
+                using (var tx = BeginWait(c, CancellationToken.None))
                 {
                     Exec(c, "UPDATE OR IGNORE files SET path = $nd || substr(path, $n + 1) WHERE substr(lower(path),1,$n) = lower($od)", ("$nd", newDir), ("$od", oldDir), ("$n", oldDir.Length));
                     Exec(c, "UPDATE OR IGNORE vision SET path = $nd || substr(path, $n + 1) WHERE substr(lower(path),1,$n) = lower($od)", ("$nd", newDir), ("$od", oldDir), ("$n", oldDir.Length));
@@ -365,7 +375,7 @@ static class FolderIndex
                     using var r = cmd.ExecuteReader();
                     while (r.Read()) left.Add(r.GetInt64(0));
                 }
-                if (left.Count > 0) { using var tx2 = c.BeginTransaction(); foreach (var id in left) DeleteFile(c, id); tx2.Commit(); }
+                if (left.Count > 0) { using var tx2 = BeginWait(c, CancellationToken.None); foreach (var id in left) DeleteFile(c, id); tx2.Commit(); }
                 Log.Warn("Folder index", $"Folder moved: {oldDir} → {newDir} (what Nova read there was kept)");
             }
             else

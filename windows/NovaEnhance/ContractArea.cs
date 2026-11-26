@@ -211,7 +211,7 @@ static class ContractArea
     static readonly string[] SampleExt = { ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".msg" };
 
     /// <summary>The first pages of a file (what Nova already read, else page 1–2 only; OCR page 1 when there is no text).</summary>
-    static string FirstPages(string path, CancellationToken ct)
+    internal static string FirstPages(string path, CancellationToken ct)
     {
         try
         {

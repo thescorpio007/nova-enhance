@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 namespace NovaEnhance;
 
 /// <summary>Settings → 📶 Indexing progress and 📜 Contract area. Designed by A.HAMROUNI</summary>
@@ -233,6 +234,15 @@ partial class SettingsForm
             try { ContractArea.SaveCfg(P, c); ContractRegister.Invalidate(P); Redraw(); } catch (Exception e) { status.Text = "⚠ " + e.Message; }
         }));
         ra.Controls.Add(Th.B("⟳ Label everything again", () => { ContractRegister.Invalidate(P); status.Text = "🏷 labelling…"; }));
+        var stamps = ContractRegister.StampRoles(P);
+        var sr = page.Add(Th.Row());
+        sr.Controls.Add(Th.L(stamps.Count == 0 ? "🔏 Stamps: none named yet — the strongest evidence (Contract Document · Client · Contractor · Consultant)."
+            : "🔏 Stamps: " + string.Join(" · ", stamps.Values.Where(v => v.Role is not ("ignore" or "other")).Select(v => v.Name.Length > 0 ? v.Name : ContractRegister.StampRolesList.First(x => x.Role == v.Role).Label)), 10, Th.Text));
+        sr.Controls.Add(Th.B("🔏 Find and name the stamps…", () =>
+        {
+            using var f = new StampsForm(P, reg);
+            if (f.ShowDialog(this) == DialogResult.OK) Redraw();
+        }, stamps.Count == 0));
 
         // ② the register
         var built = reg == null ? "not built yet" : $"updated {reg.Built:dd MMM HH:mm}";
@@ -266,20 +276,22 @@ partial class SettingsForm
             }
             var eyeN = reg.Eyes.Sum(e => e.Paths.Count);
             var tabs = page.Add(Th.Row());
-            foreach (var t in new[] { "All governing", "Specifications", "BOQ", "Drawings", "Changes", "Superseded", "Reference", "Never governs", "⚠ Needs your eye" })
+            foreach (var t in new[] { "All governing", "🔏 Stamped", "Specifications", "BOQ", "Drawings", "Changes", "📋 Vendors", "Superseded", "Reference", "Never governs", "⚠ Needs your eye" })
                 tabs.Controls.Add(Th.B((caTab == t ? "● " : "") + (t == "⚠ Needs your eye" ? $"⚠ Needs your eye ({eyeN})" : t), () => { caTab = t; Redraw(); }, caTab == t));
             if (caTab == "⚠ Needs your eye") EyePanel(P, reg, types, status, Say);
+            else if (caTab == "📋 Vendors") VendorPanel(P, reg, status);
             else
             {
                 var fr = page.Add(Th.Row(false));
                 fr.Controls.Add(Th.L("🔎 Filter:", 10, Th.Text));
                 var fb = Th.Box(false); fb.Width = 380; fb.Text = caFilter; fr.Controls.Add(fb);
                 var g = Grid(330);
-                foreach (var (h, w) in new[] { ("Document", 300), ("Type", 170), ("Disc.", 50), ("Rev", 60), ("Date", 90), ("Status", 160), ("How Nova knows", 330), ("Folder", 260) })
+                foreach (var (h, w) in new[] { ("Document", 300), ("Type", 170), ("Disc.", 50), ("Rev", 60), ("Date", 90), ("Status", 160), ("Evidence (click to sort)", 250), ("How Nova knows", 300), ("Folder", 240) })
                     g.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = h, Width = w, ReadOnly = true });
                 IEnumerable<RegDoc> Pick() => caTab switch
                 {
                     "All governing" => reg.Docs.Where(d => d.Governing),
+                    "🔏 Stamped" => reg.Docs.Where(d => d.Evidence >= 3),
                     "Superseded" => reg.Docs.Where(d => d.Status == "superseded"),
                     "Reference" => reg.Docs.Where(d => d.Status == "reference"),
                     "Never governs" => reg.Docs.Where(d => d.Status == "never governs"),
@@ -293,13 +305,14 @@ partial class SettingsForm
                     g.Rows.Clear();
                     var f = fb.Text.Trim();
                     var rows = Pick().Where(d => f.Length == 0 || d.Path.Contains(f, StringComparison.OrdinalIgnoreCase) || d.Type.Contains(f, StringComparison.OrdinalIgnoreCase))
-                        .OrderBy(d => ContractRegister.Level(P, d.Type) is var l and > 0 ? l : 50).ThenBy(d => d.Type).ThenBy(d => d.Name).Take(3000).ToList();
+                        .OrderBy(d => caTab == "🔏 Stamped" ? -d.Evidence : 0).ThenBy(d => ContractRegister.Level(P, d.Type) is var l and > 0 ? l : 50).ThenBy(d => d.Type).ThenBy(d => d.Name).Take(3000).ToList();
                     foreach (var d in rows)
                     {
                         var stt = d.Status == "superseded" ? "superseded by " + d.By : d.Governing ? "⚖ " + d.Status : d.Status;
-                        var i = g.Rows.Add(d.Name, d.Type + (d.Custom ? " ➕" : ""), d.Disc, d.Rev, d.Date.ToString("dd MMM yyyy"), stt, (d.Sure ? "" : "? ") + d.How, Path.GetFileName(Path.GetDirectoryName(d.Path) ?? ""));
+                        var i = g.Rows.Add(d.Name, d.Type + (d.Custom ? " ➕" : ""), d.Disc, d.Rev, d.Date.ToString("dd MMM yyyy"), stt, $"{d.Evidence} · {d.EvidenceText}", (d.Sure ? "" : "? ") + d.How, Path.GetFileName(Path.GetDirectoryName(d.Path) ?? ""));
                         g.Rows[i].Tag = d; g.Rows[i].Cells[0].ToolTipText = d.Path;
                         g.Rows[i].Cells[5].Style.ForeColor = d.Governing ? Th.Good : Th.Muted;
+                        if (d.Evidence >= 4) g.Rows[i].Cells[6].Style.ForeColor = Th.Good; else if (d.Evidence == 3) g.Rows[i].Cells[6].Style.ForeColor = Th.Warn;
                         if (!d.Governing) g.Rows[i].DefaultCellStyle.ForeColor = Th.Muted;
                     }
                     status.Text = $"{rows.Count:N0} shown{(rows.Count == 3000 ? " (first 3,000 — filter to narrow)" : "")} · double-click opens · select rows and ✎ Set the type to correct Nova";
@@ -434,6 +447,73 @@ partial class SettingsForm
         tm.Start();
     }
 
+    // ------------------------------------------------------------------ 🗄 Nova index
+
+    void IndexPage()
+    {
+        Note("ONE shared, growing store on this PC (encrypted): every feature — search, Guided search, Nova Chat, the contract register, reviews, the phone, Claude's checks — reads it first and saves back what it worked out. A file is read once; its labels, stamps and links are worked out once. Every write waits its turn. 🔒 private files are never stored.");
+        page.Add(Th.Section("What is inside"));
+        var g = Grid(330);
+        foreach (var (h, w) in new[] { ("Layer", 220), ("Count", 110), ("What it holds", 640) })
+            g.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = h, Width = w, ReadOnly = true });
+        page.Add(g, true);
+        var info = page.Add(Th.L("counting…", 9.5f, Th.Muted));
+        void Fill()
+        {
+            Task.Run(() => (NovaIndex.Inside(), FolderIndex.SizeMb())).ContinueWith(t => Program.UiContext.Post(_ =>
+            {
+                if (g.IsDisposed || t.IsFaulted) return;
+                g.Rows.Clear();
+                foreach (var (layer, n, what) in t.Result.Item1) g.Rows.Add(layer, n < 0 ? "—" : n.ToString("N0"), what);
+                info.Text = $"🗄 files index: {t.Result.Item2:N0} MB · emails: their own database, linked by document number · 💡 learned answers: memory file (linked) · updated {DateTime.Now:HH:mm:ss}";
+            }, null));
+        }
+        Fill();
+        page.Add(Th.Section("Keep it healthy"));
+        var r = page.Add(Th.Row());
+        r.Controls.Add(Th.B("⟳ Refresh", Fill));
+        r.Controls.Add(Th.B("🧹 Tidy the index (safe)", () => { Task.Run(NovaIndex.Tidy).ContinueWith(_ => Program.UiContext.Post(__ => { if (!info.IsDisposed) info.Text = "✓ Tidied."; Fill(); }, null)); }));
+        void Reset(string layer, string label)
+        {
+            if (MessageBox.Show(this, $"Work out “{label}” again from scratch? Nothing is lost: the next use works it out again and saves it.", "🗄 Nova index", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
+            try { NovaIndex.Reset(layer); foreach (var p in Projects.All()) ContractRegister.Invalidate(p.Code); Fill(); } catch (Exception e) { info.Text = "⚠ " + e.Message; }
+        }
+        r.Controls.Add(Th.B("📐 Labels again", () => Reset("labels", "📐 document labels")));
+        r.Controls.Add(Th.B("🔏 Stamps again", () => Reset("stamps", "🔏 stamps")));
+        r.Controls.Add(Th.B("📋 Vendor rows again", () => Reset("vendors", "📋 vendor rows")));
+        r.Controls.Add(Th.B("📜 Registers again", () => Reset("register", "📜 contract registers")));
+        Note("Labels are worked out again by themselves when a file changes or when your 📐 filing / 📁 project rules in 🧠 Nova Brain change.");
+    }
+
+    void VendorPanel(string P, ContractReg reg, Label status)
+    {
+        var checkDocs = reg.Docs.Where(d => d.Governing && d.Acts == "check").ToList();
+        Note(checkDocs.Count == 0 ? "No check-list documents yet — add a document type “Vendors List” (What it does: ✓ Check list) in ③ below." :
+            $"📋 The rows of your check lists ({string.Join(" · ", checkDocs.Select(d => d.Name).Take(4))}) — read from the documents that govern. Click a header to sort; double-click opens the page.");
+        var fr = page.Add(Th.Row(false));
+        fr.Controls.Add(Th.L("🔎 Filter (brand, product, division):", 10, Th.Text));
+        var fb = Th.Box(false); fb.Width = 380; fr.Controls.Add(fb);
+        var g = Grid(380);
+        foreach (var (h, w) in new[] { ("Division / list", 220), ("Product", 220), ("Row (brand · country · agent …)", 620), ("Page", 50), ("Document", 280) })
+            g.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = h, Width = w, ReadOnly = true });
+        var paths = checkDocs.Select(d => d.Path).ToList();
+        void Fill()
+        {
+            g.Rows.Clear();
+            var rows = NovaIndex.Vendors(P, paths, fb.Text.Trim(), 4000);
+            foreach (var r in rows) { var i = g.Rows.Add(r.Division, r.Product, r.Row, r.Page, Path.GetFileName(r.Path)); g.Rows[i].Tag = r; }
+            status.Text = $"{rows.Count:N0} row(s){(rows.Count == 4000 ? " (first 4,000 — filter to narrow)" : "")}";
+        }
+        fb.TextChanged += (_, _) => Fill();
+        g.CellDoubleClick += (_, e) =>
+        {
+            if (e.RowIndex < 0 || g.Rows[e.RowIndex].Tag is not NovaIndex.VendorRow r) return;
+            try { Opener.Open(new FileHit { Path = r.Path }, new PieceHit { Loc = "page " + r.Page, Goto = "page:" + r.Page, Text = r.Row, Matches = new() }, fb.Text.Trim()); } catch { Shell.Open(r.Path); }
+        };
+        Fill();
+        page.Add(g, true);
+    }
+
     ContextMenuStrip TypeMenu(string P, List<DocType> types, Action<string> pick)
     {
         var m = new ContextMenuStrip();
@@ -472,6 +552,11 @@ partial class SettingsForm
                         Done("!old", older);
                     }, true));
                     row.Controls.Add(Th.B("Open them", () => { foreach (var p in paths.Take(6)) Shell.Open(p); }));
+                    break;
+                case "stamps":
+                    row.Controls.Add(Th.B("Valid — it governs", () => Done("!valid"), true));
+                    row.Controls.Add(Th.B("Not a contract document", () => Done(ContractRegister.Letters)));
+                    row.Controls.Add(Th.B("Open", () => { foreach (var p in paths.Take(4)) Shell.Open(p); }));
                     break;
                 case "draft":
                     row.Controls.Add(Th.B("Signed — they govern", () => Done("!signed"), true));
@@ -603,7 +688,7 @@ class DocTypeForm : NovaForm
     public DocTypeForm(string project, DocType edit, List<string> order)
     {
         Text = (edit == null ? "➕ Add a document type · " : "✎ Edit a document type · ") + project;
-        Width = 820; Height = 720; StartPosition = FormStartPosition.CenterParent;
+        Width = 820; Height = 880; StartPosition = FormStartPosition.CenterParent;
         var t = edit ?? new DocType();
         var flow = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(14), BackColor = Th.Bg };
         Label H(string s) { var l = Th.L(s, 10.5f, Th.Text); l.Font = Th.F(10.5f, true); l.Margin = new Padding(0, 10, 0, 2); return l; }
@@ -655,39 +740,122 @@ class DocTypeForm : NovaForm
             NameWords = nw.Text.Split(',').Select(x => x.Trim()).Where(x => x.Length > 1).Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
             PageWords = pw.Text.Split(',').Select(x => x.Trim()).Where(x => x.Length > 2).Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
         };
+        // ✓ the checklist: what Nova found + what you chose (📌) — untick what is wrong
+        var chk = new CheckedListBox { Width = 760, Height = 170, BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.FixedSingle, Font = Th.F(9), CheckOnClick = true, HorizontalScrollbar = true };
+        var items = new List<(string Path, bool Chosen, bool Folder)>();
+        var areasNow = ContractRegister.Areas(project);
+        var addAreas = new List<string>(); var extra = new List<string>(); var folders = new List<string>();
+        bool Inside(string p) => areasNow.Concat(addAreas).Any(a => p.StartsWith(a.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase) || p.Equals(a, StringComparison.OrdinalIgnoreCase));
+        void AddLine(string path, string text, bool tick, bool chosen, bool folder)
+        {
+            var i = items.FindIndex(x => x.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
+            if (i >= 0) { chk.Items[i] = text; chk.SetItemChecked(i, tick); items[i] = (path, chosen || items[i].Chosen, folder); return; }
+            items.Add((path, chosen, folder)); chk.Items.Add(text, tick);
+        }
+        string Line(RegDoc x, bool chosen) => $"{(chosen ? "📌 " : "")}{x.Name}  ·  {(chosen ? "your choice · " : "")}{x.How}  ·  {x.Evidence} {x.EvidenceText}  ·  {(x.Status == "superseded" ? "superseded by " + x.By : x.Status)}";
+        // ✦ words Nova learns from your picks (their names and page 1)
+        void Learn(List<string> paths)
+        {
+            var titles = new List<string>();
+            foreach (var p in paths.Take(6))
+            {
+                var t1 = FolderIndex.FirstText(p, 1200);
+                if (t1.Length < 20) try { t1 = ContractArea.FirstPages(p, CancellationToken.None); } catch { }
+                foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(t1, @"LIST OF [A-Z][A-Z /&,\-]{3,60}|APPROVED [A-Z][A-Z /&\-]{3,40}|[A-Z][A-Z /&\-]{6,40} SCHEDULE"))
+                    titles.Add(System.Text.RegularExpressions.Regex.Replace(m.Value, @"\s+(FOR|THE|AND)?\s*$", "").Trim());
+            }
+            var have = pw.Text.Split(',').Select(x => x.Trim().ToUpperInvariant()).ToHashSet();
+            var newT = titles.Select(x => x.Length > 50 ? x[..50].Trim() : x).Where(x => !have.Contains(x.ToUpperInvariant())).Distinct(StringComparer.OrdinalIgnoreCase).Take(4).ToList();
+            var nameW = ContractRegister.Norm(name.Text);
+            var haveN = nw.Text.Split(',').Select(x => ContractRegister.Norm(x)).ToHashSet();
+            var newN = nameW.Length > 2 && !haveN.Contains(nameW) ? new List<string> { name.Text.Trim().ToLowerInvariant() } : new();
+            if (newT.Count + newN.Count == 0) return;
+            if (MessageBox.Show(this, "✦ Nova learned from the files you chose:\n\n" + string.Join("\n", newT.Select(x => "• page 1: " + x).Concat(newN.Select(x => "• name: " + x))) + "\n\nKeep these words, so similar documents are found by themselves?", "✦ Nova learned", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
+            if (newT.Count > 0) pw.Text = string.Join(", ", pw.Text.Split(',').Select(x => x.Trim()).Where(x => x.Length > 0).Concat(newT));
+            if (newN.Count > 0) nw.Text = string.Join(", ", nw.Text.Split(',').Select(x => x.Trim()).Where(x => x.Length > 0).Concat(newN));
+        }
         var row = new FlowLayoutPanel { AutoSize = true, Margin = new Padding(0, 10, 0, 0) };
         row.Controls.Add(Th.B("🔎 Find them now", () =>
         {
             var d = Read(); if (d.Name.Length == 0) return;
-            found.Text = "🔎 looking in your contract areas…";
+            found.Text = "🔎 looking in your contract areas (loose match: vendor list = Vendors_List)…";
             Task.Run(() => ContractRegister.Preview(project, d)).ContinueWith(tk => Program.UiContext.Post(_ =>
             {
                 if (found.IsDisposed) return;
                 var l = tk.IsFaulted ? new List<RegDoc>() : tk.Result;
-                found.Text = l.Count == 0 ? "Nothing found yet with these words (files Nova hasn't listed or read yet are not counted)." :
-                    $"🔎 Found now ({l.Count}{(l.Count > 60 ? "+" : "")}):\n" + string.Join("\n", l.OrderByDescending(x => x.Governing).Take(8).Select(x => $"{(x.Governing ? "✓" : "·")} {x.Name} · {x.Date:dd MMM yyyy} · {(x.Status == "superseded" ? "superseded by " + x.By : x.Status)} · {x.How}"));
+                foreach (var x in l.OrderByDescending(x => x.Governing).ThenByDescending(x => x.Evidence)) AddLine(x.Path, Line(x, false), x.Governing, false, false);
+                found.Text = l.Count == 0 ? "Nothing found with these words — 📌 Choose the files or the folder yourself." : $"🔎 {l.Count}{(l.Count > 60 ? "+" : "")} found · ticked = this type · untick what is wrong (Nova remembers).";
             }, null));
         }));
+        var choose = Th.B("📌 Choose files or a folder… ▾", () => { });
+        var menu = new ContextMenuStrip();
+        menu.Items.Add("📄 Files…  (one or more documents)", null, (_, _) =>
+        {
+            using var dlg = new OpenFileDialog { Multiselect = true, Filter = "Documents|*.pdf;*.docx;*.doc;*.xlsx;*.xls;*.msg|All files|*.*", InitialDirectory = areasNow.FirstOrDefault(Directory.Exists) ?? "" };
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            var picked = new List<string>();
+            foreach (var f in dlg.FileNames)
+            {
+                if (Projects.Private.IsMatch(f)) { found.Text = "🔒 " + Path.GetFileName(f) + " looks private — left out."; continue; }
+                if (!Inside(f))
+                {
+                    var r = MessageBox.Show(this, $"📌 This file is outside your contract areas:\n{f}\n\nYes = add its folder to the contract areas\nNo = use only this file", "📌 Outside the contract areas", MessageBoxButtons.YesNoCancel);
+                    if (r == DialogResult.Cancel) continue;
+                    if (r == DialogResult.Yes) addAreas.Add(Path.GetDirectoryName(f) ?? f); else extra.Add(f);
+                }
+                picked.Add(f);
+                var fi = new FileInfo(f);
+                var doc = ContractRegister.Label(project, new Projects.FileRow { Path = f, Name = fi.Name, Size = fi.Length, Modified = fi.LastWriteTime }, new List<DocType> { Read() }, new() { [f] = Read().Name }, areasNow.Concat(addAreas).ToList());
+                AddLine(f, Line(doc, true), true, true, false);
+            }
+            if (picked.Count > 0) { found.Text = $"📌 {picked.Count} file(s) chosen."; Learn(picked); }
+        });
+        menu.Items.Add("📁 A folder…  (everything inside = this type, also new files later)", null, (_, _) =>
+        {
+            using var dlg = new FolderBrowserDialog { Description = "Everything in this folder becomes “" + name.Text.Trim() + "” (also new files later)", SelectedPath = areasNow.FirstOrDefault(Directory.Exists) ?? "" };
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            var f = dlg.SelectedPath;
+            if (Projects.Private.IsMatch(f)) { found.Text = "🔒 That folder looks private — Nova never reads it."; return; }
+            if (!Inside(f + "\\x") && MessageBox.Show(this, $"📌 This folder is outside your contract areas:\n{f}\n\nAdd it to the contract areas?", "📌 Outside the contract areas", MessageBoxButtons.YesNo) == DialogResult.Yes) addAreas.Add(f);
+            folders.Add(f);
+            int n = 0; try { n = Directory.EnumerateFiles(f, "*", SearchOption.AllDirectories).Take(5000).Count(); } catch { }
+            AddLine(f, $"📁 {f}  ·  your folder ({n:N0} files): new files there get this type too  ·  rule", true, true, true);
+            try { Learn(Directory.EnumerateFiles(f, "*.pdf", SearchOption.AllDirectories).Take(4).ToList()); } catch { }
+        });
+        choose.Click += (_, _) => menu.Show(choose, new Point(0, choose.Height));
+        row.Controls.Add(choose);
         row.Controls.Add(Th.B(edit == null ? "💾 Add to " + project : "💾 Save", () =>
         {
             var d = Read();
             if (d.Name.Length < 2) { found.Text = "⚠ Give it a name."; return; }
             if (ContractRegister.BuiltIn.Contains(d.Name)) { found.Text = "⚠ That name is a built-in type — choose another."; return; }
-            if (d.NameWords.Count == 0 && d.PageWords.Count == 0 && d.Code.Length == 0) { found.Text = "⚠ Give at least one word or a code, so Nova can recognize it."; return; }
+            if (d.NameWords.Count == 0 && d.PageWords.Count == 0 && d.Code.Length == 0 && items.Count == 0) { found.Text = "⚠ Give at least one word or a code, or 📌 choose the files, so Nova can recognize it."; return; }
             var o = order.Where(x => ContractRegister.Bare(x) != t.Name && ContractRegister.Bare(x) != d.Name).ToList();
             var (at, same) = choices[Math.Max(0, rank.SelectedIndex)];
-            // map the chosen level position back to the list (levels has the same items as o, in order)
             var idx = Math.Min(at, o.Count);
             if (same) { idx = Math.Min(at + 1, o.Count); while (idx < o.Count && o[idx].StartsWith("=")) idx++; o.Insert(idx, "=" + d.Name); }
-            else
-            {
-                o.Insert(idx, d.Name);
-                if (idx + 1 < o.Count && o[idx + 1].StartsWith("=")) { /* the one below kept its “same level as” the new one: fine */ }
-            }
+            else o.Insert(idx, d.Name);
             try
             {
                 ContractRegister.SaveType(project, d, edit?.Name);
                 ContractArea.Save(project, ContractArea.Of(project), o);
+                // 📌 your choices and unticks: kept as answers (Nova never re-guesses them)
+                var c = ContractArea.Cfg(project);
+                var dec = c["decide"] as System.Text.Json.Nodes.JsonObject ?? new System.Text.Json.Nodes.JsonObject();
+                var fo = c["folders"] as System.Text.Json.Nodes.JsonObject ?? new System.Text.Json.Nodes.JsonObject();
+                var ex = c["extra"] as System.Text.Json.Nodes.JsonArray ?? new System.Text.Json.Nodes.JsonArray();
+                for (int i = 0; i < items.Count; i++)
+                {
+                    var (p, chosen, folder) = items[i];
+                    var on = chk.GetItemChecked(i);
+                    if (folder) { if (on) fo[p] = d.Name; continue; }
+                    if (on && chosen) dec[p] = d.Name;
+                    else if (!on) dec[p] = "!not:" + d.Name;
+                }
+                foreach (var x in extra) if (!ex.Any(e => e?.ToString() == x)) ex.Add(x);
+                c["decide"] = dec; c["folders"] = fo; c["extra"] = ex;
+                if (addAreas.Count > 0) c["areas"] = new System.Text.Json.Nodes.JsonArray(ContractRegister.Areas(project).Concat(addAreas).Distinct(StringComparer.OrdinalIgnoreCase).Select(a => (System.Text.Json.Nodes.JsonNode)a).ToArray());
+                ContractArea.SaveCfg(project, c);
                 ContractRegister.Invalidate(project);
                 DialogResult = DialogResult.OK;
             }
@@ -696,6 +864,67 @@ class DocTypeForm : NovaForm
         row.Controls.Add(Th.B("Cancel", () => DialogResult = DialogResult.Cancel));
         flow.Controls.Add(row);
         flow.Controls.Add(found);
+        flow.Controls.Add(chk);
         Controls.Add(flow);
+    }
+}
+
+
+/// <summary>🔏 Name the stamps once: the pictures that come back on many contract documents (by fingerprint) → Contract document · Client · Contractor · Consultant.</summary>
+class StampsForm : NovaForm
+{
+    public StampsForm(string project, ContractReg reg)
+    {
+        Text = "🔏 Stamps · " + project;
+        Width = 980; Height = 720; StartPosition = FormStartPosition.CenterParent;
+        var roles = ContractRegister.StampRoles(project);
+        var top = Th.Wrap("Nova looks at the pictures on page 1 and the last page of your contract documents. Stamps are the same picture every time, so once you name them, Nova recognizes them on every document in milliseconds — no OCR, no AI. Name each one (or mark it “Not a stamp” for logos).", 9.5f, Th.Muted);
+        top.Dock = DockStyle.Top; top.Padding = new Padding(12, 8, 12, 8); top.MaximumSize = new Size(940, 0); top.AutoSize = true;
+        var list = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(12), BackColor = Th.Bg };
+        var status = Th.L("", 9.5f, Th.Muted);
+        var bottom = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 52, Padding = new Padding(10, 8, 10, 8), BackColor = Th.Bg };
+        var rows = new List<(string Hash, ComboBox Role, TextBox Name)>();
+        var cts = new CancellationTokenSource();
+        FormClosing += (_, _) => cts.Cancel();
+        bottom.Controls.Add(Th.B("💾 Save the stamps", () =>
+        {
+            var d = new Dictionary<string, (string, string)>(roles);
+            foreach (var (h, cb, nb) in rows) if (cb.SelectedIndex >= 0) d[h] = (ContractRegister.StampRolesList[cb.SelectedIndex].Role, nb.Text.Trim());
+            try { ContractRegister.SaveStamps(project, d); DialogResult = DialogResult.OK; } catch (Exception e) { status.Text = "⚠ " + e.Message; }
+        }, true));
+        bottom.Controls.Add(Th.B("Cancel", () => DialogResult = DialogResult.Cancel));
+        bottom.Controls.Add(status);
+        Controls.Add(list); Controls.Add(bottom); Controls.Add(top);
+        // the PDFs to look at: “executed / stamped” folders and governing documents first
+        var pdfs = (reg?.Docs ?? new()).Where(d => d.Name.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(d => Regex.IsMatch(d.Path, "executed|stamped", RegexOptions.IgnoreCase)).ThenByDescending(d => d.Governing).ThenByDescending(d => d.Date)
+            .Select(d => d.Path).Take(250).ToList();
+        Shown += (_, _) =>
+        {
+            status.Text = "🔏 looking at the pictures…";
+            Task.Run(() => NovaIndex.FindStamps(pdfs, s => Program.UiContext.Post(_ => { if (!status.IsDisposed) status.Text = s; }, null), cts.Token)).ContinueWith(t => Program.UiContext.Post(_ =>
+            {
+                if (IsDisposed) return;
+                if (t.IsFaulted || t.IsCanceled) { status.Text = "⚠ " + (t.Exception?.GetBaseException().Message ?? "stopped"); return; }
+                status.Text = t.Result.Count == 0 ? "No repeated pictures found in these documents." : $"{t.Result.Count} repeated picture(s) — name them:";
+                foreach (var (hash, docs, w, h, png, sample) in t.Result)
+                {
+                    var row = new FlowLayoutPanel { AutoSize = true, WrapContents = false, BackColor = Color.FromArgb(0x1B, 0x20, 0x30), Margin = new Padding(0, 0, 0, 6), Padding = new Padding(6) };
+                    var pb = new PictureBox { Width = 200, Height = 110, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.White };
+                    try { if (png != null) pb.Image = Image.FromStream(new MemoryStream(png)); } catch { }
+                    row.Controls.Add(pb);
+                    var info = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, BackColor = row.BackColor };
+                    info.Controls.Add(Th.L($"on {docs} document(s) · {w}×{h} px · e.g. {Path.GetFileName(sample)}", 9, Th.Muted));
+                    var cb = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 260, BackColor = Th.Card, ForeColor = Th.Text, FlatStyle = FlatStyle.Flat };
+                    foreach (var (_, label) in ContractRegister.StampRolesList) cb.Items.Add(label);
+                    var nb = Th.Box(false); nb.Width = 360; nb.PlaceholderText = "name (e.g. Nine Yards — Client)";
+                    if (roles.TryGetValue(hash, out var have)) { cb.SelectedIndex = Array.FindIndex(ContractRegister.StampRolesList, x => x.Role == have.Role); nb.Text = have.Name; }
+                    info.Controls.Add(cb); info.Controls.Add(nb);
+                    row.Controls.Add(info);
+                    list.Controls.Add(row);
+                    rows.Add((hash, cb, nb));
+                }
+            }, null));
+        };
     }
 }

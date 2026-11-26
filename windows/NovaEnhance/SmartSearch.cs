@@ -565,7 +565,7 @@ static class Semantic
                     Phase = "building (documents)";
                     var vs = Embed(segs.Select(b => b.Text).ToList(), CancellationToken.None).GetAwaiter().GetResult();
                     using var c = FolderIndex.Open();
-                    using var tx = c.BeginTransaction();
+                    using var tx = FolderIndex.BeginWait(c, CancellationToken.None);
                     using var ins = c.CreateCommand();
                     ins.Transaction = tx;
                     ins.CommandText = "INSERT OR REPLACE INTO embseg(id,src,v) VALUES($i,$b,$v)";

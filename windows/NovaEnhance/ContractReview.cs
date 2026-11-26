@@ -100,6 +100,23 @@ class ContractReviewForm : NovaForm
             {
                 var docs = reg.Docs.Where(d => d.Type == t.Name && d.Governing).ToList();
                 if (docs.Count == 0 || brands.Count == 0) continue;
+                // the rows of the list (📋 Vendor register in the Nova index) — the brand on the row of the product
+                var vrows = NovaIndex.Vendors(project, docs.Select(d => d.Path));
+                if (vrows.Count > 0)
+                {
+                    var subjWords = words.Where(w => w.Length > 3 && !brands.Contains(w)).Select(ContractRegister.Norm).ToList();
+                    foreach (var b in brands)
+                    {
+                        var nb = ContractRegister.Norm(b);
+                        var on = vrows.FirstOrDefault(r => ContractRegister.Norm(r.Row).Contains(nb));
+                        var doc = on == null ? null : docs.First(d => d.Path.Equals(on.Path, StringComparison.OrdinalIgnoreCase));
+                        if (on != null) { checks.Add((t.Name, b, true, $"{doc.Name} {doc.Rev} · p.{on.Page} · {on.Division} · {on.Product}".Trim(), on.Row)); continue; }
+                        var near = vrows.FirstOrDefault(r => subjWords.Any(w => ContractRegister.Norm(r.Product + " " + r.Row).Contains(w)));
+                        var nd = near == null ? null : docs.First(d => d.Path.Equals(near.Path, StringComparison.OrdinalIgnoreCase));
+                        checks.Add((t.Name, b, false, near == null ? "" : $"{nd.Name} {nd.Rev} · p.{near.Page} · {near.Division} · {near.Product}".Trim(), near?.Row ?? ""));
+                    }
+                    continue;
+                }
                 foreach (var b in brands)
                 {
                     (bool, string, string) found = (false, "", "");
@@ -129,6 +146,7 @@ class ContractReviewForm : NovaForm
                 try { ai = Ai.ParseJson(await SmartSearch.CloudChat(sys, user, 60, my.Token)); }
                 catch (Exception e) { Say("⚠ AI: " + e.Message); }
             }
+            foreach (var h in hits.GroupBy(h => h.Doc.Path).Take(8)) NovaIndex.Link(path, h.Key, "reviewed against", ai?["code"]?.ToString() ?? "");
             Program.UiContext.Post(_ => Present(path, lb, specs, dwgs, brands, hits, notUsed.Distinct().Take(10).ToList(), checks, ai), null);
         }, my.Token).ContinueWith(t => { if (t.IsFaulted) Program.UiContext.Post(_ => { if (!status.IsDisposed) status.Text = "⚠ " + t.Exception?.GetBaseException().Message; }, null); });
     }

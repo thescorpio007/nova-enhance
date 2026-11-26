@@ -385,6 +385,14 @@ static class Smoke
             Ok(d3.Type == "Draft", "contract register: a weak guess inside a draft folder is a draft (" + d3.Type + ")");
             var d4 = ContractRegister.Label("TST", Row(@"misc\anything.pdf"), new(), new() { [area + @"\misc\anything.pdf"] = "BOQ" }, areas);
             Ok(d4.Type == "BOQ" && d4.How.Contains("your answer"), "contract register: your answer wins");
+            Ok(ContractRegister.Norm("Vendors_List") == ContractRegister.Norm("vendor list"), "loose match: vendor list = Vendors_List");
+            var vl = new DocType { Name = "Vendors List", Acts = "check", NameWords = new() { "vendor list" } };
+            var d5 = ContractRegister.Label("TST", Row(@"__Executed Contract Documents Stamped\Vol 3 - Specifications\5. Vendor List\Vendors list\SEA LA VIE  Vendors List - Grade A - MEP - 31-10-2023.pdf"), new() { vl }, none, areas);
+            Ok(d5.Type == "Vendors List" && d5.Evidence >= 3, "contract register: “Vendors List” found by the loose name, executed folder = strong evidence (" + d5.Type + " · " + d5.Evidence + ")");
+            var d6 = ContractRegister.Label("TST", Row(@"_TD IFT\Vendors List\Vol. 05 - SEA LA VIE  Vendors List - Civil ID Architectural.pdf"), new() { vl }, none, areas);
+            Ok(d6.Tender || d6.Type == "Draft", "contract register: the tender copy of the vendor list never governs");
+            var d7 = ContractRegister.Label("TST", Row(@"x\SEA LA VIE  Vendors List.pdf"), new() { vl }, new() { [area + @"\x\SEA LA VIE  Vendors List.pdf"] = "!not:Vendors List" }, areas);
+            Ok(d7.Type != "Vendors List", "contract register: an unticked file is not that type again");
             Ok(ContractRegister.Level("TST", "Agreement & LoA") == 1 && ContractRegister.Bare("=Approved Vendor List") == "Approved Vendor List", "contract register: levels and “= same level”");
         }
         var errs = Log.Read();
