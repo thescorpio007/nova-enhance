@@ -182,7 +182,9 @@ static class Studio
         var sec = (b["sections"] as JsonArray ?? new JsonArray()).OfType<JsonObject>().FirstOrDefault(s => s["id"]?.ToString() == e.Section)
                   ?? (b["sections"] as JsonArray ?? new JsonArray()).OfType<JsonObject>().First();
         var rules = sec["rules"] as JsonArray ?? new JsonArray(); sec["rules"] = rules;
-        var id = $"{sec["prefix"] ?? "ST"}-S{DateTime.Now:MMddHHmm}";
+        var ids = Brain.Rules(b).Select(x => x.Rule["id"]?.ToString() ?? "").ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var id = $"{sec["prefix"] ?? "ST"}-S{DateTime.Now:MMddHHmmss}";
+        for (var c = 'b'; ids.Contains(id); c++) id = $"{sec["prefix"] ?? "ST"}-S{DateTime.Now:MMddHHmmss}-{c}";
         rules.Add(new JsonObject { ["id"] = id, ["title"] = e.Title, ["text"] = e.Text, ["by"] = "🛠 Nova Studio", ["when"] = DateTimeOffset.Now.ToUnixTimeMilliseconds() });
         Brain.Commit(b, "🛠 Nova Studio", e.Title);
         return $"✓ 🧠 Rule {id} “{e.Title}” added to {sec["name"]}";

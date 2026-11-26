@@ -42,6 +42,17 @@ class BrainForm : WebPage
             case "open": NovaChat.OpenSource(new JsonObject { ["kind"] = "email", ["entry"] = S("entry"), ["store"] = S("store") }); break;
             case "chatClear": BrainTrainer.Chat.Clear(); lock (BrainTrainer.LastExamples) BrainTrainer.LastExamples.Clear(); break;
             case "health": Run("🩺 Health check of every rule", (st, de, ct) => BrainTrainer.Health(st, ct)); break;
+            case "autotest":
+            {
+                var n = int.TryParse(S("n"), out var nn) ? nn : 10;
+                Run($"🧪 Testing {n} untested rules on their own", async (st, de, ct) =>
+                {
+                    var a = await BrainTrainer.AutoTest(n, st, ct);
+                    foreach (var l in (a["lines"] as JsonArray ?? new())) de(l?.ToString() ?? "");
+                    return await BrainTrainer.Health(st, ct);
+                });
+                break;
+            }
             case "create": Work("Making your brain…", () => { Brain.Create(S("pw")); Brain.BackupNow("manual"); return State(); }); break;
             case "unlock": Work("Opening…", () => { Brain.Unlock(S("pw")); return State(); }); break;
             case "pending": Work("Checking the brain from your backup…", () => new JsonObject { ["t"] = "toast", ["text"] = Brain.RestorePending(S("pw")) }); break;

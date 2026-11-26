@@ -60,6 +60,7 @@ static class ClaudeOutlook
         ["fix.reindex"] = "Nova re-reads a folder completely (fills gaps): folder (part of the path) or id (its folder)",
         ["fix.project"] = "puts emails into a project in Nova: ids (list), project (code) — ↩ undo in Activity / Email projects",
         ["nova.health"] = "runs the 🧠 Brain health check (every contradiction, vague rules, untested) — read only",
+        ["nova.braintest"] = "🧪 tests up to {n} (default 3, max 10) untested 🧠 Brain rules automatically, keeps the result on each rule, then the health check",
         ["fix.brain"] = "applies 🧠 Brain changes directly (summary, changes [op add|change|remove, section, id, title, text]) — only while you allow Claude; a version is saved first (↩ undo in Brain → Versions & backups); a broken [setting] is refused",
         ["nova.transfers"] = "📦 the Nova transfer queue — the last jobs (speed, threads, buffered / VPN mode, files done and failed) and the end of the newest log — read only",
         ["nova.vpn"] = "🧪 the 🌐 Office VPN test (FortiClient, gateway, adapter, office server, FortiClient window, recent VPN log) — read only, never connects, never shows the password",
@@ -107,6 +108,7 @@ static class ClaudeOutlook
             "fix.project" => await Task.Run(() => Project(a)),
             "fix.brain" => OnUi(() => FixBrain(a)),
             "nova.health" => await Health(),
+            "nova.braintest" => await BrainTest(a),
             "nova.vpn" => await Task.Run(OfficeVpn.Diagnose),
             "nova.transfers" => Transfer.Report(),
             "nova.errors" => await ClaudeChecks.Errors(a),
@@ -139,12 +141,23 @@ static class ClaudeOutlook
     {
         if (!Brain.Unlocked) throw new Exception("the 🧠 Nova Brain is locked on the PC — open it first");
         var h = await BrainTrainer.Health(_ => { }, CancellationToken.None);
-        var sb = new StringBuilder($"🩺 Brain version {Brain.Version} · strong {h["strong"]} · weak {h["weak"]} · to fix {h["bad"]} · untested {h["untested"]}\n");
+        var sb = new StringBuilder($"🩺 Brain version {Brain.Version} · strong {h["strong"]} · auto ✓ {h["auto"]} · weak {h["weak"]} · to fix {h["bad"]} · untested {h["untested"]}\n");
         foreach (var c in (h["contradictions"] as JsonArray ?? new()).OfType<JsonObject>())
             sb.AppendLine($"⛔ {string.Join(" ↔ ", (c["ids"] as JsonArray)?.Select(x => x?.ToString()) ?? Array.Empty<string>())}: {c["why"]} → {c["fix"]}");
         foreach (var r in (h["rows"] as JsonArray ?? new()).OfType<JsonObject>())
             if ((r["notes"] as JsonArray)?.Count > 0) sb.AppendLine($"· {r["id"]}: {string.Join(" · ", (r["notes"] as JsonArray)!.Select(x => x?.ToString()))}");
         return sb.ToString();
+    }
+
+    static async Task<string> BrainTest(JsonObject a)
+    {
+        if (!Brain.Unlocked) throw new Exception("the 🧠 Nova Brain is locked on the PC — open it first");
+        var n = Math.Clamp(int.TryParse(a["n"]?.ToString(), out var x) ? x : 3, 1, 10);
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(12));
+        var r = await BrainTrainer.AutoTest(n, _ => { }, cts.Token);
+        var sb = new StringBuilder($"🧪 {r["done"]} rule(s) tested automatically · {r["left"]} untested left\n");
+        foreach (var l in (r["lines"] as JsonArray ?? new())) sb.AppendLine("· " + l);
+        return sb + "\n" + await Health();
     }
 
     static string OnUi(Func<string> f)

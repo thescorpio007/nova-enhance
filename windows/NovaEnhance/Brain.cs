@@ -104,6 +104,13 @@ static class Brain
         lock (L) { data = b; if (remember) Password = pw; }
         var added = MergeBuiltIns();
         if (added > 0) Log.Write($"brain: {added} new built-in rule(s) added");
+        try
+        {
+            var fx = Snapshot();
+            var n = FixIds(fx);
+            if (n > 0) { Commit(fx, "🛠 Nova (repair)", $"{n} rule(s) shared an id with another rule — renamed"); Log.Warn("brain", $"{n} duplicate rule id(s) renamed"); }
+        }
+        catch (Exception e) { Log.Warn("brain", "id repair: " + e.Message); }
         Changed?.Invoke();
     }
 
@@ -167,6 +174,7 @@ static class Brain
         lock (L)
         {
             if (data == null) throw new InvalidDataException("the brain is locked — open it first");
+            FixIds(changed);
             var v = (data["version"]?.GetValue<int>() ?? 0) + 1;
             changed["version"] = v;
             changed["updated"] = Now();
@@ -181,6 +189,24 @@ static class Brain
     }
 
     // ================================================================ rules · sections · settings
+
+    /// <summary>🛠 Every rule keeps its own id: a later rule with an id already used becomes id-b, id-c… (returns how many were renamed).</summary>
+    public static int FixIds(JsonObject b)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (_, r) in Rules(b)) seen.Add(r["id"]?.ToString() ?? "");
+        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        int n = 0;
+        foreach (var (_, r) in Rules(b).ToList())
+        {
+            var id = r["id"]?.ToString() ?? "";
+            if (id.Length == 0 || used.Add(id)) continue;
+            string nid; var c = 'b';
+            do nid = id + "-" + c++; while (seen.Contains(nid) || used.Contains(nid));
+            r["id"] = nid; used.Add(nid); seen.Add(nid); n++;
+        }
+        return n;
+    }
 
     public static IEnumerable<(JsonObject Section, JsonObject Rule)> Rules(JsonObject b) =>
         (b?["sections"] as JsonArray ?? new JsonArray()).OfType<JsonObject>()

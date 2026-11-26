@@ -565,13 +565,14 @@ THE BRAIN NOW:{BrainText(b)}";
     public static async Task<JsonObject> Health(Action<string> step, CancellationToken ct)
     {
         var b = Brain.Snapshot();
+        Brain.FixIds(b);   // the check never stops on two rules with one id (the real brain is repaired when it opens)
         var list = Brain.Rules(b).ToList();
         var rows = new Dictionary<string, JsonObject>();
         JsonArray Notes(string id) => (rows[id]["notes"] as JsonArray)!;
         foreach (var (s, r) in list)
         {
             var id = r["id"]?.ToString() ?? "";
-            rows[id] = new JsonObject { ["id"] = id, ["section"] = s["name"]?.ToString(), ["title"] = r["title"]?.ToString(), ["text"] = r["text"]?.ToString(), ["off"] = r["off"]?.GetValue<bool>() == true, ["tested"] = r["tested"]?.DeepClone(), ["notes"] = new JsonArray(), ["bad"] = 0 };
+            rows[id] = new JsonObject { ["id"] = id, ["section"] = s["name"]?.ToString(), ["title"] = r["title"]?.ToString(), ["text"] = r["text"]?.ToString(), ["off"] = r["off"]?.GetValue<bool>() == true, ["tested"] = r["tested"]?.DeepClone(), ["autotest"] = r["autotest"]?.DeepClone(), ["notes"] = new JsonArray(), ["bad"] = 0 };
         }
         step("Looking for rules that say the same thing");
         for (int i = 0; i < list.Count; i++)
@@ -580,6 +581,16 @@ THE BRAIN NOW:{BrainText(b)}";
                 var sim = Jaccard(Bag(list[i].Rule["text"]?.ToString()), Bag(list[k].Rule["text"]?.ToString()));
                 if (sim < 0.5) continue;
                 var a = list[i].Rule["id"]!.ToString(); var c = list[k].Rule["id"]!.ToString();
+                if (a.Equals(c, StringComparison.OrdinalIgnoreCase)) continue;
+                // 📜 The Contract area writes one rule per document type with the same wording — alike by design, not a duplicate.
+                var contract = list[i].Section == list[k].Section && Regex.IsMatch(list[i].Section["name"]?.ToString() ?? "", "contract", RegexOptions.IgnoreCase);
+                if (contract && sim < 0.85) continue;
+                if (sim < 0.7)
+                {
+                    Notes(a).Add($"⚠ {(int)(sim * 100)}% alike {c} — check they don't repeat"); Notes(c).Add($"⚠ {(int)(sim * 100)}% alike {a} — check they don't repeat");
+                    foreach (var x in new[] { a, c }) rows[x]["bad"] = Math.Max(rows[x]["bad"]!.GetValue<int>(), 1);
+                    continue;
+                }
                 Notes(a).Add($"⛔ {(int)(sim * 100)}% the same as {c}"); Notes(c).Add($"⛔ {(int)(sim * 100)}% the same as {a}");
                 rows[a]["bad"] = 2; rows[c]["bad"] = 2;
             }
@@ -643,7 +654,7 @@ THE BRAIN NOW:{BrainText(b)}";
             finally { Brain.Quiet.Value = false; }
             // 🛡 Strict: a finding counts only when both quotes are really in the two rules and they are not the same statement;
             // then the AI judges once more, finding by finding, “can both be followed?”. The rest is dropped (said in the summary).
-            var texts = Brain.Rules(b).ToDictionary(x => x.Rule["id"]?.ToString() ?? "", x => Fold(x.Rule["text"]?.ToString()));
+            var texts = Brain.Rules(b).GroupBy(x => x.Rule["id"]?.ToString() ?? "").ToDictionary(g => g.Key, g => Fold(g.First().Rule["text"]?.ToString()));
             var kept = new List<JsonObject>(); int dropped = 0;
             foreach (var c in (j["contradictions"] as JsonArray ?? new()).OfType<JsonObject>())
             {
@@ -686,20 +697,80 @@ THE BRAIN NOW:{BrainText(b)}";
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception e) { contra.Add(new JsonObject { ["ids"] = new JsonArray(), ["why"] = "(the AI check did not answer: " + e.Message + ")", ["fix"] = "" }); }
-        int strong = 0, weak = 0, untested = 0, bad = 0;
+        int strong = 0, weak = 0, untested = 0, bad = 0, auto = 0;
         foreach (var r in rows.Values)
         {
+            // 🧪 the automatic test (never “strong”: ✅ strong still needs your ✓ on the examples)
+            if (r["tested"] == null && r["autotest"] is JsonObject at)
+            {
+                var v = at["verdict"]?.ToString();
+                if (v == "no effect") { Notes(r["id"]!.ToString()).Add($"💤 changed nothing in its auto test (“{at["q"]}”)"); r["bad"] = Math.Max(r["bad"]!.GetValue<int>(), 1); }
+                else if (v == "blocked") { Notes(r["id"]!.ToString()).Add("⛔ auto test: blocked — a duplicate or a contradiction"); r["bad"] = 2; }
+            }
             var lvl = r["bad"]!.GetValue<int>();
-            var badge = lvl == 2 ? "⛔ fix" : lvl == 1 ? "⚠ weak" : r["tested"] != null ? "✅ strong" : "○ untested";
+            var isAuto = r["tested"] == null && r["autotest"]?["verdict"]?.ToString() == "works";
+            var badge = lvl == 2 ? "⛔ fix" : lvl == 1 ? "⚠ weak" : r["tested"] != null ? "✅ strong" : isAuto ? "🔎 auto ✓" : "○ untested";
             r["badge"] = badge;
-            if (lvl == 2) bad++; else if (lvl == 1) weak++; else if (r["tested"] != null) strong++; else untested++;
+            if (lvl == 2) bad++; else if (lvl == 1) weak++; else if (r["tested"] != null) strong++; else if (isAuto) auto++; else untested++;
         }
         var lessons = new JsonArray(Agent.Feedback.Patterns().Select(p => (JsonNode)new JsonObject { ["what"] = p.What, ["count"] = p.Count, ["teach"] = p.Teach }).ToArray());
         return new JsonObject
         {
             ["t"] = "health", ["rows"] = new JsonArray(rows.Values.OrderByDescending(r => r["bad"]!.GetValue<int>()).Select(r => (JsonNode)r).ToArray()),
-            ["strong"] = strong, ["weak"] = weak, ["untested"] = untested, ["bad"] = bad, ["contradictions"] = contra, ["lessons"] = lessons, ["at"] = DateTime.Now.ToString("dd MMM HH:mm")
+            ["strong"] = strong, ["weak"] = weak, ["untested"] = untested, ["bad"] = bad, ["auto"] = auto, ["contradictions"] = contra, ["lessons"] = lessons, ["at"] = DateTime.Now.ToString("dd MMM HH:mm")
         };
+    }
+
+    /// <summary>🧪 Tests untested rules on their own (up to max per run): the AI writes one question per rule, Nova answers it with and
+    /// without the rule. The result is kept on the rule as “🔎 auto ✓ / 💤 no effect / ⛔ blocked” — never “✅ strong”, which still needs your ✓.</summary>
+    public static async Task<JsonObject> AutoTest(int max, Action<string> step, CancellationToken ct)
+    {
+        if (!Brain.Unlocked) throw new Exception("the 🧠 Nova Brain is locked — open it first");
+        var b = Brain.Snapshot();
+        Brain.FixIds(b);
+        var todo = Brain.Rules(b).Where(x => x.Rule["tested"] == null && x.Rule["autotest"] == null && x.Rule["off"]?.GetValue<bool>() != true).Take(Math.Clamp(max, 1, 30)).ToList();
+        var results = new Dictionary<string, JsonObject>(StringComparer.OrdinalIgnoreCase);
+        var lines = new JsonArray();
+        int i = 0;
+        foreach (var (s, r) in todo)
+        {
+            ct.ThrowIfCancellationRequested();
+            var id = r["id"]!.ToString();
+            step($"🧪 {++i} of {todo.Count} · {id} {r["title"]}");
+            JsonObject res;
+            try
+            {
+                string q;
+                using (Ai.For("brain"))
+                {
+                    Brain.Quiet.Value = true;
+                    try { q = (await Ai.Chat("Write ONE short question a user would ask Nova (an assistant for emails, documents, submittal logs and writing) whose answer THIS rule should change. Reply with the question only, no quotes.", $"Section: {s["name"]}\nRule {id} — {r["title"]}: {r["text"]}", false, true, null, ct)).Trim().Trim('"', '“', '”'); }
+                    finally { Brain.Quiet.Value = false; }
+                }
+                if (q.Length > 300) q = q[..300];
+                var change = new JsonArray(new JsonObject { ["op"] = "change", ["id"] = id, ["text"] = r["text"]?.ToString() });
+                var t = await Test(change, q, "", _ => { }, _ => { }, ct, quickMode: true);
+                TestRun run; lock (tests) tests.TryGetValue(t["id"]?.ToString() ?? "", out run);
+                var effect = run != null && (run.Kind == "writing" || run.Plus + run.Minus + run.LogChanged > 0);
+                var verdict = run == null ? "error" : run.Blocking ? "blocked" : effect ? "works" : "no effect";
+                res = new JsonObject { ["verdict"] = verdict, ["q"] = Agent.Clip(q, 160), ["plus"] = run?.Plus ?? 0, ["minus"] = run?.Minus ?? 0, ["when"] = DateTime.Now.ToString("dd MMM yyyy HH:mm") };
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception e) { res = new JsonObject { ["verdict"] = "error", ["why"] = Agent.Clip(e.Message, 140) }; }
+            results[id] = res;
+            lines.Add($"{id} · {res["verdict"]} · {(res["q"] ?? res["why"])}" + (res["plus"] is { } pl ? $" · +{pl} −{res["minus"]}" : ""));
+        }
+        var kept = results.Where(x => x.Value["verdict"]?.ToString() != "error").ToList();
+        if (kept.Count > 0)
+        {
+            var nb = Brain.Snapshot();
+            Brain.FixIds(nb);
+            foreach (var (_, r) in Brain.Rules(nb))
+                if (results.TryGetValue(r["id"]?.ToString() ?? "", out var x) && x["verdict"]?.ToString() != "error") r["autotest"] = x.DeepClone();
+            Brain.Commit(nb, "🧪 auto test", $"{kept.Count} rule(s) tested automatically");
+        }
+        var left = Brain.Rules(Brain.Snapshot()).Count(x => x.Rule["tested"] == null && x.Rule["autotest"] == null && x.Rule["off"]?.GetValue<bool>() != true);
+        return new JsonObject { ["t"] = "autotest", ["done"] = results.Count, ["lines"] = lines, ["left"] = left };
     }
 
     // ------------------------------------------------------------------ proposals from the connector (Claude) → the same 🧪 TEST

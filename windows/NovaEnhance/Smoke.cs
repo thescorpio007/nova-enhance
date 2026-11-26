@@ -402,6 +402,9 @@ static class Smoke
             Ok(SubmittalLog.NumberFits(it, "SLV-ZUC-AR-SSM-00183") && SubmittalLog.NumberFits(new SubmittalLog.Item { No = "SLV ZUC AR SSM 00183" }, "SLV-ZUC-AR-SSM-00183")
                && !SubmittalLog.NumberFits(it, "SLV-ZUC-AR-SSM-00184"), "submittal log: the row is found by its number first");
             Ok(Studio.Mode is "C" or "A" or "B" && Studio.Budget > 0, "Nova Studio: a mode and a budget");
+            var fb = JsonNode.Parse("{\"sections\":[{\"name\":\"P\",\"rules\":[{\"id\":\"PR-S1\"},{\"id\":\"PR-S1\"},{\"id\":\"PR-S1-b\"}]}]}")!.AsObject();
+            Ok(Brain.FixIds(fb) == 1 && Brain.Rules(fb).Select(x => x.Rule["id"]!.ToString()).Distinct().Count() == 3, "brain: two rules never share an id (repaired)");
+
             var g = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceNames().Count(n => n.Contains(".Guides.") && n.EndsWith(".pdf"));
             Ok(g >= 8, $"Nova Studio: the {g} 📘 guides are inside Nova");
         }

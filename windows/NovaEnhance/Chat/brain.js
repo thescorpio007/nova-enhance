@@ -386,8 +386,14 @@
     box.appendChild(h);
     if (!health) { box.appendChild(el("div", "muted", "Checking every rule… (see the steps on the right)")); return; }
     var sum = el("div", "row"); sum.style.margin = "10px 0";
-    [["✅ strong", health.strong, "ok"], ["⚠ weak", health.weak, "chg"], ["⛔ to fix", health.bad, "bad"], ["○ untested", health.untested, "muted"]].forEach(function (x) { var k = el("div", "hk"); k.appendChild(el("b", x[2], String(x[1]))); k.appendChild(el("span", "muted small", x[0])); sum.appendChild(k); });
-    box.appendChild(sum);
+    [["✅ strong", health.strong, "ok"], ["🔎 auto ✓", health.auto || 0, "ok"], ["⚠ weak", health.weak, "chg"], ["⛔ to fix", health.bad, "bad"], ["○ untested", health.untested, "muted"]].forEach(function (x) { var k = el("div", "hk"); k.appendChild(el("b", x[2], String(x[1]))); k.appendChild(el("span", "muted small", x[0])); sum.appendChild(k); });
+    if (health.untested > 0) {
+      var at = el("div", "row"); at.style.margin = "0 0 10px";
+      at.appendChild(btn("🧪 Test 10 untested rules", true, function () { health = null; drawMid(); post({ t: "autotest", n: "10" }); }));
+      at.appendChild(btn("🧪 Test all " + health.untested, false, function () { health = null; drawMid(); post({ t: "autotest", n: String(Math.min(30, health.untested)) }); }));
+      at.appendChild(el("span", "muted small", " the AI writes one question per rule and compares Nova's answer with and without it · 🔎 auto ✓ = it works · ✅ strong still needs your ✓ on the examples · up to 30 per run, ■ Stop any time"));
+      sum.parentNode && box.appendChild(at);
+    }
     (health.lessons || []).forEach(function (l) {
       var d = el("div", "lesson"); d.appendChild(el("span", null, "🎓 You rejected " + l.what + " " + l.count + " times in the agent's examples. "));
       d.appendChild(btn("Teach Nova", true, function () { say(l.teach); })); box.appendChild(d);
@@ -400,13 +406,13 @@
     var t = el("table"); var hr = el("tr"); ["Rule", "Section", "Strength", "What to fix", ""].forEach(function (x) { hr.appendChild(el("th", null, x)); }); t.appendChild(hr);
     (health.rows || []).forEach(function (r) {
       var tr = el("tr"); var td = el("td"); td.appendChild(el("span", "id", r.id)); td.appendChild(el("div", null, r.title || "")); td.title = r.text; tr.appendChild(td);
-      tr.appendChild(el("td", "muted small", r.section)); tr.appendChild(el("td", null, r.badge)); tr.appendChild(el("td", "small", (r.notes || []).join(" · ") || (r.tested ? "passed " + r.tested.when + (r.tested.yes != null ? " · " + r.tested.yes + " ✓" : "") + (r.tested.secs ? " · took " + Thinking.mmss(r.tested.secs) : "") : "")));
+      tr.appendChild(el("td", "muted small", r.section)); tr.appendChild(el("td", null, r.badge)); tr.appendChild(el("td", "small", (r.notes || []).join(" · ") || (r.tested ? "passed " + r.tested.when + (r.tested.yes != null ? " · " + r.tested.yes + " ✓" : "") + (r.tested.secs ? " · took " + Thinking.mmss(r.tested.secs) : "") : r.autotest ? "🔎 auto " + r.autotest.when + " · “" + (r.autotest.q || "") + "” · +" + (r.autotest.plus || 0) + " −" + (r.autotest.minus || 0) : "")));
       var a = el("td"); if ((r.notes || []).length) a.appendChild(btn("🎓 Improve", false, function () { say("Improve rule " + r.id + " (" + (r.title || "") + "): " + (r.notes || []).join("; ") + ". Propose the better rule."); }));
       else if (!r.tested) a.appendChild(btn("🧪 Test it", false, function () { say("Test rule " + r.id + " as it is: propose it unchanged (op change with the same text) with a good test question."); }));
       tr.appendChild(a); t.appendChild(tr);
     });
     box.appendChild(t); if (window.ColResize) ColResize.attach(t, "brain.health");
-    box.appendChild(el("div", "muted small", "checked " + health.at + " · strong = tested and no problem · ⚠ weak = vague, finished project or nothing in 30 days of email · ⛔ = duplicate, contradiction or broken [setting]"));
+    box.appendChild(el("div", "muted small", "checked " + health.at + " · strong = tested and no problem · 🔎 auto ✓ = its automatic test changed the answer · ⚠ weak = vague, finished project or nothing in 30 days of email · ⛔ = duplicate, contradiction or broken [setting]"));
   }
   $("bClear").onclick = function () { $("msgs2").innerHTML = ""; post({ t: "chatClear" }); addMsg("ai", "✚ New conversation — the rules stay as they are. What should Nova learn?"); };
   $("bHealth").onclick = function () { view = "health"; health = null; drawSecs(); drawMid(); post({ t: "health" }); };
