@@ -275,11 +275,31 @@ static class UiWatch
         static string Name(Delegate d) { try { var m = d.Method; return (m.DeclaringType?.FullName ?? "").Replace("NovaEnhance.", "").Split('+')[0] + "." + m.Name; } catch { return "?"; } }
         public override void Post(SendOrPostCallback d, object state) => inner.Post(s => Run(d, s), state);
         public override void Send(SendOrPostCallback d, object state) => inner.Send(s => Run(d, s), state);
+        /// <summary>An “await” comes back as a generic continuation: the name of the method that awaited is in its state (the async state machine).</summary>
+        static string Who(SendOrPostCallback d, object s)
+        {
+            try
+            {
+                if (s is Delegate del)
+                {
+                    var t = del.Target;
+                    // the async state machine sits in the continuation's target: its type name is “<MethodName>d__12”
+                    var sm = t?.GetType().GetField("m_stateMachine", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public)?.GetValue(t)
+                             ?? t?.GetType().GetField("StateMachine", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public)?.GetValue(t);
+                    var name = (sm?.GetType() ?? t?.GetType())?.FullName ?? del.Method.Name;
+                    name = name.Replace("NovaEnhance.", "");
+                    var m = System.Text.RegularExpressions.Regex.Match(name, @"^([\w\.]+?)\+<(\w+)>");
+                    return m.Success ? m.Groups[1].Value + "." + m.Groups[2].Value : name;
+                }
+            }
+            catch { }
+            return Name(d);
+        }
         public override SynchronizationContext CreateCopy() => this;
         static void Run(SendOrPostCallback d, object s)
         {
             var prev = Msg;
-            Msg = "posted job " + Name(d);
+            Msg = "posted job " + Who(d, s);
             try { d(s); } finally { Msg = prev; }
         }
     }

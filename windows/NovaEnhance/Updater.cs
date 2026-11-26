@@ -87,6 +87,28 @@ static class Updater
         finally { Gate.Release(); }
     }
 
+    /// <summary>⟲ Back to the previous build: the newest signed release older than this one is downloaded, verified and installed.</summary>
+    public static async Task<string> RollBack(Action<string> progress = null)
+    {
+        using var http = Client();
+        var rel = JsonNode.Parse(await http.GetStringAsync($"https://api.github.com/repos/{Repo}/releases?per_page=50"))?.AsArray() ?? new JsonArray();
+        JsonObject best = null; int bestBuild = 0;
+        foreach (var n in rel)
+        {
+            if (n is not JsonObject r || r["draft"]?.GetValue<bool>() == true) continue;
+            var tag = r["tag_name"]?.ToString() ?? "";
+            if (!tag.StartsWith(TagPrefix) || !int.TryParse(tag[TagPrefix.Length..], out var b) || b >= Program.Build) continue;
+            var names = (r["assets"] as JsonArray)?.Select(a => a?["name"]?.ToString() ?? "").ToList() ?? new();
+            if (!names.Contains("SHA256SUMS.txt") || !names.Contains("SHA256SUMS.sig") || !names.Any(x => x.EndsWith(Want))) continue;
+            if (b > bestBuild) { bestBuild = b; best = r; }
+        }
+        if (best == null) return "⚠ No earlier signed build found on GitHub.";
+        var s = await Fetch(http, best, bestBuild, progress, Folder);
+        if (!s.StartsWith("✓")) return s;
+        var msg = Install();
+        return msg ?? "⟲ Installing " + Program.ShownOf(bestBuild) + "…";
+    }
+
     /// <summary>Downloads and verifies one release. Returns the status line; on success the file is recorded as ready.</summary>
     static async Task<string> Fetch(HttpClient http, JsonObject release, int build, Action<string> progress, string folder, bool record = true, Func<byte[], byte[]> tamper = null)
     {

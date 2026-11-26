@@ -216,7 +216,7 @@ class SubmittalForm : WebPage
 
     static JsonObject OptJson(SubmittalLog.Options o) => new()
     {
-        ["projects"] = A(o.Projects), ["types"] = A(o.Types), ["from"] = o.From.ToString("yyyy-MM-dd"), ["to"] = o.To.ToString("yyyy-MM-dd"),
+        ["projects"] = A(o.Projects), ["types"] = A(o.Types), ["words"] = A(o.Words), ["from"] = o.From.ToString("yyyy-MM-dd"), ["to"] = o.To.ToString("yyyy-MM-dd"),
         ["tower"] = o.Tower, ["zone"] = o.Zone, ["disc"] = o.Discipline, ["status"] = o.Status,
         ["lfrom"] = o.LevelFrom > -99 ? (o.LevelFrom == 0 ? "GF" : o.LevelFrom.ToString()) : "", ["lto"] = o.LevelTo < 999 && o.LevelTo != o.LevelFrom ? (o.LevelTo == 0 ? "GF" : o.LevelTo.ToString()) : ""
     };
@@ -226,7 +226,7 @@ class SubmittalForm : WebPage
         var o = new SubmittalLog.Options();
         if (j == null) return o;
         List<string> L(string k) => (j[k] as JsonArray)?.Select(x => x?.ToString() ?? "").Where(x => x.Length > 0).ToList() ?? new();
-        o.Projects = L("projects"); o.Types = L("types");
+        o.Projects = L("projects"); o.Types = L("types"); o.Words = L("words");
         if (DateTime.TryParse(j["from"]?.ToString(), out var f)) o.From = f;
         if (DateTime.TryParse(j["to"]?.ToString(), out var t)) o.To = t.Date.AddDays(1).AddSeconds(-1);
         o.Tower = j["tower"]?.ToString() ?? ""; o.Zone = j["zone"]?.ToString() ?? ""; o.Discipline = j["disc"]?.ToString() ?? ""; o.Status = j["status"]?.ToString() ?? "";
@@ -261,6 +261,9 @@ class SubmittalForm : WebPage
             return new JsonObject
             {
                 ["t"] = "result", ["kpi"] = SubmittalLog.Kpis(r),
+                // 🔎 what the log is showing right now (the number / words asked for, with the title found)
+                ["showing"] = o.Words.Count == 0 ? "" : "🔎 Showing: " + string.Join(" · ", o.Words) +
+                    (r.Items.FirstOrDefault()?.Title is { Length: > 0 } ti ? " — " + ti : "") + $"  ·  {r.Items.Count} row(s), all dates",
                 ["items"] = new JsonArray(r.Items.Take(3000).Select(i => (JsonNode)SubmittalLog.Json(i)).ToArray()),
                 ["towers"] = A(r.Items.Select(i => i.Tower).Where(x => x.Length > 0 && !x.StartsWith("TH")).Distinct().OrderBy(x => x)),
                 ["discs"] = A(r.Items.Select(i => i.Disc).Where(x => x.Length > 0).Distinct().OrderBy(x => x)),

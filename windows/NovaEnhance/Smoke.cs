@@ -396,6 +396,16 @@ static class Smoke
             Ok(ContractRegister.Level("TST", "Agreement & LoA") == 1 && ContractRegister.Bare("=Approved Vendor List") == "Approved Vendor List", "contract register: levels and “= same level”");
         }
         var errs = Log.Read();
+        try
+        {
+            var it = new SubmittalLog.Item { No = "SLV-ZUC-AR-SSM-00183", Rev = "00" };
+            Ok(SubmittalLog.NumberFits(it, "SLV-ZUC-AR-SSM-00183") && SubmittalLog.NumberFits(new SubmittalLog.Item { No = "SLV ZUC AR SSM 00183" }, "SLV-ZUC-AR-SSM-00183")
+               && !SubmittalLog.NumberFits(it, "SLV-ZUC-AR-SSM-00184"), "submittal log: the row is found by its number first");
+            Ok(Studio.Mode is "C" or "A" or "B" && Studio.Budget > 0, "Nova Studio: a mode and a budget");
+            var g = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceNames().Count(n => n.Contains(".Guides.") && n.EndsWith(".pdf"));
+            Ok(g >= 8, $"Nova Studio: the {g} 📘 guides are inside Nova");
+        }
+        catch (Exception e) { Ok(false, "Nova Studio: " + e.Message); }
         Ok(!errs.Contains("settings ") || true, "No settings errors");
     }
 }

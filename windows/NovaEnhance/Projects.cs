@@ -849,7 +849,7 @@ static class Projects
                         var due = st.Last == DateTime.MinValue || DateTime.Now - st.Last > TimeSpan.FromHours(20) || relist.TryRemove(f, out _);
                         if (!due) continue;
                         if (!Directory.Exists(f)) { st.Phase = "⚠ not reachable"; continue; }
-                        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(30));
+                        using var cts = new CancellationTokenSource(ReadAll.IsNetwork(f) ? TimeSpan.FromHours(6) : TimeSpan.FromMinutes(30));
                         try { ListFolder(f, st, cts.Token); }
                         catch (Exception e) { st.Phase = "⚠ " + e.Message; Log.Warn("projects", "list " + f + ": " + e.Message); }
                     }

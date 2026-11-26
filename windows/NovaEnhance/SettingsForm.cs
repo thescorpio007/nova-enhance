@@ -3,7 +3,7 @@ namespace NovaEnhance;
 /// <summary>Settings, split into sections like the phone app.</summary>
 partial class SettingsForm : NovaForm
 {
-    static readonly string[] AllSections = { "🧠 Nova Brain", "🔐 Admin", "AI & API keys", "⚙ AI for each feature", "About me", "Enhancement", "Email & AI", "📥 Email index", "🗂 Mailboxes & archives", "📂 Folders in the index", "📁 Email projects", "Folder search", "📁 Projects", "📶 Indexing progress", "📜 Contract area", "🗄 Nova index", "🌐 Office VPN", "🗂 Project sources", "📦 Transfer engine", "🎯 Guided mode", "✦ Prompts", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "🧪 Activity history", "🔌 Test connector", "📱 Phone link", "About" };
+    static readonly string[] AllSections = { "🧠 Nova Brain", "🔐 Admin", "AI & API keys", "⚙ AI for each feature", "About me", "Enhancement", "Email & AI", "📥 Email index", "🗂 Mailboxes & archives", "📂 Folders in the index", "📁 Email projects", "Folder search", "📁 Projects", "📶 Indexing progress", "📜 Contract area", "🗄 Nova index", "🛠 Nova Studio", "🌐 Office VPN", "🗂 Project sources", "📦 Transfer engine", "🎯 Guided mode", "✦ Prompts", "🧠 What Nova knows", "Spelling & grammar", "Google Drive", "Office tab", "Browser add-on", "AI window", "Shortcuts", "Backup & restore", "Updates", "Error log", "🧪 Activity history", "🔌 Test connector", "📱 Phone link", "About" };
     /// <summary>🧪 Activity history and 🔌 Test connector are advanced tools: shown only when switched on (About → Advanced tools).</summary>
     static readonly string[] AdvancedSections = { "🧪 Activity history", "🔌 Test connector" };
     static string[] Sections = Visible();
@@ -95,6 +95,7 @@ partial class SettingsForm : NovaForm
                 case "📶 Indexing progress": IndexingPage(); break;
                 case "📜 Contract area": ContractPage(); break;
                 case "🗄 Nova index": IndexPage(); break;
+                case "🛠 Nova Studio": StudioPage(); break;
                 case "🌐 Office VPN": VpnPage(); break;
                 case "🗂 Project sources": SourcesPage(); break;
                 case "📦 Transfer engine": TransferPage(); break;

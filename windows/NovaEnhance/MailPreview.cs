@@ -102,6 +102,8 @@ static class MailPreview
                     if (!name.Equals(fileName, StringComparison.OrdinalIgnoreCase)) continue;
                     Directory.CreateDirectory(dir);
                     var path = Path.Combine(dir, name);
+                    // the same name may still be open from an earlier preview (Acrobat / Word lock it): a fresh name then
+                    if (File.Exists(path)) { try { File.Delete(path); } catch { path = Path.Combine(dir, Path.GetFileNameWithoutExtension(name) + " (" + DateTime.Now.ToString("HHmmss") + ")" + Path.GetExtension(name)); } }
                     a.SaveAsFile(path);
                     return path;
                 }

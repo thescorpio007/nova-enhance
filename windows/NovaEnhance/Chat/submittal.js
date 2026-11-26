@@ -322,6 +322,15 @@
     else if (m.t === "busy") { if (/^[✓⚠]|^⚡ \d/.test(m.text)) busy(m.text); else busy(m.text, true); }
     else if (m.t === "opt") { opt = m.opt; drawFilters(); if (m.said) busy("🧭 " + m.said + " …", true); }
     else if (m.t === "result") {
+      var sh = $("showing");
+      if (sh) {
+        sh.innerHTML = "";
+        if (m.showing) {
+          sh.style.display = "block"; sh.appendChild(document.createTextNode(m.showing + "   "));
+          var x = document.createElement("a"); x.textContent = "✕ show everything"; x.style.cssText = "cursor:pointer;color:#b9adff;margin-left:8px";
+          x.onclick = function () { opt.words = []; run(); }; sh.appendChild(x);
+        } else sh.style.display = "none";
+      }
       busy(""); items = m.items || [];
       (m.towers || []).forEach(function (x) { towers[x] = 1; }); discs = m.discCounts || {}; stats = m.statCounts || {}; (m.projects || []).forEach(function (x) { if (!allProjects.some(function (p) { return p.code === x; }) && !fresh.some(function (s) { return s.value === x; })) allProjects.push({ code: x, name: "" }); });
       show = ""; drawFilters(); drawKpi(m.kpi); drawTable();

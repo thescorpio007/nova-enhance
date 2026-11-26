@@ -22,7 +22,7 @@ static class Backup
         var winSecrets = new JsonObject();
         foreach (var (k, v) in Store.Snapshot())
         {
-            if (k is "win_backup_pw" or "win_brain_pw" || k.StartsWith("win_admin_") || k is "win_vpn_pw" or "win_vpn_otp") continue;   // 🔐 the VPN password never leaves this PC   // 🔐 the admin PIN and its email never go into a backup   // the brain keeps its own password: never inside the full backup
+            if (k is "win_backup_pw" or "win_brain_pw" || k.StartsWith("win_admin_") || k is "win_vpn_pw" or "win_vpn_otp" || k.StartsWith("win_studio_gh")) continue;   // 🛠 the Studio's GitHub key stays on this PC   // 🔐 the VPN password never leaves this PC   // 🔐 the admin PIN and its email never go into a backup   // the brain keeps its own password: never inside the full backup
             if (k.StartsWith("key_")) { var s = Store.Secret(k); if (s.Length > 0) keys[k] = s; continue; }
             if (k.StartsWith("win_") && v is JsonValue sv && sv.TryGetValue<string>(out var str) && str.StartsWith("dpapi:"))
             {

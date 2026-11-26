@@ -1107,7 +1107,11 @@ static class MailIndex
         // Safety: Outlook's ids and Nova's do not match at all (another id format) → compare nothing rather than re-index everything.
         if (nova.Count >= 20 && ol.Count >= 20 && !nova.Keys.Any(ol.ContainsKey))
         {
-            Log.Warn("Sync + repair", $"“{fname}” ({storeName}): Outlook's ids do not match Nova's — folder left as it is");
+            if (Store.Str("win_repairwarn_" + fname, "") != DateTime.Today.ToString("yyyyMMdd"))
+            {
+                Store.Set("win_repairwarn_" + fname, DateTime.Today.ToString("yyyyMMdd"));
+                Log.Warn("Sync + repair", $"“{fname}” ({storeName}): Outlook's ids do not match Nova's — folder left as it is (shown once a day)");
+            }
             return null;
         }
         dynamic ns = folder.Session;

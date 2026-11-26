@@ -335,4 +335,23 @@ static class ClaudeChecks
     }
 
     static string Cut(string s, int n) => s == null ? "" : s.Length <= n ? s : s[..n] + "…";
+
+    /// <summary>📋 The Submittal log run as you would: the rows found and the reason a row is missing (read only).</summary>
+    public static string LogTest(JsonObject a)
+    {
+        var q = a["q"]?.ToString() ?? "";
+        var o = new SubmittalLog.Options();
+        var proj = a["project"]?.ToString() ?? "";
+        if (proj.Length > 0) o.Projects.Add(proj);
+        if (int.TryParse(a["days"]?.ToString(), out var days) && days > 0) o.From = DateTime.Today.AddDays(-days);
+        if (q.Length > 0) o.Words.AddRange(q.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        var r = SubmittalLog.Run(o);
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"📋 Submittal log test “{q}”{(proj.Length > 0 ? " · " + proj : "")} · {r.Seconds:0.0} s · {r.Mails:N0} emails read · {r.Items.Count} row(s) · period {r.Opt.From:dd MMM yyyy} → {r.Opt.To:dd MMM yyyy}");
+        sb.AppendLine("Types: " + string.Join(", ", r.Opt.Types.DefaultIfEmpty("(every enabled type)")));
+        foreach (var i in r.Items.Take(30))
+            sb.AppendLine($"- {i.Project} · {i.Type} · {i.No} Rev{i.RevNum:00} · {i.Title} · submitted {i.Submitted:dd MMM yyyy} · reply {i.Reply:dd MMM yyyy} · {i.Code} · {i.Status} · {i.Emails} email(s){(i.Check.Length > 0 ? " · check: " + i.Check : "")}");
+        if (r.Gaps.Count > 0) sb.AppendLine("Gaps: " + string.Join(" | ", r.Gaps.Take(5)));
+        return sb.ToString();
+    }
 }

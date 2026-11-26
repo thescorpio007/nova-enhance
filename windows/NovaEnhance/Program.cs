@@ -109,7 +109,14 @@ static class Program
         Microsoft.Win32.SystemEvents.SessionEnding += (_, _) => Guard.CleanExit();
         // Windows sign-out / shutdown / an installer's “close the applications”: do not hold them up
         Microsoft.Win32.SystemEvents.SessionEnded += (_, _) => { try { Guard.CleanExit(); } catch { } new Thread(() => { Thread.Sleep(3000); Environment.Exit(0); }) { IsBackground = true }.Start(); };
-        TaskScheduler.UnobservedTaskException += (_, e) => { Log.Error("task", e.Exception); e.SetObserved(); };
+        TaskScheduler.UnobservedTaskException += (_, e) =>
+        {
+            e.SetObserved();
+            // a network call stopped on purpose (closing, cancelling, the PC sleeping) is not an error
+            var b = e.Exception?.GetBaseException();
+            if (b is OperationCanceledException || b is System.Net.Sockets.SocketException { ErrorCode: 995 } || b is IOException && (b.Message.Contains("aborted") || b.Message.Contains("995"))) { Log.Write("· background network call stopped: " + b.Message); return; }
+            Log.Error("task", e.Exception);
+        };
 
         Application.Run(new NovaContext(args.Contains("--tray") || xferVerb != null || StartSearch != null || StartOffice != null || StartOpen != null));
         return 0;

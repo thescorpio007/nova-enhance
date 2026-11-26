@@ -139,6 +139,12 @@ static class SubmittalLog
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         brain ??= Brain.Snapshot();
+        // 🔎 Number first: a document number asked for (from the 📄 file menu, Find related or typed) is looked up in the shared index
+        //    across ALL dates, with its own type switched on and no hidden choices in the way — the row is never lost to a filter.
+        var numbers = o.Words.Select(w => Revisions.Number(w)).Where(n => n.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var numTypes = numbers.Select(n => n.Split('-')).Where(p => p.Length >= 3).Select(p => p[^2].ToUpperInvariant()).Distinct().ToList();
+        bool byNumber = numbers.Count > 0;
+        if (byNumber) { o = o.Copy(); o.From = new DateTime(2000, 1, 1); o.To = DateTime.Now.AddDays(1); o.Types = o.Types.Concat(numTypes).Distinct().ToList(); }
         var want = (o.Types.Count > 0 ? o.Types.Select(t => Alias.TryGetValue(t.ToUpperInvariant(), out var a) ? a : t.ToUpperInvariant()).ToList() : Enabled(brain)).ToHashSet();
         var mza = Brain.ListOf("mza.match", Tracker.Us, brain);
         bool builtin = Tracker.Builtin;
@@ -148,6 +154,7 @@ static class SubmittalLog
         var codeTypes = Types.Where(t => t.Find == "code" && want.Contains(t.Code)).Select(t => t.Code).ToList();
         if (builtin && want.Contains("HSE") && !codeTypes.Contains("GEN")) codeTypes.Add("GEN");      // HSE comes as …-HSE-GEN-…
         if (builtin && want.Contains("PAY") && !codeTypes.Contains("LTR")) codeTypes.Add("LTR");      // payment applications come as letters
+        foreach (var t in numTypes) if (!codeTypes.Contains(t)) codeTypes.Add(t);
         var rx = codeTypes.Count > 0 ? NumRx(codeTypes) : null;
         var alias = Aliases();
         var known = new HashSet<string>(alias.Keys.Where(k => !k.Contains(' ')), StringComparer.OrdinalIgnoreCase);
@@ -161,6 +168,7 @@ static class SubmittalLog
         if (builtin && want.Contains("AUTH")) subj.AddRange(new[] { "%ADCD%", "%Civil Defen%", "%ADM %", "%Municipality%", "%DMT%", "%Aldar%", "%Miral%", "%NOC%", "%ADDC%" });
         if (builtin && want.Contains("PAY")) subj.AddRange(new[] { "%Payment%", "%IPC%", "%IPA%", "%Statement of Account%" });
         foreach (var (t, _, _) in refTypes) subj.AddRange(t.Like.Split(';', StringSplitOptions.RemoveEmptyEntries));
+        if (byNumber) subj = numbers.Select(n => "%" + n + "%").Concat(numbers.Select(n => "%" + n.Replace("-", "%") + "%")).ToList();
         subj = subj.Distinct().ToList();
         var atts = want.Contains("MOM") ? new List<string> { "%-MOM-%", "%MOM%" } : new List<string>();
         var mails = MailIndex.SubmittalsLike(subj, atts, o.From.AddDays(-3), DateTime.Now.AddDays(1));
@@ -398,6 +406,14 @@ static class SubmittalLog
             it.Check = string.Join("; ", chk);
             // Your filters (the period is the submission date; items without submission are kept by their reply date).
             var when = it.Submitted ?? it.Reply;
+            if (byNumber)
+            {
+                // only the number decides (all dates, every project / discipline choice ignored — you asked for this document)
+                if (!numbers.Any(n => NumberFits(it, n))) continue;
+                res.Discs[it.Disc] = res.Discs.GetValueOrDefault(it.Disc) + 1;
+                res.Items.Add(it);
+                continue;
+            }
             if (when == null || when < o.From || when > o.To) continue;
             if (o.Projects.Count > 0 && !o.Projects.Any(p => p.Equals(it.Project, StringComparison.OrdinalIgnoreCase))) continue;
             if (o.Projects.Count == 0 && hiddenP.Contains(it.Project)) continue;          // ✎ hidden projects are out of “All”
@@ -558,6 +574,16 @@ static class SubmittalLog
         ["why"] = hide != null ? hide.Hide(i.Why) : i.Why, ["check"] = i.Check, ["series"] = i.Series, ["ref"] = i.Ref, ["label"] = Def(i.Type)?.Label ?? i.Type,
         ["entry"] = (i.Rep ?? i.Sub)?.Entry ?? "", ["store"] = (i.Rep ?? i.Sub)?.StoreId ?? "", ["subEntry"] = i.Sub?.Entry ?? "", ["subStore"] = i.Sub?.StoreId ?? ""
     };
+
+    /// <summary>🔎 The row is this document: the same number, or the same type + serial (SSM-00183) when the prefix was written differently.</summary>
+    public static bool NumberFits(Item it, string number)
+    {
+        string F(string x) => Regex.Replace((x ?? "").ToLowerInvariant(), @"[\s_\-]+", "");
+        var n = F(number);
+        if (F(it.No) == n || F(it.No).Contains(n) || F(it.Ref).Contains(n)) return true;
+        var parts = number.Split('-');
+        return parts.Length >= 2 && F(it.No).EndsWith(F(parts[^2] + parts[^1]));
+    }
 
     /// <summary>⚡ Every word is in the row (number, title, type, discipline, tower, zone, level, flat, who, code, reference).</summary>
     public static bool WordsFit(Item it, IEnumerable<string> words)
