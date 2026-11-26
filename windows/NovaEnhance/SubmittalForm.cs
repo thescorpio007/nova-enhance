@@ -81,7 +81,25 @@ class SubmittalForm : WebPage
                 _ = Task.Run(() => { try { Post(ProjectFinder.Handle(msg)); } catch (Exception e) { Post(new JsonObject { ["t"] = "pf.list", ["said"] = "⚠ " + e.Message }); } });
                 break;
             }
-            case "run": Run(OptOf(m["opt"] as JsonObject)); break;
+            case "run": textNote = ""; Run(OptOf(m["opt"] as JsonObject)); break;
+            case "parse":
+            {
+                // 🔎 “Did you mean”: your words as filter buttons, while you type (no AI, nothing run yet)
+                var (_, picks, _, _) = ParseText(m["text"]?.ToString() ?? "", Keys(m["off"]), Keys(m["add"]));
+                Post(new JsonObject { ["t"] = "parsed", ["picks"] = picks, ["text"] = m["text"]?.ToString() ?? "" });
+                break;
+            }
+            case "filter" or "askai":
+            {
+                var text = m["text"]?.ToString() ?? "";
+                var (o, picks, from, note) = ParseText(text, Keys(m["off"]), Keys(m["add"]));
+                textNote = note;
+                var j = OptJson(o); j["fromText"] = from;
+                Post(new JsonObject { ["t"] = "opt", ["opt"] = j });
+                Post(new JsonObject { ["t"] = "parsed", ["picks"] = picks, ["text"] = text });
+                if (m["t"]?.ToString() == "askai") AskNova(text, o); else Run(o);
+                break;
+            }
             case "ask":
             {
                 // 🧭 A follow-up typed in the log window.
@@ -128,6 +146,134 @@ class SubmittalForm : WebPage
             case "brain": Screens.Brain(); break;
         }
     }
+
+    string textNote = "";
+
+    internal static HashSet<string> Keys(JsonNode n) => ((n as JsonArray)?.Select(x => x?.ToString() ?? "") ?? Array.Empty<string>()).Where(x => x.Length > 0).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    static bool Has(string text, IEnumerable<string> words, out string hit)
+    {
+        hit = words.Where(w => w.Trim().Length > 1).OrderByDescending(w => w.Length)
+            .FirstOrDefault(w => System.Text.RegularExpressions.Regex.IsMatch(text, @"(?<![\p{L}\p{N}])" + System.Text.RegularExpressions.Regex.Escape(w.Trim()) + @"(?![\p{L}\p{N}])", System.Text.RegularExpressions.RegexOptions.IgnoreCase))?.Trim() ?? "";
+        return hit.Length > 0;
+    }
+
+    /// <summary>🔎 Your words → the filter buttons, no AI: type, project, discipline, status, period, tower / zone / level; the rest are
+    /// words every row must have. Starts from the buttons already chosen. 🧠 Your Brain can add words: [log.open_words = …],
+    /// [log.overdue_words = …], [log.closed_words = …]. “off” = picks you switched off, “add” = quick options you added.</summary>
+    (SubmittalLog.Options O, JsonArray Picks, JsonArray From, string Note) ParseText(string text, HashSet<string> off, HashSet<string> add) =>
+        ParseWith(cur ?? new SubmittalLog.Options(), last?.Discs.Keys ?? Enumerable.Empty<string>(), text, off, add);
+
+    public static (SubmittalLog.Options O, JsonArray Picks, JsonArray From, string Note) ParseWith(SubmittalLog.Options start, IEnumerable<string> discKeys, string text, HashSet<string> off, HashSet<string> add)
+    {
+        var o = start.Copy();
+        o.Words = new();
+        var picks = new JsonArray(); var from = new JsonArray(); var said = new List<string>();
+        bool Use(string key, string label, string because = "")
+        {
+            var on = !off.Contains(key);
+            picks.Add(new JsonObject { ["key"] = key, ["label"] = label, ["on"] = on, ["why"] = because });
+            return on;
+        }
+        if (text.Trim().Length == 0) return (o, picks, from, "");
+        var n = SubmittalLog.FromWords(text, "");
+        var tokens = System.Text.RegularExpressions.Regex.Split(text, @"[^\p{L}\p{N}\-]+").Where(w => w.Length > 1).ToList();
+        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (n.Types.Count > 0 && Use("type", "Type " + string.Join(" + ", n.Types))) { o.Types = new(n.Types); from.Add("type"); said.Add(string.Join(" + ", n.Types)); }
+        foreach (var t in n.Types) used.Add(t);
+        var projs = n.Projects.Where(p => p.Length > 0 && p != "?").ToList();
+        if (projs.Count > 0 && Use("proj", "Project " + string.Join(" + ", projs))) { o.Projects = projs; from.Add("proj"); said.Add(string.Join(" + ", projs)); }
+        foreach (var p in projs) used.Add(p);
+
+        // Discipline: a code the log knows (CW, AR, MEP…) or one of your discipline groups
+        var discs = new HashSet<string>(discKeys, StringComparer.OrdinalIgnoreCase);
+        foreach (var g in LogPrefs.Groups().Keys) discs.Add(g);
+        var disc = tokens.FirstOrDefault(w => discs.Contains(w) && !used.Contains(w) && !SubmittalLog.Types.Any(t => t.Code.Equals(w, StringComparison.OrdinalIgnoreCase)));
+        if (disc != null) { used.Add(disc); var d = discs.First(x => x.Equals(disc, StringComparison.OrdinalIgnoreCase)); if (Use("disc", "Discipline " + d)) { o.Discipline = d; from.Add("disc"); said.Add(d); } }
+
+        // Status, with your Brain's own words
+        var openW = Brain.ListOf("log.open_words", "outstanding, open, pending, not answered, not replied, unanswered, awaiting, waiting, not closed, still open");
+        var lateW = Brain.ListOf("log.overdue_words", "overdue, late, delayed, past due");
+        var closedW = Brain.ListOf("log.closed_words", "closed, answered, replied, approved, done");
+        string hit = "";
+        if (add.Contains("add:overdue") || Has(text, lateW, out hit))
+        {
+            if (add.Contains("add:overdue")) hit = "only overdue";
+            if (Use("status", "Status Overdue", hit)) { o.Status = "Overdue"; from.Add("status"); said.Add("Overdue"); }
+        }
+        else if (Has(text, openW, out hit)) { if (Use("status", "Status Open + Overdue", "🧠 “" + hit + "”")) { o.Status = "Open"; from.Add("status"); said.Add(hit + " → Open + Overdue"); } }
+        else if (Has(text, closedW, out hit)) { if (Use("status", "Status Closed", hit)) { o.Status = "Closed"; from.Add("status"); said.Add("Closed"); } }
+
+        // Period
+        var per = System.Text.RegularExpressions.Regex.Match(text, @"this (week|month)|last (week|month|\d+ days)|\d{1,2}\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (add.Contains("add:since")) { if (Use("period", "Since Project Start")) { o.From = new DateTime(2018, 1, 1); o.To = DateTime.Today.AddDays(1).AddSeconds(-1); from.Add("period"); said.Add("since project start"); } }
+        else if (per.Success) { if (Use("period", char.ToUpper(per.Value[0]) + per.Value[1..])) { o.From = n.From; o.To = n.To; from.Add("period"); said.Add(per.Value); } }
+
+        // Where
+        if (n.Tower.Length > 0 && Use("tower", "Tower " + n.Tower)) { o.Tower = n.Tower; from.Add("where"); said.Add(n.Tower); }
+        if (n.Zone.Length > 0 && Use("zone", "Zone " + n.Zone)) { o.Zone = n.Zone; from.Add("where"); said.Add(n.Zone); }
+        if (n.LevelFrom > -99 && Use("level", n.LevelFrom == n.LevelTo ? $"Level {n.LevelFrom}" : $"Levels {n.LevelFrom}–{n.LevelTo}")) { o.LevelFrom = n.LevelFrom; o.LevelTo = n.LevelTo; from.Add("where"); said.Add("level"); }
+
+        // The rest: words every row must have (a number, a title word…)
+        var skip = openW.Concat(lateW).Concat(closedW).SelectMany(w => w.Split(' ', StringSplitOptions.RemoveEmptyEntries)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var w in SubmittalLog.FreeWords(text))
+            if (!used.Contains(w) && !skip.Contains(w) && (disc == null || !w.Equals(disc, StringComparison.OrdinalIgnoreCase)) && !System.Text.RegularExpressions.Regex.IsMatch(w, @"^(not|still|yet|outstanding|items?|documents?|wirs?|mirs?)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                if (Use("w:" + w, "Words “" + w + "”")) { o.Words.Add(w); said.Add("“" + w + "”"); }
+
+        // ＋ quick options (not applied until you click them)
+        if (!add.Contains("add:since") && !per.Success) picks.Add(new JsonObject { ["key"] = "add:since", ["label"] = "＋ Since Project Start", ["on"] = false, ["add"] = true });
+        if (o.Status != "Overdue") picks.Add(new JsonObject { ["key"] = "add:overdue", ["label"] = "＋ Only overdue", ["on"] = false, ["add"] = true });
+        return (o, picks, from, said.Count > 0 ? "from your text: " + string.Join(" · ", said) : "");
+    }
+
+    /// <summary>✦ Ask Nova: the log is filtered from your words first, then the AI answers from exactly those rows, with your 🧠 Brain.</summary>
+    void AskNova(string question, SubmittalLog.Options o)
+    {
+        cur = o;
+        cts?.Cancel(); cts = new CancellationTokenSource();
+        var ct = cts.Token;
+        Post(new JsonObject { ["t"] = "busy", ["text"] = "✦ Filtering the log from your words, then Nova answers from those rows…" });
+        _ = Task.Run(async () =>
+        {
+            using var busy = Busy.Begin("✦ Ask Nova · submittal log");
+            try
+            {
+                var r = SubmittalLog.Run(o, null, ct);
+                last = r;
+                Post(ResultJson(r, o));
+                Post(new JsonObject { ["t"] = "aithinking" });
+                var rows = string.Join("\n", r.Items.Take(400).Select(i => $"{i.Project}|{i.Type}|{i.No}|Rev{i.RevNum:00}|{i.Disc}|{Agent.Clip(i.Title, 90)}|{i.Tower}|{i.Zone}|{i.Level}|{i.Submitted:dd MMM yyyy}|{i.Reply:dd MMM yyyy}|{i.Code}|{i.Status}|{i.Days}d"));
+                var k = SubmittalLog.Kpis(r);
+                var brain = Brain.Unlocked ? BrainTrainer.BrainText(Brain.Snapshot(), false) : "";
+                if (brain.Length > 14000) brain = brain[..14000];
+                var sys = "You answer the user's question about their submittal log. The ROWS are exactly what the table shows right now (already filtered from the question). " +
+                          "Answer ONLY from these rows and the counts: never say “none” when rows exist; give numbers, the oldest / most urgent items with their numbers, and patterns (by zone, tower, type) when useful. " +
+                          "Use the user's Brain rules for the meaning of words. Short and direct, plain text. " +
+                          "Reply JSON only: {\"answer\":\"…\",\"used\":[\"Brain meanings you applied, short\"],\"next\":[\"3 or 4 short follow-up requests the user may want, e.g. Only overdue, Group by zone, Draft a reminder to the contractor\"]}";
+                var user = (brain.Length > 0 ? "THE USER'S BRAIN RULES:" + brain + "\n\n" : "") +
+                           $"FILTERS: {Describe(o)}\nCOUNTS: found {k["found"]} · open {k["open"]} · overdue {k["overdue"]} · closed {k["closed"]}{(r.Items.Count > 400 ? " (first 400 rows below)" : "")}\n" +
+                           "ROWS (project|type|no|rev|discipline|title|tower|zone|level|submitted|reply|code|status|days):\n" + rows + "\n\nQUESTION: " + question;
+                string raw;
+                using (Ai.For("chat")) raw = await Ai.Chat(sys, user, false, true, null, ct);
+                var j = Ai.ParseJson(raw) ?? new JsonObject { ["answer"] = raw };
+                Post(new JsonObject { ["t"] = "aians", ["answer"] = j["answer"]?.ToString() ?? raw, ["used"] = j["used"]?.DeepClone() ?? new JsonArray(), ["next"] = j["next"]?.DeepClone() ?? new JsonArray(), ["rows"] = r.Items.Count, ["by"] = Ai.LabelOf(Ai.Current()), ["brain"] = Brain.Unlocked ? Brain.Version : 0 });
+            }
+            catch (OperationCanceledException) { Post(new JsonObject { ["t"] = "aians", ["answer"] = "■ Stopped." }); }
+            catch (Exception e) { Log.Warn("ask nova (log)", e.Message); Post(new JsonObject { ["t"] = "aians", ["answer"] = "⚠ " + e.Message }); }
+        });
+    }
+
+    /// <summary>The filters in words: “SLV · WIR · CW · Open + Overdue · 01 → 26 Nov 2026 · “words””.</summary>
+    internal static string Describe(SubmittalLog.Options o) => string.Join(" · ", new[]
+    {
+        o.Projects.Count > 0 ? string.Join(" + ", o.Projects) : "all projects",
+        o.Types.Count > 0 ? string.Join(" + ", o.Types) : "all types",
+        o.Discipline, o.Status == "Open" ? "Open + Overdue" : o.Status, o.Tower, o.Zone,
+        o.LevelFrom > -99 ? (o.LevelFrom == o.LevelTo ? $"L{o.LevelFrom}" : $"L{o.LevelFrom}–{o.LevelTo}") : "",
+        o.From.Year <= 2018 ? "since project start" : $"{o.From:dd MMM} → {o.To:dd MMM yyyy}",
+        o.Words.Count > 0 ? "“" + string.Join(" ", o.Words) + "”" : ""
+    }.Where(x => !string.IsNullOrEmpty(x)));
 
     /// <summary>⚡ The question answered from the log: its filters (type, project, tower, level, status, dates) + its free words.</summary>
     void LocalAsk(string text, SubmittalLog.Options fromIntent)
@@ -247,6 +393,19 @@ class SubmittalForm : WebPage
         });
     }
 
+    JsonObject ResultJson(SubmittalLog.Result r, SubmittalLog.Options o) => new()
+    {
+        ["t"] = "result", ["kpi"] = SubmittalLog.Kpis(r),
+        // 🔎 what the log is showing right now (and which buttons came from your text)
+        ["showing"] = "🔎 Showing: " + Describe(o) + (o.Words.Count > 0 && r.Items.FirstOrDefault()?.Title is { Length: > 0 } ti ? " — " + ti : "") + $" — {r.Items.Count:N0} row(s)" + (textNote.Length > 0 ? "   ·   " + textNote : ""),
+        ["items"] = new JsonArray(r.Items.Take(3000).Select(i => (JsonNode)SubmittalLog.Json(i)).ToArray()),
+        ["towers"] = A(r.Items.Select(i => i.Tower).Where(x => x.Length > 0 && !x.StartsWith("TH")).Distinct().OrderBy(x => x)),
+        ["discs"] = A(r.Items.Select(i => i.Disc).Where(x => x.Length > 0).Distinct().OrderBy(x => x)),
+        ["discCounts"] = new JsonObject(r.Discs.Where(x => x.Key.Length > 0).Select(x => KeyValuePair.Create(x.Key, (JsonNode)x.Value))),
+        ["statCounts"] = new JsonObject(r.Statuses.Select(x => KeyValuePair.Create(x.Key, (JsonNode)x.Value))),
+        ["projects"] = A(r.Items.Select(i => i.Project).Where(x => x.Length > 0).Distinct().OrderBy(x => x))
+    };
+
     void Run(SubmittalLog.Options o)
     {
         cur = o;
@@ -258,19 +417,7 @@ class SubmittalForm : WebPage
             var r = SubmittalLog.Run(o, null, ct);
             last = r;
             if (exportNext) { exportNext = false; BeginInvoke(new Action(() => Excel(r))); }
-            return new JsonObject
-            {
-                ["t"] = "result", ["kpi"] = SubmittalLog.Kpis(r),
-                // 🔎 what the log is showing right now (the number / words asked for, with the title found)
-                ["showing"] = o.Words.Count == 0 ? "" : "🔎 Showing: " + string.Join(" · ", o.Words) +
-                    (r.Items.FirstOrDefault()?.Title is { Length: > 0 } ti ? " — " + ti : "") + $"  ·  {r.Items.Count} row(s), all dates",
-                ["items"] = new JsonArray(r.Items.Take(3000).Select(i => (JsonNode)SubmittalLog.Json(i)).ToArray()),
-                ["towers"] = A(r.Items.Select(i => i.Tower).Where(x => x.Length > 0 && !x.StartsWith("TH")).Distinct().OrderBy(x => x)),
-                ["discs"] = A(r.Items.Select(i => i.Disc).Where(x => x.Length > 0).Distinct().OrderBy(x => x)),
-                ["discCounts"] = new JsonObject(r.Discs.Where(x => x.Key.Length > 0).Select(x => KeyValuePair.Create(x.Key, (JsonNode)x.Value))),
-                ["statCounts"] = new JsonObject(r.Statuses.Select(x => KeyValuePair.Create(x.Key, (JsonNode)x.Value))),
-                ["projects"] = A(r.Items.Select(i => i.Project).Where(x => x.Length > 0).Distinct().OrderBy(x => x))
-            };
+            return ResultJson(r, o);
         });
     }
 }

@@ -401,6 +401,9 @@ static class Smoke
             var it = new SubmittalLog.Item { No = "SLV-ZUC-AR-SSM-00183", Rev = "00" };
             Ok(SubmittalLog.NumberFits(it, "SLV-ZUC-AR-SSM-00183") && SubmittalLog.NumberFits(new SubmittalLog.Item { No = "SLV ZUC AR SSM 00183" }, "SLV-ZUC-AR-SSM-00183")
                && !SubmittalLog.NumberFits(it, "SLV-ZUC-AR-SSM-00184"), "submittal log: the row is found by its number first");
+            var pt = SubmittalForm.ParseWith(new SubmittalLog.Options(), new[] { "CW", "AR" }, "show me all outstanding WIR for CW this month", new(), new());
+            Ok(pt.O.Types.SequenceEqual(new[] { "WIR" }) && pt.O.Discipline == "CW" && pt.O.Status == "Open" && pt.O.From.Day == 1 && pt.O.Words.Count == 0,
+               $"submittal log: “outstanding WIR for CW this month” → WIR · CW · Open + Overdue · this month ({SubmittalForm.Describe(pt.O)})");
             Ok(Studio.Mode is "C" or "A" or "B" && Studio.Budget > 0, "Nova Studio: a mode and a budget");
             var fb = JsonNode.Parse("{\"sections\":[{\"name\":\"P\",\"rules\":[{\"id\":\"PR-S1\"},{\"id\":\"PR-S1\"},{\"id\":\"PR-S1-b\"}]}]}")!.AsObject();
             Ok(Brain.FixIds(fb) == 1 && Brain.Rules(fb).Select(x => x.Rule["id"]!.ToString()).Distinct().Count() == 3, "brain: two rules never share an id (repaired)");

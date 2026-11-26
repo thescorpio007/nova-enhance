@@ -344,10 +344,20 @@ static class ClaudeChecks
         var proj = a["project"]?.ToString() ?? "";
         if (proj.Length > 0) o.Projects.Add(proj);
         if (int.TryParse(a["days"]?.ToString(), out var days) && days > 0) o.From = DateTime.Today.AddDays(-days);
-        if (q.Length > 0) o.Words.AddRange(q.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        var parsed = "";
+        if (a["text"]?.ToString() is { Length: > 0 } tx)
+        {
+            // 🔎 the same “Filter to my text” as the log window: the words become the filters
+            var first = SubmittalLog.Run(o);
+            var p = SubmittalForm.ParseWith(o, first.Discs.Keys, tx, new(), new());
+            o = p.O; q = tx;
+            parsed = "Parsed: " + string.Join(" · ", p.Picks.OfType<JsonObject>().Where(x => x["add"] == null).Select(x => x["label"]?.ToString())) + "\nFilters: " + SubmittalForm.Describe(o) + "\n";
+        }
+        else if (q.Length > 0) o.Words.AddRange(q.Split(' ', StringSplitOptions.RemoveEmptyEntries));
         var r = SubmittalLog.Run(o);
         var sb = new System.Text.StringBuilder();
         sb.AppendLine($"📋 Submittal log test “{q}”{(proj.Length > 0 ? " · " + proj : "")} · {r.Seconds:0.0} s · {r.Mails:N0} emails read · {r.Items.Count} row(s) · period {r.Opt.From:dd MMM yyyy} → {r.Opt.To:dd MMM yyyy}");
+        sb.Append(parsed);
         sb.AppendLine("Types: " + string.Join(", ", r.Opt.Types.DefaultIfEmpty("(every enabled type)")));
         foreach (var i in r.Items.Take(30))
             sb.AppendLine($"- {i.Project} · {i.Type} · {i.No} Rev{i.RevNum:00} · {i.Title} · submitted {i.Submitted:dd MMM yyyy} · reply {i.Reply:dd MMM yyyy} · {i.Code} · {i.Status} · {i.Emails} email(s){(i.Check.Length > 0 ? " · check: " + i.Check : "")}");

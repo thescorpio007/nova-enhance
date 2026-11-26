@@ -30,6 +30,11 @@ td.tt{max-width:430px;overflow:hidden;text-overflow:ellipsis}.mono{font-family:C
 .edPop{position:fixed;left:50%;top:70px;transform:translateX(-50%);width:820px;max-width:calc(100vw - 40px);background:#151925;border:1px solid #3A3F55;border-radius:14px;padding:14px 16px;box-shadow:0 16px 50px rgba(0,0,0,.6);z-index:60;display:none}
 #colsPop{position:absolute;bottom:52px;left:340px;background:#151925;border:1px solid #3A3F55;border-radius:12px;padding:10px 12px;display:none;z-index:40;columns:3;column-gap:18px;width:520px}
 #colsPop label{display:block;padding:2px 0}#colsPop button{margin-top:6px}
+.sbtn{display:flex;flex-direction:column;justify-content:center;align-items:flex-start;min-width:128px;padding:5px 12px;font-weight:600}.sbtn small{font-weight:400;font-size:10.5px;color:#C9CED8;opacity:.85}
+.sugg{display:flex;gap:6px;flex-wrap:wrap;align-items:center;min-height:0}.sugg:empty{display:none}
+.sg{border:1px dashed #FFD27A;color:#FFD27A;border-radius:14px;padding:2px 11px;cursor:pointer;font-size:12.5px}.sg.off{opacity:.45;text-decoration:line-through}.sg.add{border-color:#9AA3B5;color:#C9CED8}.sg small{opacity:.8}
+.chip.from{box-shadow:0 0 0 2px #FFD27A}
+#aiBox{background:#1B2030;border:1px solid #2F3750;border-radius:10px;padding:10px 14px;max-height:34vh;overflow:auto}#aiBox .ans{white-space:pre-wrap;line-height:1.5;margin:4px 0}
 .chip.plus{background:#7C6CFF;border-color:#7C6CFF;color:#fff;font-weight:700;padding:3px 12px}
 </style>
 </head>
@@ -44,10 +49,15 @@ td.tt{max-width:430px;overflow:hidden;text-overflow:ellipsis}.mono{font-family:C
     <span class="lab">Discipline</span><span class="chips" id="cDisc"></span>
     <span class="lab">Status</span><span class="chips" id="cStat"></span>
   </div>
-  <div class="row"><textarea id="ask" rows="2" style="flex:1;resize:vertical;min-height:38px;padding:8px 10px;background:#1A1E28;color:#E6E8EE;border:1px solid #2A3040;border-radius:8px;font:inherit" placeholder="🧭 Ask Nova anything — “only the overdue ones” · “EI this month” · or freely: “all C7 submittals my colleagues sent Charbel for formal approval that he hasn't answered” (Enter = ask · Shift+Enter = new line)"></textarea><button class="primary" id="askBtn">Ask</button></div>
+  <div class="row" style="align-items:stretch"><textarea id="ask" rows="2" style="flex:1;resize:vertical;min-height:38px;padding:8px 10px;background:#1A1E28;color:#E6E8EE;border:1px solid #2A3040;border-radius:8px;font:inherit" placeholder="Type what you look for — “outstanding WIR for CW this month” · “overdue MIR T2” · “SSM-00183” (Enter = 🔎 filter · Ctrl+Enter = ✦ Ask Nova · Shift+Enter = new line)"></textarea>
+    <button class="primary sbtn" id="askBtn" title="Your words become the filter buttons above — no AI, about a second">🔎 Filter to my text<small>no AI · about 1 s</small></button>
+    <button class="sbtn" id="aiBtn" title="The log is filtered from your words, then the AI answers from exactly those rows, with your 🧠 Brain rules">✦ Ask Nova<small>AI + your 🧠 Brain rules</small></button>
+    <button class="sbtn" id="clrBtn" title="Clear the text and the word search — your filter buttons stay">✕ Clear<small>keeps your filter buttons</small></button></div>
+  <div id="sugg" class="sugg"></div>
   <div class="kpi" id="kpi"></div>
   <div id="gaps" class="small" style="color:#FFB547"></div>
   <div id="showing" style="display:none;margin:6px 0;padding:7px 12px;border-radius:6px;background:#221f3d;border:1px solid #7c5cf6;font-weight:600"></div>
+  <div id="aiBox" style="display:none"></div>
   <div id="busy"></div>
   <div id="tbl"></div>
   <div class="foot">

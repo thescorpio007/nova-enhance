@@ -87,6 +87,7 @@
     chip(sr, "All", !opt.status, function () { opt.status = ""; run(); });
     (L("statuses").length ? L("statuses") : ["Open", "Overdue", "Closed", "Code3/4"]).forEach(function (x) { var n = stats[x]; chip(sr, (x === "Code3/4" ? "Code 3/4" : x) + (n != null ? " · " + n.toLocaleString() : ""), opt.status === x, function () { opt.status = opt.status === x ? "" : x; run(); }); });
     editChip(sr, "status");
+    markFrom();
   }
 
   // ---------------------------------------------------------------- ✎ Edit panels (saved in My log settings)
@@ -212,7 +213,64 @@
     ed.appendChild(bar);
   }
 
-  function run() { drawFilters(); post({ t: "run", opt: opt }); }
+  // 🔎 Your words → the filter buttons (yellow ring = set from your text) · ✦ Ask Nova · ✕ Clear · “Did you mean” quick options
+  var fromText = [], picksOff = [], picksAdd = [], parseTimer = null, lastPicks = [];
+  function foldConversation() { if (window.AgentUi && AgentUi.active && AgentUi.active() && AgentUi.fold) AgentUi.fold(); }
+  function run() { fromText = []; opt.words = opt.words || []; foldConversation(); $("aiBox").style.display = "none"; drawFilters(); post({ t: "run", opt: opt }); }
+  function markFrom() {
+    var rows = { proj: "cProj", type: "cType", disc: "cDisc", status: "cStat", period: "cPer", where: "cWhere" };
+    Object.keys(rows).forEach(function (k) {
+      if (fromText.indexOf(k) < 0) return;
+      [].slice.call($(rows[k]).querySelectorAll(".chip.on")).forEach(function (c) { if (!/^All/.test(c.textContent)) c.className += " from"; });
+    });
+  }
+  function drawSugg(picks) {
+    var s = $("sugg"); s.innerHTML = ""; lastPicks = picks || [];
+    if (!lastPicks.length) return;
+    s.appendChild(el("span", "muted small", "Did you mean:"));
+    lastPicks.forEach(function (p) {
+      var on = p.add ? picksAdd.indexOf(p.key) >= 0 : picksOff.indexOf(p.key) < 0;
+      var c = el("span", "sg" + (p.add ? " add" : "") + (on || p.add ? "" : " off"), (p.add ? "" : (on ? "✓ " : "✗ ")) + p.label);
+      if (p.why) c.appendChild(el("small", null, "  (" + p.why + ")"));
+      c.title = p.add ? "click to add it" : "click to switch it " + (on ? "off" : "on");
+      c.onclick = function () {
+        var l = p.add ? picksAdd : picksOff, i = l.indexOf(p.key);
+        if (i >= 0) l.splice(i, 1); else l.push(p.key);
+        textGo("filter");
+      };
+      s.appendChild(c);
+    });
+  }
+  function textGo(kind) {
+    var t = $("ask").value.trim(); if (!t) return;
+    foldConversation();
+    if (kind === "askai") { var b = $("aiBox"); b.style.display = "block"; b.innerHTML = ""; b.appendChild(el("div", "muted", "✦ Nova is reading the rows…")); }
+    else $("aiBox").style.display = "none";
+    post({ t: kind, text: t, off: picksOff, add: picksAdd });
+  }
+  $("ask").addEventListener("input", function () {
+    picksOff = []; picksAdd = [];
+    clearTimeout(parseTimer);
+    var t = $("ask").value.trim();
+    if (!t) { drawSugg([]); return; }
+    parseTimer = setTimeout(function () { post({ t: "parse", text: t, off: [], add: [] }); }, 350);
+  });
+  $("aiBtn").onclick = function () { textGo("askai"); };
+  $("clrBtn").onclick = function () { $("ask").value = ""; picksOff = []; picksAdd = []; drawSugg([]); opt.words = []; run(); };
+  function aiAnswer(m) {
+    var b = $("aiBox"); b.style.display = "block"; b.innerHTML = "";
+    var h = el("div"); h.appendChild(el("b", null, "✦ Nova" + (m.by ? " (" + m.by + (m.brain ? " + 🧠 Brain v" + m.brain : "") + ")" : "")));
+    if (m.rows != null) h.appendChild(el("span", "muted small", "  answered from the " + m.rows + " row(s) of the table"));
+    var x = el("span", "muted small", "   ✕"); x.style.cursor = "pointer"; x.onclick = function () { b.style.display = "none"; }; h.appendChild(x);
+    b.appendChild(h);
+    b.appendChild(el("div", "ans", m.answer || ""));
+    if ((m.used || []).length) b.appendChild(el("div", "muted small", "🧠 used: " + m.used.join(" · ")));
+    var acts = el("div", "chips"); acts.style.marginTop = "6px";
+    (m.next || []).forEach(function (n) { var c = el("span", "sg", n); c.onclick = function () { $("ask").value = n; picksOff = []; picksAdd = []; textGo("askai"); }; acts.appendChild(c); });
+    var ag = el("span", "sg add", "🧭 Search the emails (agent)"); ag.title = "for who / why / drafts: the Nova agent reads the emails and threads";
+    ag.onclick = function () { var q = $("ask").value.trim() || ""; if (q) AgentUi.start(q); }; acts.appendChild(ag);
+    b.appendChild(acts);
+  }
   $("from").onchange = function () { opt.from = $("from").value; run(); };
   $("to").onchange = function () { opt.to = $("to").value; run(); };
 
@@ -280,13 +338,14 @@
   $("fold").onclick = function () { post({ t: "folder" }); };
   $("upd").onclick = run;
   $("brain").onclick = function () { post({ t: "brain" }); };
-  function ask() {
-    var t = $("ask").value.trim(); if (!t) return; $("ask").value = "";
-    if (AgentUi.active()) AgentUi.follow(t);   // 🧭 a follow-up of the agent's conversation
-    else post({ t: "ask", text: t });
+  // Enter = 🔎 filter (no AI) · Ctrl+Enter = ✦ Ask Nova · “ask AI: …” still opens the 🧭 agent (emails and threads)
+  function ask(ai) {
+    var t = $("ask").value.trim(); if (!t) return;
+    if (/^\s*(✦|ask ai\s*:?)/i.test(t)) { $("ask").value = ""; post({ t: "ask", text: t }); return; }
+    textGo(ai ? "askai" : "filter");
   }
-  $("askBtn").onclick = ask;
-  $("ask").onkeydown = function (e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(); } };
+  $("askBtn").onclick = function () { ask(false); };
+  $("ask").onkeydown = function (e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(e.ctrlKey); } };
 
   // ● ● ● “Nova is thinking” while the log is read (dots, timer, ■ Stop, what Nova waits for)
   var bth = null;
@@ -320,7 +379,10 @@
       setCols(); drawFilters();
     }
     else if (m.t === "busy") { if (/^[✓⚠]|^⚡ \d/.test(m.text)) busy(m.text); else busy(m.text, true); }
-    else if (m.t === "opt") { opt = m.opt; drawFilters(); if (m.said) busy("🧭 " + m.said + " …", true); }
+    else if (m.t === "opt") { opt = m.opt; fromText = m.opt.fromText || []; drawFilters(); if (m.said) busy("🧭 " + m.said + " …", true); }
+    else if (m.t === "parsed") { if (($("ask").value.trim() || "") === (m.text || "")) drawSugg(m.picks); }
+    else if (m.t === "aithinking") { var ab = $("aiBox"); ab.style.display = "block"; ab.innerHTML = ""; ab.appendChild(el("div", "muted", "✦ Nova is reading the " + (items.length || 0) + " rows with your 🧠 Brain…")); }
+    else if (m.t === "aians") aiAnswer(m);
     else if (m.t === "result") {
       var sh = $("showing");
       if (sh) {
@@ -328,7 +390,8 @@
         if (m.showing) {
           sh.style.display = "block"; sh.appendChild(document.createTextNode(m.showing + "   "));
           var x = document.createElement("a"); x.textContent = "✕ show everything"; x.style.cssText = "cursor:pointer;color:#b9adff;margin-left:8px";
-          x.onclick = function () { opt.words = []; run(); }; sh.appendChild(x);
+          x.title = "every type, discipline, status and place again (your projects and period stay)";
+          x.onclick = function () { opt.words = []; opt.types = []; opt.disc = ""; opt.status = ""; opt.tower = ""; opt.zone = ""; opt.lfrom = ""; opt.lto = ""; $("ask").value = ""; drawSugg([]); run(); }; sh.appendChild(x);
         } else sh.style.display = "none";
       }
       busy(""); items = m.items || [];

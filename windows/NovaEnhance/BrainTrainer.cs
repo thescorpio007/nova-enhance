@@ -26,7 +26,7 @@ static class BrainTrainer
     /// <summary>Text for comparing quotes: lower case, plain quotes and dashes, single spaces.</summary>
     static string Fold(string t) => Regex.Replace((t ?? "").ToLowerInvariant().Replace('“', '"').Replace('”', '"').Replace('’', '\'').Replace('‘', '\'').Replace('–', '-').Replace('—', '-'), @"\s+", " ").Trim(' ', '"', '\'', '.', '…');
 
-    static string BrainText(JsonObject b, bool withTests = true)
+    internal static string BrainText(JsonObject b, bool withTests = true)
     {
         var sb = new StringBuilder();
         foreach (var sec in (b["sections"] as JsonArray ?? new JsonArray()).OfType<JsonObject>())

@@ -68,7 +68,7 @@ static class ClaudeOutlook
         ["nova.perf"] = "⚙ Nova's memory and CPU, sizes, free disk, the slowest steps — read only",
         ["nova.projects"] = "📁 the project file index per project and folder: reachable over the VPN, names listed, files read, offline copies, problems — read only",
         ["nova.jobs"] = "🔄 background jobs: email index per mailbox / archive, project index, read-inside, offline copies, phone link, transfers — read only",
-        ["nova.log"] = "📋 runs the Submittal log like you would (q = a document number or words, project, days): the rows found, the emails read and why rows are left out — read only",
+        ["nova.log"] = "📋 runs the Submittal log like you would (q = a document number or words, or text = a sentence read like “🔎 Filter to my text”, project, days): the rows found, the emails read and why rows are left out — read only",
         ["nova.searchtest"] = "🔎 searches like you would (q = a document number or words): the files and the emails found — read only",
         ["nova.phone"] = "📱 phone link: last sync, status, errors — read only",
         ["nova.updates"] = "⬆ installed build, waiting update, update status — read only",

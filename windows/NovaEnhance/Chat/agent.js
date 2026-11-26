@@ -93,6 +93,8 @@
     scroll();
   }
   window.AgentUi = {
+    // 🔎 a filter button was clicked: fold the conversation so the table shows at once
+    fold: function () { if (!box || box.style.display === "none") return; box.classList.add("fold"); var f = box.querySelector("#agHead button"); if (f) f.textContent = "▸ Show the conversation"; var t = document.getElementById("tbl"); if (t) t.style.display = ""; },
     start: function (text) { question = text; ensure(); show(true); msgs.innerHTML = ""; you(text); startThinking(); post({ t: "ag.ask", text: text }); },
     handle: function (m) {
       if (!/^ag\./.test(m.t || "")) return false;
