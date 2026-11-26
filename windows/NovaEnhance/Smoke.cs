@@ -405,7 +405,7 @@ static class Smoke
             var g = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceNames().Count(n => n.Contains(".Guides.") && n.EndsWith(".pdf"));
             Ok(g >= 8, $"Nova Studio: the {g} 📘 guides are inside Nova");
         }
-        catch (Exception e) { Ok(false, "Nova Studio: " + e.Message); }
+        catch (Exception sx) { Ok(false, "Nova Studio: " + sx.Message); }
         Ok(!errs.Contains("settings ") || true, "No settings errors");
     }
 }
