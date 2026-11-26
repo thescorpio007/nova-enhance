@@ -252,7 +252,7 @@ static class ContractRegister
         FileLabels lb;
         try { lb = Filing.Classify(f.Path); } catch { lb = new FileLabels(); }
         d.Disc = Short(lb.Disc); d.Rev = lb.Rev;
-        try { var k = Knowledge.Parse(f.Path, f.Modified.Ticks); d.Key = k.Key; d.Rank = k.Rank; if (d.Rev.Length == 0) d.Rev = k.Rev; } catch { d.Key = Path.GetFileNameWithoutExtension(f.Name).ToLowerInvariant(); }
+        try { var k = Revisions.Parse(f.Path, f.Modified.Ticks); d.Key = k.Key; d.Rank = k.Rank; if (d.Rev.Length == 0) d.Rev = k.Rev; } catch { d.Key = Path.GetFileNameWithoutExtension(f.Name).ToLowerInvariant(); }
         if (lb.Number.Length > 0) d.Key = lb.Number.ToLowerInvariant();
         var dir = Path.GetDirectoryName(f.Path) ?? "";
         var area = areas.FirstOrDefault(a => f.Path.StartsWith(a.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase)) ?? "";

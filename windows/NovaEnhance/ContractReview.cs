@@ -80,7 +80,7 @@ class ContractReviewForm : NovaForm
             var title = Path.GetFileNameWithoutExtension(path);
             // what the submittal is about: its spec sections, drawing numbers, brands, and the words of its title
             var specs = SpecRx.Matches(text).Select(m => $"{m.Groups[1].Value} {m.Groups[2].Value} {m.Groups[3].Value}").Where(s => !s.StartsWith("00") && !s.StartsWith("20") && !s.StartsWith("19")).GroupBy(s => s).OrderByDescending(g => g.Count()).Select(g => g.Key).Take(4).ToList();
-            var dwgs = Knowledge.Numbers(text).Where(n => !n.Equals(lb.Number, StringComparison.OrdinalIgnoreCase)).Take(8).ToList();
+            var dwgs = Revisions.Numbers(text).Where(n => !n.Equals(lb.Number, StringComparison.OrdinalIgnoreCase)).Take(8).ToList();
             var brands = BrandRx.Matches(text).Select(m => m.Groups[1].Value.Trim()).Where(b => b.Length > 2).Distinct(StringComparer.OrdinalIgnoreCase).Take(6).ToList();
             var subject = Regex.Replace(title, @"[_\-]+", " ");
             subject = Regex.Replace(subject, @"\b(?:[A-Z]{2,5}\s){2,}\d+\b|\bRev\s?\d+\b|\bR\d{2}\b", " ", RegexOptions.IgnoreCase);
