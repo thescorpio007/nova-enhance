@@ -705,7 +705,8 @@ THE BRAIN NOW:{BrainText(b)}";
             {
                 var v = at["verdict"]?.ToString();
                 if (v == "no effect") { Notes(r["id"]!.ToString()).Add($"💤 changed nothing in its auto test (“{at["q"]}”)"); r["bad"] = Math.Max(r["bad"]!.GetValue<int>(), 1); }
-                else if (v == "blocked") { Notes(r["id"]!.ToString()).Add("⛔ auto test: blocked — a duplicate or a contradiction"); r["bad"] = 2; }
+                else if (v == "blocked") r["autotest"] = null;   // an older auto test that blocked on the AI's opinion alone: tested again
+                if (r["autotest"] is JsonObject at2) foreach (var o in (at2["overlap"] as JsonArray ?? new())) { Notes(r["id"]!.ToString()).Add("⚠ the AI says it overlaps " + o); r["bad"] = Math.Max(r["bad"]!.GetValue<int>(), 1); }
             }
             var lvl = r["bad"]!.GetValue<int>();
             var isAuto = r["tested"] == null && r["autotest"]?["verdict"]?.ToString() == "works";
@@ -728,7 +729,7 @@ THE BRAIN NOW:{BrainText(b)}";
         if (!Brain.Unlocked) throw new Exception("the 🧠 Nova Brain is locked — open it first");
         var b = Brain.Snapshot();
         Brain.FixIds(b);
-        var todo = Brain.Rules(b).Where(x => x.Rule["tested"] == null && x.Rule["autotest"] == null && x.Rule["off"]?.GetValue<bool>() != true).Take(Math.Clamp(max, 1, 30)).ToList();
+        var todo = Brain.Rules(b).Where(x => x.Rule["tested"] == null && (x.Rule["autotest"] == null || x.Rule["autotest"]?["verdict"]?.ToString() == "blocked") && x.Rule["off"]?.GetValue<bool>() != true).Take(Math.Clamp(max, 1, 30)).ToList();
         var results = new Dictionary<string, JsonObject>(StringComparer.OrdinalIgnoreCase);
         var lines = new JsonArray();
         int i = 0;
@@ -744,16 +745,21 @@ THE BRAIN NOW:{BrainText(b)}";
                 using (Ai.For("brain"))
                 {
                     Brain.Quiet.Value = true;
-                    try { q = (await Ai.Chat("Write ONE short question a user would ask Nova (an assistant for emails, documents, submittal logs and writing) whose answer THIS rule should change. Reply with the question only, no quotes.", $"Section: {s["name"]}\nRule {id} — {r["title"]}: {r["text"]}", false, true, null, ct)).Trim().Trim('"', '“', '”'); }
+                    try { q = (await Ai.Chat("Write ONE short question a user would ask Nova (an assistant for emails, documents, submittal logs and writing) whose answer THIS rule should change. Reply with the question only, as plain text, no quotes, no JSON.", $"Section: {s["name"]}\nRule {id} — {r["title"]}: {r["text"]}", true, false, null, ct)).Trim(); }
                     finally { Brain.Quiet.Value = false; }
                 }
+                if (q.StartsWith("{") && Ai.ParseJson(q) is JsonObject qj) q = qj.Select(x => x.Value?.ToString() ?? "").FirstOrDefault(x => x.Length > 0) ?? q;
+                q = q.Trim().Trim('"', '“', '”').Trim();
                 if (q.Length > 300) q = q[..300];
                 var change = new JsonArray(new JsonObject { ["op"] = "change", ["id"] = id, ["text"] = r["text"]?.ToString() });
                 var t = await Test(change, q, "", _ => { }, _ => { }, ct, quickMode: true);
                 TestRun run; lock (tests) tests.TryGetValue(t["id"]?.ToString() ?? "", out run);
                 var effect = run != null && (run.Kind == "writing" || run.Plus + run.Minus + run.LogChanged > 0);
-                var verdict = run == null ? "error" : run.Blocking ? "blocked" : effect ? "works" : "no effect";
-                res = new JsonObject { ["verdict"] = verdict, ["q"] = Agent.Clip(q, 160), ["plus"] = run?.Plus ?? 0, ["minus"] = run?.Minus ?? 0, ["when"] = DateTime.Now.ToString("dd MMM yyyy HH:mm") };
+                // The AI's “overlaps with …” is a note to read, not a block: real contradictions are confirmed word by word by the 🩺 health check.
+                var verdict = run == null ? "error" : effect ? "works" : "no effect";
+                var chk = t["checks"] as JsonObject;
+                var overlap = new JsonArray(((chk?["contradictions"] as JsonArray ?? new()).Concat(chk?["duplicates"] as JsonArray ?? new())).Select(x => x?.ToString() ?? "").Where(x => x.Length > 0).Take(2).Select(x => (JsonNode)Agent.Clip(x, 160)).ToArray());
+                res = new JsonObject { ["verdict"] = verdict, ["q"] = Agent.Clip(q, 160), ["plus"] = run?.Plus ?? 0, ["minus"] = run?.Minus ?? 0, ["overlap"] = overlap, ["when"] = DateTime.Now.ToString("dd MMM yyyy HH:mm") };
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception e) { res = new JsonObject { ["verdict"] = "error", ["why"] = Agent.Clip(e.Message, 140) }; }
@@ -769,7 +775,7 @@ THE BRAIN NOW:{BrainText(b)}";
                 if (results.TryGetValue(r["id"]?.ToString() ?? "", out var x) && x["verdict"]?.ToString() != "error") r["autotest"] = x.DeepClone();
             Brain.Commit(nb, "🧪 auto test", $"{kept.Count} rule(s) tested automatically");
         }
-        var left = Brain.Rules(Brain.Snapshot()).Count(x => x.Rule["tested"] == null && x.Rule["autotest"] == null && x.Rule["off"]?.GetValue<bool>() != true);
+        var left = Brain.Rules(Brain.Snapshot()).Count(x => x.Rule["tested"] == null && (x.Rule["autotest"] == null || x.Rule["autotest"]?["verdict"]?.ToString() == "blocked") && x.Rule["off"]?.GetValue<bool>() != true);
         return new JsonObject { ["t"] = "autotest", ["done"] = results.Count, ["lines"] = lines, ["left"] = left };
     }
 
