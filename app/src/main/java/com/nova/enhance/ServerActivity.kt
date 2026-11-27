@@ -473,12 +473,12 @@ class ServerActivity : BaseActivity() {
         val la = liveAt
         when {
             la != null -> {   // in a live server view → up one live level, or back to the drive list at the root
-                val up = la.trimEnd('\').substringBeforeLast('\', "")
-                if (la.length <= 3 || up.length < 3) { browse("") } else live(if (up.length <= 2) "$up\" else up)
+                val up = la.trimEnd('\\').substringBeforeLast('\\', "")
+                if (la.length <= 3 || up.length < 3) { browse("") } else live(if (up.length <= 2) up + "\\" else up)
             }
             folder.isNotEmpty() -> {   // browsing the index → up one folder
-                val up = folder.trimEnd('\').substringBeforeLast('\', "")
-                browse(if (folder.length <= 3) "" else if (up.length <= 2) "$up\" else up)
+                val up = folder.trimEnd('\\').substringBeforeLast('\\', "")
+                browse(if (folder.length <= 3) "" else if (up.length <= 2) up + "\\" else up)
             }
             search.text.isNotEmpty() -> { search.setText(""); browse("") }   // a search is on → clear it first
             else -> {   // at the very top: two taps to leave
