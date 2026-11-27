@@ -484,7 +484,21 @@ class SettingsActivity : BaseActivity() {
         card.addView(Ui.text(c, "Back up everything", 15f, Ui.TEXT, true))
         card.addView(Ui.text(c, "You choose a password for the API keys. Without it, the keys can't be restored " +
             "(everything else still can).", 13f, Ui.MUTED))
+        card.addView(Ui.text(c, "Saved into Download › Nova Enhance › Backups.", 12f, Ui.MUTED), Ui.lp(top = Ui.dp(c, 6)))
         card.addView(Ui.button(c, "💾  Create backup file", true) {
+            askPassword("Password for your API keys", "At least 6 characters. Keep it safe.", confirm = true) { pw ->
+                val name = "Nova-Enhance-backup-" + SimpleDateFormat("yyyy-MM-dd-HHmm", Locale.US).format(Date()) + ".json"
+                Thread {
+                    val r = runCatching {
+                        val txt = Backup.build(this, pw)
+                        Downloads.saveBytes(this, name, txt.toByteArray(), "Backups").first
+                    }
+                    r.exceptionOrNull()?.let { ErrorLog.add(this, "Backup", message = it.toString()) }
+                    runOnUiThread { AlertDialog.Builder(this).setTitle(if (r.isSuccess) "✓ Backup saved" else "Backup failed").setMessage(r.getOrNull() ?: r.exceptionOrNull()?.message).setPositiveButton("OK", null).show() }
+                }.start()
+            }
+        }, Ui.lp(top = Ui.dp(c, 10)))
+        card.addView(Ui.button(c, "Choose a different location…") {
             askPassword("Password for your API keys", "At least 6 characters. Keep it safe.", confirm = true) { pw ->
                 pendingPassword = pw
                 val name = "Nova-Enhance-backup-" + SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date()) + ".json"
@@ -492,7 +506,7 @@ class SettingsActivity : BaseActivity() {
                     addCategory(Intent.CATEGORY_OPENABLE); type = "application/json"; putExtra(Intent.EXTRA_TITLE, name)
                 }, REQ_BACKUP)
             }
-        }, Ui.lp(top = Ui.dp(c, 10)))
+        }, Ui.lp(top = Ui.dp(c, 6)))
         root.addView(card, Ui.lp(top = Ui.dp(c, 6)))
 
         val card2 = Ui.card(c)

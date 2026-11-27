@@ -32,6 +32,8 @@ class ServerActivity : BaseActivity() {
     private lateinit var status: TextView
     private lateinit var search: EditText
     private var folder = ""          // browsing: the folder shown (empty = drives)
+    private var liveAt: String? = null   // when showing a live server folder (null = index/browse view)
+    private var lastBackAt = 0L
     private var pendingPw = ""
 
     override fun onCreate(s: Bundle?) {
@@ -193,6 +195,7 @@ class ServerActivity : BaseActivity() {
     }
 
     private fun results(q: String, rows: List<Triple<String, Long, Long>>, total: Long, ms: Long) {
+        liveAt = null
         body.removeAllViews()
         status.text = "%,d file(s) · from the index (%,d names, works offline) · server first · tap = download + open · hold = more".format(rows.size, total) + if (ms > 0) " · ${ms} ms" else ""
         val server = rows.filter { ServerAccess.isServer(this, it.first) }.groupBy { it.first.substringAfterLast('\\').lowercase() }.mapValues { e -> e.value.maxOf { it.third } }
@@ -231,18 +234,30 @@ class ServerActivity : BaseActivity() {
 
     /** Browse: drives, then folders, from the names in the index (offline); “⟳ Live” asks the server what is there now. */
     private fun browse(f: String) {
-        folder = f
+        folder = f; liveAt = null
         body.removeAllViews()
         val c = this
         if (f.isEmpty()) {
-            status.text = "Browse your project folders (from the index) — or type to search"
+            status.text = "Your project folders and the whole server — tap a server drive to browse it live"
             val tops = mutableMapOf<String, Int>()
             PcLink.Db.get(c).rawQuery("SELECT substr(p, 1, 3) FROM names", null).use { cu -> while (cu.moveToNext()) { val k = cu.getString(0); tops[k] = (tops[k] ?: 0) + 1 } }
-            for ((k, n) in tops.entries.sortedBy { if (ServerAccess.isServer(c, it.key)) 0 else 1 }) {
-                val net = ServerAccess.isServer(c, k)
+            // 🏢 every server drive your PC mapped (S:, O:, N:) is always shown, even if it was never indexed — you can navigate it live
+            for ((drive, unc) in ServerAccess.drives(c)) {
+                val k = "$drive\\"
+                val n = tops[k] ?: 0
                 body.addView(Ui.card(c).apply {
-                    addView(Ui.text(c, "${if (net) "🏢" else "💻"}  $k  ·  %,d files".format(n), 15f, Ui.TEXT, true))
-                    addView(Ui.text(c, if (net) "Server · official (MZA DC)" + (ServerAccess.drives(c)[k.take(2)]?.let { " · $it" } ?: "") else "Local copy (on your PC)", 11f, Ui.MUTED))
+                    addView(Ui.text(c, "🏢  $drive  ·  " + (if (n > 0) "%,d indexed · browse live".format(n) else "browse live (not indexed)"), 15f, Ui.TEXT, true))
+                    addView(Ui.text(c, "Server · official (MZA DC) · $unc", 11f, Ui.MUTED))
+                    setOnClickListener { if (n > 0) browse(k) else live(k) }   // not indexed → go straight to a live look
+                }, Ui.lp(top = Ui.dp(c, 6)))
+                tops.remove(k)
+            }
+            // 💻 local copies on your PC (and any other indexed roots)
+            for ((k, n) in tops.entries.sortedBy { if (ServerAccess.isServer(c, it.key)) 0 else 1 }) {
+                if (ServerAccess.isServer(c, k)) continue
+                body.addView(Ui.card(c).apply {
+                    addView(Ui.text(c, "💻  $k  ·  %,d files".format(n), 15f, Ui.TEXT, true))
+                    addView(Ui.text(c, "Local copy (on your PC)", 11f, Ui.MUTED))
                     setOnClickListener { browse(k) }
                 }, Ui.lp(top = Ui.dp(c, 6)))
             }
@@ -275,6 +290,7 @@ class ServerActivity : BaseActivity() {
     }
 
     private fun live(f: String) {
+        liveAt = f
         val pc = ServerAccess.viaPc(this)
         status.text = if (pc) "⏳ Asking your PC what is in this folder now…" else "⏳ Asking the server…"
         Thread {
@@ -285,7 +301,8 @@ class ServerActivity : BaseActivity() {
                 }
             main.post {
                 body.removeAllViews(); status.text = "⟳ Live ${if (pc) "via your PC" else "from the server"} · ${r.size} item(s) · $f"
-                body.addView(Ui.smallButton(this, "⬅ Back to the index view") { browse(f) })
+                val up = f.trimEnd('\\').substringBeforeLast('\\', "")
+                body.addView(Ui.smallButton(this, "⬆ Up") { if (f.length <= 3 || up.length < 3) browse("") else live(if (up.length <= 2) "$up\\" else up) })
                 body.addView(folderActions(f))
                 for ((n, dir) in r) body.addView(Ui.text(this, (if (dir) "📁  " else "📄  ") + n, 14f).apply {
                     setPadding(0, Ui.dp(this@ServerActivity, 8), 0, Ui.dp(this@ServerActivity, 8))
@@ -330,7 +347,7 @@ class ServerActivity : BaseActivity() {
                     mode == "phone" -> throw Exception("Connect the office VPN first (🔑 Connect) to open server files — you're in 📱 Phone-only mode")
                     else -> ServerAccess.viaPcFetch(c, p, false) { s -> main.post { status.text = s } }
                 }
-                val (where, u) = ServerAccess.toDownloads(c, f)
+                val (where, u) = Downloads.save(c, f, Downloads.serverSub(p))
                 ServerAccess.rememberDownload(c, p, m, b, u)
                 ServerAccess.log(c, p, "downloaded + opened")
                 Triple(f, u, where)
@@ -429,7 +446,7 @@ class ServerActivity : BaseActivity() {
                             try {
                                 val z = if (pc) ServerAccess.viaPcFetch(c, f, true) { s -> main.post { status.text = s; d.setMessage(s) } }
                                         else ServerAccess.zipFolder(c, f, { s -> main.post { status.text = s; d.setMessage(s) } }) { zipStop }
-                                val (where, u) = ServerAccess.toDownloads(c, z)
+                                val (where, u) = Downloads.save(c, z, Downloads.serverSub(f.trimEnd('\\') + "\\x"))
                                 main.post {
                                     d.dismiss()
                                     if (shareIt) { ServerAccess.log(c, f, "shared as zip"); share(z, u) }
@@ -448,6 +465,28 @@ class ServerActivity : BaseActivity() {
                 }
             } catch (e: Exception) { main.post { status.text = ServerAccess.friendly(e) } }
         }.start()
+    }
+
+    /** Back stays inside the explorer: go up one folder; only a second Back at the very top leaves. */
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        val la = liveAt
+        when {
+            la != null -> {   // in a live server view → up one live level, or back to the drive list at the root
+                val up = la.trimEnd('\').substringBeforeLast('\', "")
+                if (la.length <= 3 || up.length < 3) { browse("") } else live(if (up.length <= 2) "$up\" else up)
+            }
+            folder.isNotEmpty() -> {   // browsing the index → up one folder
+                val up = folder.trimEnd('\').substringBeforeLast('\', "")
+                browse(if (folder.length <= 3) "" else if (up.length <= 2) "$up\" else up)
+            }
+            search.text.isNotEmpty() -> { search.setText(""); browse("") }   // a search is on → clear it first
+            else -> {   // at the very top: two taps to leave
+                if (System.currentTimeMillis() - lastBackAt < 2000) { super.onBackPressed(); return }
+                lastBackAt = System.currentTimeMillis()
+                Ui.toast(this, "Press back again to leave the server explorer")
+            }
+        }
     }
 
     private fun opened() {

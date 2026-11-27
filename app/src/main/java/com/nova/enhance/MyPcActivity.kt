@@ -920,7 +920,7 @@ class MyPcActivity : BaseActivity() {
         br.addView(Ui.chip(c, "⬇ Excel · share", true) { work({ PhoneLog.excel(applicationContext, r) }) { f ->
             startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType(mimeOf(f)).putExtra(Intent.EXTRA_STREAM, uriOf(f)).putExtra(Intent.EXTRA_SUBJECT, f.nameWithoutExtension).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), "↗ Share the log"))
         } }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT, end = Ui.dp(c, 6)))
-        br.addView(Ui.chip(c, "💾 Save", false) { work({ saveToDownloads(PhoneLog.excel(applicationContext, r)) }) { where -> status.text = "✓ Saved: $where"; Ui.toast(c, "Saved: $where") } }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT))
+        br.addView(Ui.chip(c, "💾 Save", false) { work({ saveToDownloads(PhoneLog.excel(applicationContext, r), "Submittal log") }) { where -> status.text = "✓ Saved: $where"; Ui.toast(c, "Saved: $where") } }, Ui.lp(LinearLayout.LayoutParams.WRAP_CONTENT))
         body.addView(br, Ui.lp(top = Ui.dp(c, 6)))
         val list = r.items.filter { i -> when (logShow) { "" -> true; "check" -> i.check.isNotEmpty(); "Open" -> i.status in setOf("Open", "Reviewing", "Replied", "Draft"); "Closed" -> i.status == "Closed" || i.status == "Received"; else -> i.status == logShow } }
         if (list.isEmpty()) body.addView(Ui.text(c, "Nothing found for these choices.", 13f, Ui.MUTED), Ui.lp(top = Ui.dp(c, 10)))
@@ -1334,7 +1334,7 @@ class MyPcActivity : BaseActivity() {
                     startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType(mimeOf(f)).putExtra(Intent.EXTRA_STREAM, uriOf(f)).putExtra(Intent.EXTRA_SUBJECT, h.subject)
                         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), "↗ Share “${f.name}”"))
                 }
-                "💾" -> work({ mailFile(h).let { (f, how) -> saveToDownloads(f) to how } }) { (where, how) -> status.text = "✓ Saved: $where · $how"; Ui.toast(c, "Saved: $where") }
+                "💾" -> work({ mailFile(h).let { (f, how) -> saveToDownloads(f, if (f.extension.equals("msg", true) || f.extension.equals("eml", true)) "Emails" else "Emails") to how } }) { (where, how) -> status.text = "✓ Saved: $where · $how"; Ui.toast(c, "Saved: $where") }
                 "📎" -> work({ attNames(h).mapNotNull { nm -> try { attFile(h, nm) } catch (_: Exception) { null } } }) { files ->
                     if (files.isEmpty()) { status.text = "⚠ The attachments are not in Google Drive and your PC can't be reached"; return@work }
                     status.text = "✓ ${files.size} attachment(s)"
@@ -1356,20 +1356,7 @@ class MyPcActivity : BaseActivity() {
     }
 
     /** Download › Nova Enhance › name (Android 10+); older phones: the app's own Download folder. Returns where it is. */
-    private fun saveToDownloads(f: File): String {
-        if (android.os.Build.VERSION.SDK_INT >= 29) {
-            val v = android.content.ContentValues().apply {
-                put(android.provider.MediaStore.Downloads.DISPLAY_NAME, f.name); put(android.provider.MediaStore.Downloads.MIME_TYPE, mimeOf(f))
-                put(android.provider.MediaStore.Downloads.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS + "/Nova Enhance")
-            }
-            val u = contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, v) ?: throw Exception("the phone refused to save the file")
-            contentResolver.openOutputStream(u)?.use { o -> f.inputStream().use { it.copyTo(o) } } ?: throw Exception("the phone refused to save the file")
-            return "Download › Nova Enhance › ${f.name}"
-        }
-        val dir = File(getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS), "Nova Enhance").apply { mkdirs() }
-        f.copyTo(File(dir, f.name), true)
-        return "Android › data › Nova Enhance › Download › ${f.name}"
-    }
+    private fun saveToDownloads(f: File, sub: String = "") = Downloads.save(this, f, sub).first
 
     /** 📄 The email as Outlook shows it (fonts, tables, logos, pictures), shown inside Nova. Kept on the phone after the first time. */
     private fun formatted(h: PcLink.Hit) {

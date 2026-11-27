@@ -101,13 +101,13 @@ class HistoryActivity : BaseActivity() {
         }
     }
 
-    /** Save the whole project as a Markdown file — pick Google Drive, Downloads or any folder. */
+    /** Save the whole project as a Markdown file into Download › Nova Enhance › History. */
     private fun export() {
-        val name = "Nova-Enhance-Enhancement-" + SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date()) + ".md"
-        startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE); type = "text/markdown"
-            putExtra(Intent.EXTRA_TITLE, name)
-        }, EXPORT)
+        val name = "Nova-Enhance-Enhancement-" + SimpleDateFormat("yyyy-MM-dd-HHmm", Locale.US).format(Date()) + ".md"
+        Thread {
+            val r = runCatching { Downloads.saveBytes(this, name, db.exportMarkdown().toByteArray(), "History").first }
+            runOnUiThread { Ui.toast(this, if (r.isSuccess) "✓ Saved · ${r.getOrNull()}" else "Export failed: ${r.exceptionOrNull()?.message}") }
+        }.start()
     }
 
     @Deprecated("Deprecated in Java")
