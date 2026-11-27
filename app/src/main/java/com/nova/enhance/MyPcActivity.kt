@@ -306,10 +306,10 @@ class MyPcActivity : BaseActivity() {
                     mb(size)) { runFind("", "emails") }
                 card("📁 Projects", projs?.let { a -> (0 until a.length()).joinToString(" · ") { a.getJSONObject(it).optString("code") } } ?: "") { }
                 card("📂 Project files", "%,d files · names and text inside".format(f)) { runFind("", "files") }
-                card("🏢 Server explorer", "every project file name · open, download or share server files (read-only) through Nova's own VPN · works without the PC") { startActivity(Intent(this@MyPcActivity, ServerActivity::class.java)) }
+                card("🏢 Server explorer", "every project file name · open, download or share server files (read-only) through the phone's own VPN, or your PC when chosen · works without the PC") { startActivity(Intent(this@MyPcActivity, ServerActivity::class.java)) }
                 card("⭐ Starred", "$stars file(s) on the phone · open offline") { show("starred") }
                 card("🧭 Ask Nova (agent)", "type freely — your PC checks the Brain, the log, emails and threads · you confirm examples here") { show("agent") }
-                card("🧠 Same brain as your PC", if (PcLink.brainNote(c).isBlank()) "not received yet" else "every rule, with 🧪 tested ✓ — tap to read") { brainView() }
+                card("🧠 Same brain as your PC", if (!PcLink.hasBrain(c)) "not received yet" else "received ✓ — every rule, with 🧪 tested · tap to read") { brainView() }
                 card("🔐 Nova PIN code", "forgot the PIN on your laptop? the one-time recovery code shows here") { adminCode() }
                 card("⚙ Phone link", "update every ${getSharedPreferences("nova_pc", MODE_PRIVATE).getInt("every_min", 15)} min · unpair") { show("settings") }
             }

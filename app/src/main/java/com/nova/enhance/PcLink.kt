@@ -493,6 +493,12 @@ object PcLink {
 
     // ------------------------------------------------------------------ 🧠 the same brain as the PC (for every correction)
 
+    /** The brain file is here with rules (not only vocabulary) — the My PC card uses this, so it doesn't say "not received" while the Brain dialog has every rule. */
+    fun hasBrain(c: Context): Boolean {
+        val b = brain(c) ?: return false
+        return b.optJSONArray("rules")?.length() ?: 0 > 0 || b.optJSONObject("sections") != null || b.keys().asSequence().any { it !in setOf("terms", "myWords") }
+    }
+
     private var brainCache: Pair<Long, JSONObject?>? = null
     private fun brain(c: Context): JSONObject? {
         val f = File(dir(c), "brain.json")

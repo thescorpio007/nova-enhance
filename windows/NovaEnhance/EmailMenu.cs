@@ -26,7 +26,7 @@ static class EmailMenu
         rel.DropDownItems.Add("🔗 In Nova — timeline (all revisions)", null, (_, _) => Related.Find(h, false));
         rel.DropDownItems.Add("🔎 In Outlook — search results", null, (_, _) => Related.Find(h, true));
         m.Items.Add(rel);
-        if (!string.IsNullOrEmpty(h.Conv)) Add("🧵 Show the whole thread", () => Screens.AskFor($"the whole thread of “{Outstanding.NormSubject(h.Subject ?? "")}”"));
+        if (!string.IsNullOrEmpty(h.Conv)) Add("🧵 Show the whole thread", () => Related.Thread(h));
         Sep();
         Add("✦ Summary", () => { if (summary != null) summary(h); else MailWindow.Open(h, "summary"); });
         Add(h.Sent ? "✦ Draft follow-up" : "✦ Draft reply", () => { if (draft != null) draft(h); else DraftTo(h, false, form); });

@@ -40,6 +40,16 @@ static class Related
         return "";
     }
 
+    /// <summary>🧵 The whole thread: by the document number when there is one, else by the subject words — never as one quoted exact phrase (that matched nothing).</summary>
+    public static void Thread(MailHit h)
+    {
+        var doc = BaseOf(h);
+        if (doc.Length > 0) { Screens.AskFor(doc); return; }
+        // the subject without Re:/Fw: and without quotes, so each word is matched (not one mandatory phrase)
+        var words = Outstanding.NormSubject(h.Subject ?? "").Trim();
+        Screens.AskFor(words.Length > 0 ? words : (h.Subject ?? ""));
+    }
+
     static string Clean(string subj) => Regex.Replace(Strip.Replace(subj ?? "", ""), @"\s+", " ").Trim();
 
     /// <summary>✦ Nova tab / Outlook right-click: the email open or selected in Outlook.</summary>
@@ -62,7 +72,7 @@ static class Related
             var subj = Clean(h?.Subject);
             if (subj.Length == 0) { MessageBox.Show("This email has no document number or subject to search for.", "Nova Enhance"); return; }
             if (inOutlook) InOutlook(subj);
-            else { Program.Balloon("🔗 Find related", "No document number in this email — showing its thread instead."); Screens.AskFor($"the whole thread of “{Outstanding.NormSubject(h.Subject ?? "")}”"); }
+            else { Program.Balloon("🔗 Find related", "No document number in this email — showing its thread instead."); Thread(h); }
             return;
         }
         if (inOutlook) InOutlook(b); else Screens.Timeline(b, Clean(h?.Subject));

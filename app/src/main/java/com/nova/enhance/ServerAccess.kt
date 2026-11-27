@@ -53,7 +53,13 @@ object ServerAccess {
     fun smbOk(c: Context) = sp(c).getBoolean("smb_ok", false)
     fun setSmbOk(c: Context, v: Boolean) = sp(c).edit().putBoolean("smb_ok", v).apply()
     /** The phone reads the server itself only when its VPN is up AND its own login worked; otherwise your PC fetches. */
-    fun viaPc(c: Context) = !(FortiVpn.up && smbOk(c))
+    /** How server files are opened: "phone" = the phone only (default, never the PC), "phonefirst" = phone, PC as backup, "pc" = always the PC. */
+    fun serverMode(c: Context) = sp(c).getString("server_mode", "phone") ?: "phone"
+    fun setServerMode(c: Context, v: String) = sp(c).edit().putString("server_mode", v).apply()
+    /** The phone can try its own server login now: VPN up and a password is saved. */
+    fun canDirect(c: Context) = FortiVpn.up && (hasSecret(c, "smb") || hasSecret(c, "vpn"))
+    /** True = use the PC for this action (live list / folder zip): always in "pc" mode, or in "phonefirst" when the phone can't go direct. */
+    fun viaPc(c: Context) = serverMode(c) == "pc" || (serverMode(c) == "phonefirst" && !canDirect(c))
 
     fun isLoginError(e: Throwable) = (e.message ?: "").contains("LOGON_FAILURE") || (e.message ?: "").contains("0xc000006d", true)
     fun friendly(e: Throwable): String {
@@ -192,7 +198,7 @@ object ServerAccess {
     /** Your PC reads the server file (or zips the folder), read-only, and sends it here encrypted (Google Drive, or in the answer when small). */
     fun viaPcFetch(c: Context, path: String, zip: Boolean, progress: (String) -> Unit): File {
         if (isPrivate(path)) throw Exception("🔒 private — not opened")
-        if (FortiVpn.up) { progress("📱 → 💻 giving the office VPN back to your PC…"); FortiVpn.stop(c); Thread.sleep(3000) }
+        if (FortiVpn.up && serverMode(c) != "phone") { progress("📱 → 💻 giving the office VPN back to your PC…"); FortiVpn.stop(c); Thread.sleep(3000) }
         progress("⏳ Asking your PC to read it from the server…")
         val o = PcLink.ask(c, "serverfile", JSONObject().put("path", path).put("zip", zip)) { progress(it) }
         val name = o.optString("name").ifEmpty { path.trimEnd('\\').substringAfterLast('\\') }.replace(Regex("[\\\\/:*?\"<>|]"), "_")
@@ -218,14 +224,14 @@ object ServerAccess {
 
     /** What a server folder holds, counted by your PC. */
     fun viaPcInfo(c: Context, path: String): Measure {
-        if (FortiVpn.up) { FortiVpn.stop(c); Thread.sleep(3000) }
+        if (FortiVpn.up && serverMode(c) != "phone") { FortiVpn.stop(c); Thread.sleep(3000) }
         val o = PcLink.ask(c, "serverfile", JSONObject().put("path", path).put("info", true))
         return Measure(o.optInt("files"), o.optLong("bytes"))
     }
 
     /** A live look at a server folder through your PC. */
     fun viaPcList(c: Context, path: String): List<Pair<String, Boolean>> {
-        if (FortiVpn.up) { FortiVpn.stop(c); Thread.sleep(3000) }
+        if (FortiVpn.up && serverMode(c) != "phone") { FortiVpn.stop(c); Thread.sleep(3000) }
         val a = PcLink.ask(c, "serverfile", JSONObject().put("path", path).put("list", true)).optJSONArray("items") ?: JSONArray()
         return (0 until a.length()).map { a.getJSONObject(it).let { o -> o.optString("n") to o.optBoolean("d") } }.filterNot { isPrivate(it.first) }
     }

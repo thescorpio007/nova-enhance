@@ -105,30 +105,51 @@ class ServerActivity : BaseActivity() {
         col.addView(Ui.text(c, "Firewall: ${host.ifEmpty { "— (update the phone copy from your PC)" }}\nServer: " +
             ServerAccess.drives(c).entries.joinToString(" · ") { "${it.key} → ${it.value}" }.ifEmpty { "— (your PC sends it with the next update)" } +
             "\nCertificate: " + (if (ServerAccess.pin(c).isNotEmpty()) "fingerprint from your PC ✓" else "not received yet") +
-            "\nServer files: " + (if (ServerAccess.smbOk(c)) "the phone opens them itself ✓ (VPN on)" else "through your PC 💻 (always works while the PC is on)"), 12f, Ui.MUTED))
-        fun field(hint: String, v: String, pw: Boolean) = EditText(c).apply {
-            this.hint = hint; setText(v); setTextColor(Ui.TEXT); setHintTextColor(Ui.MUTED)
-            if (pw) inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            "\nServer files: " + when (ServerAccess.serverMode(c)) { "pc" -> "always through your PC 💻"; "phonefirst" -> "📱 phone first, 💻 PC as backup"; else -> "📱 phone only — its own VPN, never the PC" } + (if (ServerAccess.smbOk(c)) " · signed in ✓" else ""), 12f, Ui.MUTED))
+        fun field(hint: String, v: String, pw: Boolean): EditText {
+            val e = EditText(c).apply {
+                this.hint = hint; setText(v); setTextColor(Ui.TEXT); setHintTextColor(Ui.MUTED)
+                if (pw) inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            }
+            if (!pw) { col.addView(e); return e }
+            // 👁 a password box with a show/hide eye, so a mistyped password can be checked before saving
+            val row = Ui.row(c)
+            row.addView(e, LinearLayout.LayoutParams(0, -2, 1f))
+            row.addView(Ui.smallButton(c, "👁") {
+                val hidden = e.inputType and InputType.TYPE_TEXT_VARIATION_PASSWORD != 0
+                e.inputType = InputType.TYPE_CLASS_TEXT or (if (hidden) InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD else InputType.TYPE_TEXT_VARIATION_PASSWORD)
+                e.setSelection(e.text.length)
+            })
+            col.addView(row)
+            return e
         }
         fun label(s: String) = col.addView(Ui.text(c, s, 11f, Ui.MUTED).apply { setPadding(0, Ui.dp(c, 6), 0, 0) })
         label("1 · VPN username")
-        val vu = field("VPN username", ServerAccess.vpnUser(c), false); col.addView(vu)
+        val vu = field("VPN username", ServerAccess.vpnUser(c), false)
         label("2 · VPN password" + if (ServerAccess.hasSecret(c, "vpn")) "  (saved ✓ — leave empty to keep)" else "")
-        val vp = field(if (ServerAccess.hasSecret(c, "vpn")) "saved ✓ — leave empty to keep" else "VPN password", "", true); col.addView(vp)
+        val vp = field(if (ServerAccess.hasSecret(c, "vpn")) "saved ✓ — leave empty to keep" else "VPN password", "", true)
         label("3 · Server login (empty = the VPN username)")
-        val su = field("e.g. ahamrouni", c.getSharedPreferences("nova_server", MODE_PRIVATE).getString("smb_user", "") ?: "", false); col.addView(su)
+        val su = field("e.g. ahamrouni", c.getSharedPreferences("nova_server", MODE_PRIVATE).getString("smb_user", "") ?: "", false)
         label("4 · Domain (e.g. MZA or mza.local)")
-        val sd = field("Domain", ServerAccess.smbDomain(c), false); col.addView(sd)
+        val sd = field("Domain", ServerAccess.smbDomain(c), false)
         label("5 · Server password" + if (ServerAccess.hasSecret(c, "smb")) "  (saved ✓ — leave empty to keep)" else "  (empty = the VPN password)")
-        val spw = field(if (ServerAccess.hasSecret(c, "smb")) "saved ✓ — leave empty to keep" else "Server password", "", true); col.addView(spw)
+        val spw = field(if (ServerAccess.hasSecret(c, "smb")) "saved ✓ — leave empty to keep" else "Server password", "", true)
         val clear = android.widget.CheckBox(c).apply { text = "Forget the saved server password"; setTextColor(Ui.MUTED); visibility = if (ServerAccess.hasSecret(c, "smb")) android.view.View.VISIBLE else android.view.View.GONE }
         col.addView(clear)
+        // Server files: how they open (📱 the phone's own VPN, never handing it to the PC, is the default)
+        label("Server files open through")
+        val modes = listOf("phone" to "📱 Phone only (its own VPN — never uses the PC)", "phonefirst" to "📱 Phone first, 💻 PC as backup", "pc" to "💻 Always through the PC")
+        val cur = ServerAccess.serverMode(c)
+        val group = android.widget.RadioGroup(c)
+        modes.forEach { (id, lbl) -> group.addView(android.widget.RadioButton(c).apply { text = lbl; setTextColor(Ui.TEXT); this.id = modes.indexOfFirst { it.first == id }; isChecked = id == cur }) }
+        col.addView(group)
         col.addView(Ui.text(c, "🔐 Passwords stay in this phone's secure hardware store (Android Keystore) — never synced, never backed up, never sent to the PC or the AI.", 11f, Ui.MUTED))
         fun save() {
             ServerAccess.saveLogin(c, vu.text.toString().trim(), su.text.toString().trim(), sd.text.toString().trim())
             if (vp.text.isNotEmpty()) ServerAccess.setSecret(c, "vpn", vp.text.toString())
             if (clear.isChecked) ServerAccess.clearSecret(c, "smb")
             if (spw.text.isNotEmpty()) ServerAccess.setSecret(c, "smb", spw.text.toString())
+            modes.getOrNull(group.checkedRadioButtonId)?.let { ServerAccess.setServerMode(c, it.first) }
             ServerAccess.setSmbOk(c, false)   // a changed login is tested again
         }
         AlertDialog.Builder(c).setTitle("⚙ Server access").setView(ScrollView(c).apply { addView(col) })
@@ -288,18 +309,25 @@ class ServerActivity : BaseActivity() {
         ServerAccess.downloaded(c, p, m, b)?.let { status.text = "✓ Already downloaded · opening"; then(null, it); return }
         if (ServerAccess.isPrivate(p)) { status.text = "🔒 private — not opened"; return }
         status.text = "⏳ Getting ${p.substringAfterLast('\\')}…"
+        val mode = ServerAccess.serverMode(c)
         Thread {
             val r = runCatching {
                 val f: File = when {
+                    // 💻 local copies (on your PC) are never on the server: Google Drive first, then the PC
                     !net && GDrive.canOpen(c, p) -> GDrive.fetchWork(c, p) { s -> main.post { status.text = s } }
                     !net -> pcFetch(p)
-                    !ServerAccess.viaPc(c) -> try { ServerAccess.download(c, p) { s -> main.post { status.text = s } } }
-                        catch (e: Exception) {
+                    // 🏢 server files
+                    mode == "pc" -> ServerAccess.viaPcFetch(c, p, false) { s -> main.post { status.text = s } }
+                    ServerAccess.canDirect(c) -> try {
+                            ServerAccess.download(c, p) { s -> main.post { status.text = s } }   // 📱 the phone opens it itself
+                        } catch (e: Exception) {
                             if (!ServerAccess.isLoginError(e)) throw e
                             ServerAccess.setSmbOk(c, false)
-                            main.post { status.text = "🔐 The server refused the phone's login — asking your PC instead…" }
-                            ServerAccess.viaPcFetch(c, p, false) { s -> main.post { status.text = s } }
+                            if (mode == "phonefirst") { main.post { status.text = "🔐 The server refused the phone's login — asking your PC instead…" }; ServerAccess.viaPcFetch(c, p, false) { s -> main.post { status.text = s } } }
+                            else throw Exception("🔐 The server refused the phone's login — open ⚙ Setup → check Box 5 and tap 🔐 Test login (or switch Server files to “Phone first, PC backup”)")
                         }
+                    // 📱 phone-only, VPN not up yet
+                    mode == "phone" -> throw Exception("Connect the office VPN first (🔑 Connect) to open server files — you're in 📱 Phone-only mode")
                     else -> ServerAccess.viaPcFetch(c, p, false) { s -> main.post { status.text = s } }
                 }
                 val (where, u) = ServerAccess.toDownloads(c, f)
