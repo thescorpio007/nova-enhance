@@ -32,8 +32,9 @@ object Lights {
         init { setBounds(0, 0, px, px) }
         override fun draw(cv: Canvas) {
             val b = bounds; val w = b.width().toFloat(); val cx = b.exactCenterX(); val cy = b.exactCenterY()
-            var (hi, mid, lo) = colours(k).let { Triple(it[0], it[1], it[2]) }
-            if (k == Kind.YELLOW) { val f = 0.72f + 0.28f * pulse(); fun m(c: Int) = Color.rgb((Color.red(c) * f).toInt(), (Color.green(c) * f).toInt(), (Color.blue(c) * f).toInt()); hi = m(hi); mid = m(mid); lo = m(lo) }
+            val col = colours(k)
+            val f = if (k == Kind.YELLOW) 0.72f + 0.28f * pulse() else 1f
+            val hi = dim(col[0], f); val mid = dim(col[1], f); val lo = dim(col[2], f)
             val ring = maxOf(1f, w / 14f)
             p.shader = null; p.style = Paint.Style.STROKE; p.strokeWidth = ring; p.color = Color.argb(70, 255, 255, 255)
             cv.drawCircle(cx, cy, w / 2 - ring / 2, p)
@@ -50,6 +51,7 @@ object Lights {
             val rb = r * 0.84f
             cv.drawArc(cx - rb, cy - rb, cx + rb, cy + rb, 20f, 140f, false, p)
         }
+        private fun dim(c: Int, f: Float) = if (f >= 1f) c else Color.rgb((Color.red(c) * f).toInt(), (Color.green(c) * f).toInt(), (Color.blue(c) * f).toInt())
         override fun setAlpha(alpha: Int) {}
         override fun setColorFilter(cf: ColorFilter?) {}
         @Deprecated("Deprecated in Java") override fun getOpacity() = PixelFormat.TRANSLUCENT

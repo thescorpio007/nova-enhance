@@ -570,7 +570,7 @@ class Dot : Control
         else if (color == Th.Warn) Lights.Draw(e.Graphics, r, Lights.Kind.Orange, false);
         else Lights.Draw(e.Graphics, r, color);
     }
-}}
+}
 
 /// <summary>Ctrl+Shift+F: ask about your email in your own words.</summary>
 class AskForm : NovaForm
