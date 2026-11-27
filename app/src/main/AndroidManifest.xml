@@ -126,6 +126,11 @@
                 <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
             </intent-filter>
         </activity>
+        <activity android:name=".ServerActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
+        <!-- 🖧 Nova's own office VPN (Fortinet SSL VPN) — for Nova only -->
+        <service android:name=".FortiVpn" android:exported="false" android:permission="android.permission.BIND_VPN_SERVICE">
+            <intent-filter><action android:name="android.net.VpnService" /></intent-filter>
+        </service>
         <activity android:name=".QrScanActivity" android:exported="false" android:screenOrientation="portrait" />
         <provider android:name=".PcFiles" android:authorities="com.nova.enhance.pcfiles" android:exported="false" android:grantUriPermissions="true" />
         <service android:name=".PcSyncJob" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />

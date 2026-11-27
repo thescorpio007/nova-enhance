@@ -58,7 +58,7 @@ android {
     kotlinOptions { jvmTarget = "17" }
 
     packaging {
-        resources { excludes += setOf("META-INF/DEPENDENCIES", "META-INF/LICENSE", "META-INF/LICENSE.txt", "META-INF/NOTICE", "META-INF/NOTICE.txt", "META-INF/*.kotlin_module") }
+        resources { excludes += setOf("META-INF/DEPENDENCIES", "META-INF/LICENSE", "META-INF/LICENSE.txt", "META-INF/NOTICE", "META-INF/NOTICE.txt", "META-INF/*.kotlin_module", "META-INF/versions/**", "META-INF/LICENSE.md", "META-INF/NOTICE.md", "META-INF/BCKEY.*", "META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA") }
     }
 
     lint {
@@ -79,4 +79,7 @@ dependencies {
     implementation("com.google.zxing:core:3.5.3")   // 📷 reading the pairing QR code (Apache 2.0)
     // 📄 Word 97–2003 (.doc) on the phone: read and edit its text (Apache POI · Apache 2.0). 3.17 runs on Android without java.awt.
     implementation("org.apache.poi:poi-scratchpad:3.17")
+    // 🖧 reading office server files (Windows file sharing, read-only) — SMBJ · Apache 2.0, with Bouncy Castle for its sign-in
+    implementation("com.hierynomus:smbj:0.13.0")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
 }

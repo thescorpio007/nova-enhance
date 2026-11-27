@@ -132,6 +132,8 @@ static class OfficeVpn
         return (reason, ip, route, dtls, ends, fw);
     }
 
+    /// <summary>📱 While the phone uses the office VPN (one session per account), the PC does not reconnect until this time.</summary>
+    public static DateTime HoldUntil = DateTime.MinValue;
     public static volatile State Now = State.Off;
     public static DateTime Since = DateTime.Now;
     public static int DropsToday; static DateTime dropDay = DateTime.Today;
@@ -723,7 +725,7 @@ static class OfficeVpn
                 else if (up) Set(State.UpNoServer, $"🟡 Connected, but the office server ({Probe}) does not answer");
                 else if (trying == 0 && (Now != State.Connecting || DateTime.Now - lastTry > TimeSpan.FromSeconds(45))) Set(State.Down, Want ? "🔴 Not connected — " + (Auto ? "reconnecting…" : "click to connect") : "🔴 Not connected — click the 🌐 icon to connect");
                 // the connection is tried in the background: the watch goes on, so 🟢 shows as soon as the VPN is up
-                if (!up && Want && (Auto || tries == 0) && DateTime.Now - lastTry > Backoff() && Interlocked.CompareExchange(ref trying, 1, 0) == 0)
+                if (!up && Want && DateTime.Now >= HoldUntil && (Auto || tries == 0) && DateTime.Now - lastTry > Backoff() && Interlocked.CompareExchange(ref trying, 1, 0) == 0)
                 {
                     lastTry = DateTime.Now;
                     _ = Task.Run(() => { try { TryConnect(); } catch (Exception e) { Log.Warn("office vpn", e.Message); } finally { Interlocked.Exchange(ref trying, 0); lastTry = DateTime.Now; wake.Set(); } });

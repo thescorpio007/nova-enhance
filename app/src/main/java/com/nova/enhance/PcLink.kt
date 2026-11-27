@@ -168,7 +168,7 @@ object PcLink {
         fun get(c: Context): SQLiteDatabase = synchronized(this) { (helper ?: Helper(c.applicationContext).also { helper = it }).writableDatabase }
         fun close() = synchronized(this) { try { helper?.close() } catch (_: Exception) { }; helper = null }
 
-        class Helper(c: Context) : SQLiteOpenHelper(c, "mypc.db", null, 1) {
+        class Helper(c: Context) : SQLiteOpenHelper(c, "mypc.db", null, 2) {
             // Many readers at once (search, deep search, opening an email) while the update writes: nobody waits for anybody.
             init { setWriteAheadLoggingEnabled(true) }
             override fun onCreate(db: SQLiteDatabase) {
@@ -177,12 +177,17 @@ object PcLink {
                 db.execSQL("CREATE TABLE files(id INTEGER PRIMARY KEY, path TEXT, size INTEGER, m INTEGER, k TEXT, t TEXT)")
                 fts(db, "mail_fts", "sub, b, fn, too, cc, an, at", "mail")
                 fts(db, "files_fts", "path, t", "files")
+                names(db)
+            }
+            /** 🖧 every file NAME of the projects (server + local), for the server explorer */
+            private fun names(db: SQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS names(p TEXT PRIMARY KEY, b INTEGER, m INTEGER)")
             }
             private fun fts(db: SQLiteDatabase, name: String, cols: String, content: String) {
                 try { db.execSQL("CREATE VIRTUAL TABLE $name USING fts4($cols, content=\"$content\", tokenize=unicode61)") }
                 catch (_: Exception) { db.execSQL("CREATE VIRTUAL TABLE $name USING fts4($cols, content=\"$content\")") }
             }
-            override fun onUpgrade(db: SQLiteDatabase, o: Int, n: Int) {}
+            override fun onUpgrade(db: SQLiteDatabase, o: Int, n: Int) { if (o < 2) names(db) }
         }
     }
 
@@ -236,6 +241,7 @@ object PcLink {
                 val db = Db.get(c)
                 db.execSQL("DELETE FROM mail"); db.execSQL("INSERT INTO mail_fts(mail_fts) VALUES('rebuild')")
                 db.execSQL("DELETE FROM files"); db.execSQL("INSERT INTO files_fts(files_fts) VALUES('rebuild')")
+                try { db.execSQL("DELETE FROM names") } catch (_: Exception) { }
                 got.keys().asSequence().toList().forEach { got.remove(it) }
             }
             val files = man.optJSONArray("files") ?: JSONArray()
@@ -303,6 +309,10 @@ object PcLink {
                 val v = ContentValues().apply { put("id", id); put("path", o.optString("path")); put("size", o.optLong("size")); put("m", o.optLong("m")); put("k", o.optString("k")); put("t", o.optString("t")) }
                 db.insertWithOnConflict("files", null, v, SQLiteDatabase.CONFLICT_REPLACE)
                 db.execSQL("INSERT INTO files_fts(docid, path, t) SELECT id, path, t FROM files WHERE id=$id")
+            }
+            name.startsWith("names/") -> importLines(c, box) { db, o ->
+                val v = ContentValues().apply { put("p", o.optString("p")); put("b", o.optLong("b")); put("m", o.optLong("m")) }
+                db.insertWithOnConflict("names", null, v, SQLiteDatabase.CONFLICT_REPLACE)
             }
             name == "projects.nes" -> {
                 val o = JSONObject(text(c, box))

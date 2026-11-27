@@ -151,7 +151,7 @@ static class PhoneLink
 
     class State
     {
-        public long LastMail, LastFile; public string ProjHash = "", BrainHash = "";
+        public long LastMail, LastFile, LastName; public string ProjHash = "", BrainHash = "";
         public DateTime FullAt = DateTime.MinValue, LastRun = DateTime.MinValue;
         public List<string> Deltas = new();
         public Dictionary<string, long> Sizes = new();
@@ -228,7 +228,7 @@ static class PhoneLink
         if (Send("email")) added += Emails(s, full, stamp);
         act.Mark("emails", $"{added:N0} rows");
         if (Send("brief")) { ProjectMap(s); Brief(s); }
-        if (Send("files")) Files(s, full, stamp);
+        if (Send("files")) { Files(s, full, stamp); Names(s, full, stamp); }
         if (Send("brain")) Brain(s);
         if (Send("star")) Starred(s);
         s.FullAt = full ? DateTime.Now : s.FullAt;
@@ -360,6 +360,68 @@ static class PhoneLink
             ["handled"] = Outstanding.HandledToday()
         };
         s.Sizes["brief"] = Write("brief.nes", o.ToJsonString());
+    }
+
+    // ------------------------------------------------------------------ 🖧 every file NAME of the projects (server + local), for the phone's explorer
+
+    static void Names(State s, bool full, string stamp)
+    {
+        long max = full ? 0 : s.LastName, n = 0, bytes = 0;
+        try
+        {
+            using var c = FolderIndex.Open();
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "SELECT rowid, path, size, mtime FROM pnames WHERE rowid > $m ORDER BY rowid";
+            cmd.Parameters.AddWithValue("$m", full ? 0 : s.LastName);
+            using var r = cmd.ExecuteReader();
+            var sb = new StringBuilder(); int inChunk = 0, chunk = 0;
+            void Flush()
+            {
+                if (inChunk == 0) return;
+                var name = full ? $"names/full-{++chunk:0000}.nes" : $"names/delta-{stamp}.nes";
+                bytes += Write(name, sb.ToString());
+                if (!full) s.Deltas.Add(name);
+                sb.Clear(); inChunk = 0;
+            }
+            while (r.Read())
+            {
+                var id = r.GetInt64(0); max = Math.Max(max, id);
+                var path = r.IsDBNull(1) ? "" : r.GetString(1);
+                if (path.Length == 0 || Private(path)) continue;
+                var ticks = r.IsDBNull(3) ? 0 : r.GetInt64(3);
+                sb.Append(new JsonObject { ["p"] = path, ["b"] = r.IsDBNull(2) ? 0 : r.GetInt64(2), ["m"] = ticks > 0 ? new DateTimeOffset(new DateTime(ticks)).ToUnixTimeMilliseconds() : 0 }.ToJsonString()).Append('\n');
+                n++;
+                if (++inChunk >= (full ? 20000 : 200000)) Flush();
+            }
+            Flush();
+        }
+        catch (Exception e) { Log.Warn("phone link", "names: " + e.Message); }
+        s.LastName = max;
+        s.Sizes["names"] = full ? bytes : s.Sizes.GetValueOrDefault("names") + bytes;
+        s.Counts["names"] = full ? n : s.Counts.GetValueOrDefault("names") + n;
+    }
+
+    [System.Runtime.InteropServices.DllImport("mpr.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    static extern int WNetGetConnection(string local, StringBuilder remote, ref int length);
+
+    /// <summary>🖧 For the phone's own server access: the network address behind each mapped drive (S: → \\192.168.1.12\Projects) and
+    /// the VPN gateway, user and the firewall's certificate fingerprint. NEVER a password.</summary>
+    static JsonObject ServerInfo()
+    {
+        var drives = new JsonObject();
+        foreach (var d in DriveInfo.GetDrives())
+            try
+            {
+                if (d.DriveType != DriveType.Network) continue;
+                var sb = new StringBuilder(512); int len = sb.Capacity;
+                if (WNetGetConnection(d.Name.TrimEnd('\\'), sb, ref len) == 0) drives[d.Name.TrimEnd('\\')] = sb.ToString();
+            }
+            catch { }
+        return new JsonObject
+        {
+            ["drives"] = drives,
+            ["vpn"] = new JsonObject { ["host"] = OfficeVpn.Gateway, ["port"] = OfficeVpn.Port, ["user"] = OfficeVpn.User, ["pin"] = OfficeVpn.Pin, ["probe"] = OfficeVpn.Probe }
+        };
     }
 
     // ------------------------------------------------------------------ 📂 project files catalogue
@@ -518,7 +580,8 @@ static class PhoneLink
             ["v"] = 2, ["pc"] = Environment.MachineName, ["build"] = Program.Shown, ["at"] = DateTime.Now.ToString("o"), ["fullAt"] = s.FullAt.ToString("o"),
             ["last12"] = Last12, ["files"] = files, ["counts"] = JsonNode.Parse(JsonSerializer.Serialize(s.Counts)), ["oldest"] = MailIndex.OldestText,
             ["full"] = MailFull.On ? new JsonObject { ["months"] = MailFull.Months, ["att"] = MailFull.AttMonths, ["mails"] = MailFull.Progress.Mails } : null,   // ☁ the real emails are in Drive too
-            ["gd"] = PhoneDrive()     // ☁ the phone learns how to read Google Drive by itself (no new QR needed)
+            ["gd"] = PhoneDrive(),    // ☁ the phone learns how to read Google Drive by itself (no new QR needed)
+            ["server"] = ServerInfo()   // 🖧 the phone's own server access: drive → network address, VPN gateway / user / certificate pin (no password)
         };
         Write("manifest.nes", o.ToJsonString());
         File.WriteAllText(Path.Combine(Dir, "README.txt"),
@@ -695,6 +758,15 @@ static class PhoneLink
         JsonNode res;
         switch (op)
         {
+            case "vpnhold":
+            {
+                // 📱 The phone uses the office VPN (one session per account): the PC's automatic reconnect waits until then.
+                var until = DateTime.TryParse(a["until"]?.ToString(), out var u) ? u : DateTime.Now.AddMinutes(15);
+                OfficeVpn.HoldUntil = until > DateTime.Now.AddHours(2) ? DateTime.Now.AddHours(2) : until;
+                Log.Warn("office vpn", $"📱 the phone uses the VPN — the PC waits until {OfficeVpn.HoldUntil:HH:mm}");
+                res = new JsonObject { ["ok"] = true, ["until"] = OfficeVpn.HoldUntil.ToString("o") };
+                break;
+            }
             case "search":
             {
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(150));
