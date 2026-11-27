@@ -763,7 +763,8 @@ static class PhoneLink
                 // 📱 The phone uses the office VPN (one session per account): the PC's automatic reconnect waits until then.
                 var until = DateTime.TryParse(a["until"]?.ToString(), out var u) ? u : DateTime.Now.AddMinutes(15);
                 OfficeVpn.HoldUntil = until > DateTime.Now.AddHours(2) ? DateTime.Now.AddHours(2) : until;
-                Log.Warn("office vpn", $"📱 the phone uses the VPN — the PC waits until {OfficeVpn.HoldUntil:HH:mm}");
+                if (OfficeVpn.HoldUntil <= DateTime.Now.AddSeconds(30)) { Log.Warn("office vpn", "📱 the phone left the VPN — the PC reconnects now"); if (OfficeVpn.On) OfficeVpn.Connect(); }
+                else Log.Warn("office vpn", $"📱 the phone uses the VPN — the PC waits until {OfficeVpn.HoldUntil:HH:mm}");
                 res = new JsonObject { ["ok"] = true, ["until"] = OfficeVpn.HoldUntil.ToString("o") };
                 break;
             }
@@ -822,6 +823,30 @@ static class PhoneLink
                     name = string.Join("_", (h.Subject ?? "email").Split(System.IO.Path.GetInvalidFileNameChars())) + ".msg";
                 }
                 res = new JsonObject { ["name"] = name, ["data"] = Convert.ToBase64String(Gzip(data)) };
+                break;
+            }
+            case "serverfile":
+            {
+                // 🏢 A server file or a whole server folder (zip) for the phone, read by this PC (read-only) — the phone can't sign in to the server itself.
+                var p = (a["path"]?.ToString() ?? "").TrimEnd('\\');
+                bool zip = a["zip"]?.GetValue<bool>() == true, info = a["info"]?.GetValue<bool>() == true, list = a["list"]?.GetValue<bool>() == true;
+                if (p.Length < 3 || Private(p)) throw new Exception("🔒 private — not opened");
+                if (!Projects.ReadAll.IsNetwork(p)) throw new Exception("not a server path");
+                if (info || list) { await ServerFiles.Ready(p); res = info ? ServerFiles.Info(p) : new JsonObject { ["items"] = ServerFiles.List(p) }; break; }
+                var name = System.IO.Path.GetFileName(p) + (zip ? ".zip" : "");
+                if (DriveOn && DriveRoot.Length > 0)
+                {
+                    var id = Guid.NewGuid().ToString("N")[..12];
+                    _ = Task.Run(() => ServerFiles.ToDrive(p, zip, id));
+                    res = new JsonObject { ["name"] = name, ["drive"] = $"fetched/{id}.bin", ["err"] = $"fetched/{id}.err" };
+                }
+                else
+                {
+                    await ServerFiles.Ready(p);
+                    var data = ServerFiles.Bytes(p, zip);
+                    if (data.Length > 35_000_000) throw new Exception("larger than 35 MB — switch on Google Drive in 6.1 Phone link to send big files");
+                    res = new JsonObject { ["name"] = name, ["data"] = Convert.ToBase64String(Gzip(data)) };
+                }
                 break;
             }
             case "html":

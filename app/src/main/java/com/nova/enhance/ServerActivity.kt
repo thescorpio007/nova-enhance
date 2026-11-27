@@ -104,24 +104,49 @@ class ServerActivity : BaseActivity() {
         val host = ServerAccess.vpnHost(c)
         col.addView(Ui.text(c, "Firewall: ${host.ifEmpty { "— (update the phone copy from your PC)" }}\nServer: " +
             ServerAccess.drives(c).entries.joinToString(" · ") { "${it.key} → ${it.value}" }.ifEmpty { "— (your PC sends it with the next update)" } +
-            "\nCertificate: " + (if (ServerAccess.pin(c).isNotEmpty()) "fingerprint from your PC ✓" else "not received yet"), 12f, Ui.MUTED))
+            "\nCertificate: " + (if (ServerAccess.pin(c).isNotEmpty()) "fingerprint from your PC ✓" else "not received yet") +
+            "\nServer files: " + (if (ServerAccess.smbOk(c)) "the phone opens them itself ✓ (VPN on)" else "through your PC 💻 (always works while the PC is on)"), 12f, Ui.MUTED))
         fun field(hint: String, v: String, pw: Boolean) = EditText(c).apply {
             this.hint = hint; setText(v); setTextColor(Ui.TEXT); setHintTextColor(Ui.MUTED)
             if (pw) inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
-        val vu = field("VPN username", ServerAccess.vpnUser(c), false)
-        val vp = field("VPN password" + if (ServerAccess.secret(c, "vpn").isNotEmpty()) " (saved — leave empty to keep)" else "", "", true)
-        val su = field("Server login (if different)", ServerAccess.smbUser(c), false)
-        val sd = field("Domain (if any, e.g. MZA)", ServerAccess.smbDomain(c), false)
-        val sp = field("Server password (empty = same as VPN)", "", true)
-        listOf(vu, vp, su, sd, sp).forEach { col.addView(it) }
+        fun label(s: String) = col.addView(Ui.text(c, s, 11f, Ui.MUTED).apply { setPadding(0, Ui.dp(c, 6), 0, 0) })
+        label("1 · VPN username")
+        val vu = field("VPN username", ServerAccess.vpnUser(c), false); col.addView(vu)
+        label("2 · VPN password" + if (ServerAccess.hasSecret(c, "vpn")) "  (saved ✓ — leave empty to keep)" else "")
+        val vp = field(if (ServerAccess.hasSecret(c, "vpn")) "saved ✓ — leave empty to keep" else "VPN password", "", true); col.addView(vp)
+        label("3 · Server login (empty = the VPN username)")
+        val su = field("e.g. ahamrouni", c.getSharedPreferences("nova_server", MODE_PRIVATE).getString("smb_user", "") ?: "", false); col.addView(su)
+        label("4 · Domain (e.g. MZA or mza.local)")
+        val sd = field("Domain", ServerAccess.smbDomain(c), false); col.addView(sd)
+        label("5 · Server password" + if (ServerAccess.hasSecret(c, "smb")) "  (saved ✓ — leave empty to keep)" else "  (empty = the VPN password)")
+        val spw = field(if (ServerAccess.hasSecret(c, "smb")) "saved ✓ — leave empty to keep" else "Server password", "", true); col.addView(spw)
+        val clear = android.widget.CheckBox(c).apply { text = "Forget the saved server password"; setTextColor(Ui.MUTED); visibility = if (ServerAccess.hasSecret(c, "smb")) android.view.View.VISIBLE else android.view.View.GONE }
+        col.addView(clear)
         col.addView(Ui.text(c, "🔐 Passwords stay in this phone's secure hardware store (Android Keystore) — never synced, never backed up, never sent to the PC or the AI.", 11f, Ui.MUTED))
+        fun save() {
+            ServerAccess.saveLogin(c, vu.text.toString().trim(), su.text.toString().trim(), sd.text.toString().trim())
+            if (vp.text.isNotEmpty()) ServerAccess.setSecret(c, "vpn", vp.text.toString())
+            if (clear.isChecked) ServerAccess.clearSecret(c, "smb")
+            if (spw.text.isNotEmpty()) ServerAccess.setSecret(c, "smb", spw.text.toString())
+            ServerAccess.setSmbOk(c, false)   // a changed login is tested again
+        }
         AlertDialog.Builder(c).setTitle("⚙ Server access").setView(ScrollView(c).apply { addView(col) })
-            .setPositiveButton("Save") { _, _ ->
-                ServerAccess.saveLogin(c, vu.text.toString().trim(), su.text.toString().trim(), sd.text.toString().trim())
-                if (vp.text.isNotEmpty()) ServerAccess.setSecret(c, "vpn", vp.text.toString())
-                if (sp.text.isNotEmpty()) ServerAccess.setSecret(c, "smb", sp.text.toString())
-                Ui.toast(c, "✓ Saved in the phone's secure store")
+            .setPositiveButton("Save") { _, _ -> save(); Ui.toast(c, "✓ Saved in the phone's secure store") }
+            .setNeutralButton("🔐 Test login") { _, _ -> save(); testLogin() }
+            .setNegativeButton("Cancel", null).show()
+    }
+
+    /** At most 3 tries, after a warning (each failure counts towards the office account lock). */
+    private fun testLogin() {
+        if (!FortiVpn.up) { Ui.toast(this, "Connect the office VPN first (🔑 Connect), then 🔐 Test login"); return }
+        AlertDialog.Builder(this).setTitle("🔐 Test the phone's server login")
+            .setMessage("Nova tries up to 3 login forms, once each, and stops at the first that works. Each failed try counts towards your office account lock — if your account was refused several times today, wait 30 min first.\n\nIf the server refuses all, nothing is lost: server files come through your PC.")
+            .setPositiveButton("Test") { _, _ ->
+                Thread {
+                    val r = runCatching { ServerAccess.testLogin(applicationContext) { s -> main.post { status.text = s } } }
+                    main.post { status.text = r.fold({ it }, { "⚠ " + it.message }) }
+                }.start()
             }.setNegativeButton("Cancel", null).show()
     }
 
@@ -148,7 +173,7 @@ class ServerActivity : BaseActivity() {
 
     private fun results(q: String, rows: List<Triple<String, Long, Long>>, total: Long, ms: Long) {
         body.removeAllViews()
-        status.text = "%,d file(s) · from the index (%,d names, works offline) · server first".format(rows.size, total) + if (ms > 0) " · ${ms} ms" else ""
+        status.text = "%,d file(s) · from the index (%,d names, works offline) · server first · tap = download + open · hold = more".format(rows.size, total) + if (ms > 0) " · ${ms} ms" else ""
         val server = rows.filter { ServerAccess.isServer(this, it.first) }.groupBy { it.first.substringAfterLast('\\').lowercase() }.mapValues { e -> e.value.maxOf { it.third } }
         val sorted = rows.sortedWith(compareBy({ if (ServerAccess.isServer(this, it.first)) 0 else 1 }, { -it.third }))
         SubmittalLine(q, rows)?.let { body.addView(Ui.text(this, it, 13f, Ui.AMBER), Ui.lp(top = Ui.dp(this, 6))) }
@@ -178,7 +203,8 @@ class ServerActivity : BaseActivity() {
         r.addView(Ui.text(this, (if (p.endsWith(".msg", true)) "✉ " else "📄 ") + p.substringAfterLast('\\'), 14f))
         r.addView(Ui.text(this, "$badge · ${if (m > 0) SimpleDateFormat("dd MMM yyyy", Locale.UK).format(Date(m)) else ""} · %.1f MB".format(b / 1e6), 11f, if (badge.contains("⚠")) Ui.AMBER else if (net) 0xFF9FD0FF.toInt() else Ui.MUTED))
         r.addView(Ui.text(this, p.substringBeforeLast('\\'), 10.5f, Ui.MUTED))
-        r.setOnClickListener { detail(p, b, m, net) }
+        r.setOnClickListener { get(p, b, m, net) { f, u -> openDefault(f, u) } }
+        r.setOnLongClickListener { menu(p, b, m, net); true }
         body.addView(r, Ui.lp(top = Ui.dp(this, 6)))
     }
 
@@ -228,17 +254,23 @@ class ServerActivity : BaseActivity() {
     }
 
     private fun live(f: String) {
-        if (!FortiVpn.up) { Ui.toast(this, "Connect the office VPN first (🔑 Connect)"); return }
-        status.text = "⏳ Asking the server…"
+        val pc = ServerAccess.viaPc(this)
+        status.text = if (pc) "⏳ Asking your PC what is in this folder now…" else "⏳ Asking the server…"
         Thread {
-            val r = try { ServerAccess.list(applicationContext, f) } catch (e: Exception) { main.post { status.text = "⚠ ${e.message}" }; return@Thread }
+            val r = try { if (pc) ServerAccess.viaPcList(applicationContext, f) else ServerAccess.list(applicationContext, f) }
+                catch (e: Exception) {
+                    if (!pc && ServerAccess.isLoginError(e)) { ServerAccess.setSmbOk(applicationContext, false); main.post { live(f) }; return@Thread }
+                    main.post { status.text = ServerAccess.friendly(e) }; return@Thread
+                }
             main.post {
-                body.removeAllViews(); status.text = "⟳ Live from the server · ${r.size} item(s) · $f"
+                body.removeAllViews(); status.text = "⟳ Live ${if (pc) "via your PC" else "from the server"} · ${r.size} item(s) · $f"
                 body.addView(Ui.smallButton(this, "⬅ Back to the index view") { browse(f) })
                 body.addView(folderActions(f))
                 for ((n, dir) in r) body.addView(Ui.text(this, (if (dir) "📁  " else "📄  ") + n, 14f).apply {
                     setPadding(0, Ui.dp(this@ServerActivity, 8), 0, Ui.dp(this@ServerActivity, 8))
-                    setOnClickListener { if (dir) live(f.trimEnd('\\') + "\\" + n) else detail(f.trimEnd('\\') + "\\" + n, 0, 0, true) }
+                    val full = f.trimEnd('\\') + "\\" + n
+                    setOnClickListener { if (dir) live(full) else get(full, 0, 0, true) { fl, u -> openDefault(fl, u) } }
+                    if (!dir) setOnLongClickListener { menu(full, 0, 0, true); true }
                 })
             }
         }.start()
@@ -246,49 +278,73 @@ class ServerActivity : BaseActivity() {
 
     // ------------------------------------------------------------------ 📄 one file: preview, open, keep
 
-    private fun detail(p: String, b: Long, m: Long, net: Boolean) {
+    /**
+     * 📥 Tap a file: it is downloaded to Download › Nova Enhance › Server and opened with the phone's default app.
+     * Already downloaded and unchanged on the server → opened at once. Server files: by the phone itself (VPN + its own login),
+     * else through your PC; local copies: from Google Drive, else through your PC. Read-only — nothing is written to the server.
+     */
+    private fun get(p: String, b: Long, m: Long, net: Boolean, then: (File?, Uri?) -> Unit) {
+        val c = applicationContext
+        ServerAccess.downloaded(c, p, m, b)?.let { status.text = "✓ Already downloaded · opening"; then(null, it); return }
+        if (ServerAccess.isPrivate(p)) { status.text = "🔒 private — not opened"; return }
+        status.text = "⏳ Getting ${p.substringAfterLast('\\')}…"
+        Thread {
+            val r = runCatching {
+                val f: File = when {
+                    !net && GDrive.canOpen(c, p) -> GDrive.fetchWork(c, p) { s -> main.post { status.text = s } }
+                    !net -> pcFetch(p)
+                    !ServerAccess.viaPc(c) -> try { ServerAccess.download(c, p) { s -> main.post { status.text = s } } }
+                        catch (e: Exception) {
+                            if (!ServerAccess.isLoginError(e)) throw e
+                            ServerAccess.setSmbOk(c, false)
+                            main.post { status.text = "🔐 The server refused the phone's login — asking your PC instead…" }
+                            ServerAccess.viaPcFetch(c, p, false) { s -> main.post { status.text = s } }
+                        }
+                    else -> ServerAccess.viaPcFetch(c, p, false) { s -> main.post { status.text = s } }
+                }
+                val (where, u) = ServerAccess.toDownloads(c, f)
+                ServerAccess.rememberDownload(c, p, m, b, u)
+                ServerAccess.log(c, p, "downloaded + opened")
+                Triple(f, u, where)
+            }
+            main.post { r.onSuccess { (f, u, where) -> status.text = "✓ Saved · $where"; then(f, u) }.onFailure { status.text = ServerAccess.friendly(it) } }
+        }.start()
+    }
+
+    /** A local copy (on your PC) that is not in Google Drive: your PC sends it. */
+    private fun pcFetch(p: String): File {
+        val o = PcLink.ask(applicationContext, "fetch", org.json.JSONObject().put("path", p)) { s -> main.post { status.text = s } }
+        val f = File(ServerAccess.cacheDir(this), o.getString("name").replace(Regex("[\\\\/:*?\"<>|]"), "_"))
+        f.writeBytes(PcLink.gunzip(android.util.Base64.decode(o.getString("data"), android.util.Base64.DEFAULT)))
+        return f
+    }
+
+    /** Hold a file: share · folder · details. */
+    private fun menu(p: String, b: Long, m: Long, net: Boolean) {
+        val items = arrayOf("📥 Download + open", "📤 Share", "📂 Show its folder", "ℹ Details (text preview)")
+        AlertDialog.Builder(this).setTitle(p.substringAfterLast('\\')).setItems(items) { _, i ->
+            when (i) {
+                0 -> get(p, b, m, net) { f, u -> openDefault(f, u) }
+                1 -> confirmShare(p.substringAfterLast('\\')) { get(p, b, m, net) { f, u -> ServerAccess.log(applicationContext, p, "shared"); share(f, u) } }
+                2 -> { search.setText(""); browse(p.substringBeforeLast('\\')) }
+                3 -> details(p, b, m, net)
+            }
+        }.show()
+    }
+
+    private fun details(p: String, b: Long, m: Long, net: Boolean) {
         val c = this
         val col = Ui.col(c, 8)
         col.addView(Ui.text(c, p.substringAfterLast('\\'), 15f, Ui.TEXT, true))
         col.addView(Ui.text(c, (if (net) "🏢 Server · official · read-only" else "💻 Local copy — on your PC") + (if (m > 0) " · " + SimpleDateFormat("dd MMM yyyy HH:mm", Locale.UK).format(Date(m)) else "") + (if (b > 0) " · %.1f MB".format(b / 1e6) else ""), 12f, Ui.MUTED))
+        col.addView(Ui.text(c, p.substringBeforeLast('\\'), 11f, Ui.MUTED))
         val prev = Ui.text(c, "", 12f, Ui.TEXT)
         col.addView(prev)
         Thread {
             val t = PcLink.Db.get(applicationContext).rawQuery("SELECT t FROM files WHERE path=? LIMIT 1", arrayOf(p)).use { if (it.moveToFirst()) it.getString(0) else "" }
             main.post { prev.text = if (t.isNullOrBlank()) "(no text preview — Nova has not read inside this file yet)" else "Preview (from the index): " + t.take(1500) }
         }.start()
-        val cached = File(ServerAccess.cacheDir(c), p.substringAfterLast('\\').replace(Regex("[\\\\/:*?\"<>|]"), "_"))
-        var dlg: AlertDialog? = null
-        val acts = android.widget.GridLayout(c).apply { columnCount = 2 }
-        fun act(label: String, job: () -> Unit) = acts.addView(Ui.smallButton(c, label) { dlg?.dismiss(); job() })
-        if (cached.exists() || net) {
-            act(if (cached.exists()) "📄 Open" else "📥 Open from the server") { withFile(p, cached) { open(it) } }
-            act("⬇ Download") { withFile(p, cached) { f -> work("⬇ Saving to the phone…") { ServerAccess.toDownloads(applicationContext, f).also { ServerAccess.log(applicationContext, p, "downloaded") } } } }
-            act("📤 Share") { confirmShare(p.substringAfterLast('\\')) { withFile(p, cached) { f -> ServerAccess.log(applicationContext, p, "shared"); share(f) } } }
-        }
-        act("📂 Folder") { search.setText(""); browse(p.substringBeforeLast('\\')) }
-        if (cached.exists()) act(if (ServerAccess.isKept(c, cached)) "☆ Don't keep" else "⭐ Keep") { ServerAccess.keep(c, cached, !ServerAccess.isKept(c, cached)) }
-        col.addView(acts)
-        if (net) col.addView(Ui.text(c, "🔒 Read-only: Nova opens, downloads and shares — it never changes, copies to, renames or deletes anything on the server.", 11f, Ui.MUTED))
-        dlg = AlertDialog.Builder(c).setView(ScrollView(c).apply { addView(col) }).setNegativeButton("Close", null).show()
-    }
-
-    /** The file on the phone: from the 7-day cache, or read from the server now (VPN needed). */
-    private fun withFile(p: String, cached: File, then: (File) -> Unit) {
-        if (cached.exists()) { then(cached); return }
-        if (!FortiVpn.up) { Ui.toast(this, "Connect the office VPN first (🔑 Connect) — search and previews work without it"); return }
-        status.text = "⏳ Reading from the server (read-only)…"
-        Thread {
-            try {
-                val f = ServerAccess.download(applicationContext, p) { s -> main.post { status.text = s } }
-                main.post { status.text = "✓ ${f.name} · kept 7 days on the phone (⭐ to keep longer)"; then(f) }
-            } catch (e: Exception) { main.post { status.text = "⚠ ${e.message}" } }
-        }.start()
-    }
-
-    private fun work(start: String, job: () -> String) {
-        status.text = start
-        Thread { val r = runCatching(job); main.post { status.text = r.fold({ "✓ Saved · $it" }, { "⚠ " + (it.message ?: "failed") }) } }.start()
+        AlertDialog.Builder(c).setView(ScrollView(c).apply { addView(col) }).setPositiveButton("📥 Download + open") { _, _ -> get(p, b, m, net) { f, u -> openDefault(f, u) } }.setNegativeButton("Close", null).show()
     }
 
     /** Company documents leave Nova when shared: asked every time. */
@@ -300,10 +356,22 @@ class ServerActivity : BaseActivity() {
 
     private fun uriOf(f: File) = Uri.parse("content://${PcFiles.AUTH}/" + Uri.encode(f.relativeTo(PcLink.dir(this)).path, "/"))
 
-    private fun share(f: File) {
-        val type = MimeTypeMap.getSingleton().getMimeTypeFromExtension(f.extension.lowercase()) ?: "application/octet-stream"
-        val send = Intent(Intent.ACTION_SEND).setType(type).putExtra(Intent.EXTRA_STREAM, uriOf(f)).putExtra(Intent.EXTRA_SUBJECT, f.name).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        try { startActivity(Intent.createChooser(send, "Share “${f.name}”")) } catch (_: Exception) { Ui.toast(this, "No app on this phone can share this file") }
+    private fun mime(name: String) = MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substringAfterLast('.', "").lowercase()) ?: "application/octet-stream"
+
+    private fun share(f: File?, u: Uri?) {
+        val uri = u ?: f?.let { uriOf(it) } ?: return
+        val name = f?.name ?: uri.lastPathSegment ?: "file"
+        val send = Intent(Intent.ACTION_SEND).setType(mime(f?.name ?: (contentResolver.getType(uri) ?: ""))).putExtra(Intent.EXTRA_STREAM, uri).putExtra(Intent.EXTRA_SUBJECT, name).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        if (f == null) contentResolver.getType(uri)?.let { send.type = it }
+        try { startActivity(Intent.createChooser(send, "Share “$name”")) } catch (_: Exception) { Ui.toast(this, "No app on this phone can share this file") }
+    }
+
+    /** Opens with the phone's default app for this kind of file (Android asks once if none is set yet). */
+    private fun openDefault(f: File?, u: Uri?) {
+        val uri = u ?: f?.let { uriOf(it) } ?: return
+        val type = if (u != null) contentResolver.getType(u) ?: mime(f?.name ?: "") else mime(f!!.name)
+        val view = Intent(Intent.ACTION_VIEW).setDataAndType(uri, type).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        try { startActivity(view) } catch (_: Exception) { Ui.toast(this, "No app on this phone opens .${(f?.extension ?: "")} files — it is saved in Download › Nova Enhance › Server") }
     }
 
     // ------------------------------------------------------------------ 🗜 a server folder: download or share as one zip
@@ -318,42 +386,40 @@ class ServerActivity : BaseActivity() {
     }
 
     private fun zip(f: String, shareIt: Boolean) {
-        if (!FortiVpn.up) { Ui.toast(this, "Connect the office VPN first (🔑 Connect)"); return }
         val c = applicationContext
+        val pc = ServerAccess.viaPc(c)
         zipStop = false
-        status.text = "⏳ Counting the folder on the server…"
+        status.text = if (pc) "⏳ Your PC counts the folder…" else "⏳ Counting the folder on the server…"
         Thread {
             try {
-                val m = ServerAccess.measure(c, f) { zipStop }
+                val m = if (pc) ServerAccess.viaPcInfo(c, f) else ServerAccess.measure(c, f) { zipStop }
                 main.post {
                     val go = {
-                        val d = AlertDialog.Builder(this).setTitle("🗜 Zipping on the phone").setMessage("${m.files} file(s) · %.1f MB — read from the server, packed on the phone.".format(m.bytes / 1e6))
-                            .setNegativeButton("Cancel") { _, _ -> zipStop = true }.setCancelable(false).show()
+                        val d = AlertDialog.Builder(this).setTitle("🗜 Zipping").setMessage("${m.files} file(s) · %.1f MB — ${if (pc) "zipped by your PC, sent through Google Drive" else "read from the server, packed on the phone"}.".format(m.bytes / 1e6))
+                            .setNegativeButton("Hide") { _, _ -> zipStop = !pc }.setCancelable(false).show()
                         Thread {
                             try {
-                                val z = ServerAccess.zipFolder(c, f, { s -> main.post { status.text = s; d.setMessage(s) } }) { zipStop }
+                                val z = if (pc) ServerAccess.viaPcFetch(c, f, true) { s -> main.post { status.text = s; d.setMessage(s) } }
+                                        else ServerAccess.zipFolder(c, f, { s -> main.post { status.text = s; d.setMessage(s) } }) { zipStop }
+                                val (where, u) = ServerAccess.toDownloads(c, z)
                                 main.post {
                                     d.dismiss()
-                                    if (shareIt) { ServerAccess.log(c, f, "shared as zip"); share(z) }
-                                    else work("⬇ Saving the zip…") { ServerAccess.toDownloads(c, z).also { ServerAccess.log(c, f, "downloaded as zip") } }
+                                    if (shareIt) { ServerAccess.log(c, f, "shared as zip"); share(z, u) }
+                                    else { ServerAccess.log(c, f, "downloaded as zip"); status.text = "✓ Saved · $where" }
                                 }
-                            } catch (e: Exception) { main.post { d.dismiss(); status.text = if (zipStop) "■ Zip cancelled" else "⚠ ${e.message}" } }
+                            } catch (e: Exception) { main.post { d.dismiss(); status.text = if (zipStop) "■ Zip cancelled" else ServerAccess.friendly(e) } }
                         }.start()
                     }
-                    if (m.files == 0) status.text = "This folder has no files to zip"
-                    else if (m.bytes > 500_000_000L) AlertDialog.Builder(this).setTitle("🗜 A big folder").setMessage("${m.files} file(s) · %.0f MB. It takes a while over the VPN and needs that space on the phone. Go on?".format(m.bytes / 1e6))
-                        .setPositiveButton("Zip it") { _, _ -> go() }.setNegativeButton("Cancel") { _, _ -> status.text = "" }.show()
-                    else go()
+                    when {
+                        m.files == 0 -> status.text = "This folder has no files to zip"
+                        pc && m.bytes > 150_000_000L -> status.text = "⚠ %.0f MB — too big to send in one zip; open a sub-folder and zip that".format(m.bytes / 1e6)
+                        m.bytes > 500_000_000L -> AlertDialog.Builder(this).setTitle("🗜 A big folder").setMessage("${m.files} file(s) · %.0f MB. It takes a while over the VPN and needs that space on the phone. Go on?".format(m.bytes / 1e6))
+                            .setPositiveButton("Zip it") { _, _ -> go() }.setNegativeButton("Cancel") { _, _ -> status.text = "" }.show()
+                        else -> go()
+                    }
                 }
-            } catch (e: Exception) { main.post { status.text = "⚠ ${e.message}" } }
+            } catch (e: Exception) { main.post { status.text = ServerAccess.friendly(e) } }
         }.start()
-    }
-
-    private fun open(f: File) {
-        val uri = uriOf(f)
-        val type = MimeTypeMap.getSingleton().getMimeTypeFromExtension(f.extension.lowercase()) ?: "application/octet-stream"
-        val view = Intent(Intent.ACTION_VIEW).setDataAndType(uri, type).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        try { startActivity(Intent.createChooser(view, "Open “${f.name}” with")) } catch (_: Exception) { Ui.toast(this, "No app on this phone opens .${f.extension} files") }
     }
 
     private fun opened() {

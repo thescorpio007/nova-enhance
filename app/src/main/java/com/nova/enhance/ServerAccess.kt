@@ -44,7 +44,28 @@ object ServerAccess {
     }
     fun isServer(c: Context, path: String): Boolean = path.startsWith("\\\\") || drives(c).keys.any { path.startsWith(it, true) }
 
-    var smbUser: (Context) -> String = { c -> sp(c).getString("smb_user", null) ?: vpnUser(c) }
+    /** The server login: the one typed in Setup, else the VPN username (an empty box never sends an empty name). */
+    var smbUser: (Context) -> String = { c -> sp(c).getString("smb_user", null)?.trim()?.ifEmpty { null } ?: vpnUser(c) }
+    fun hasSecret(c: Context, name: String) = sp(c).contains("s_$name")
+    fun clearSecret(c: Context, name: String) = sp(c).edit().remove("s_$name").apply()
+
+    /** ✓ The phone signed in to the server itself at least once (else server files come through your PC). */
+    fun smbOk(c: Context) = sp(c).getBoolean("smb_ok", false)
+    fun setSmbOk(c: Context, v: Boolean) = sp(c).edit().putBoolean("smb_ok", v).apply()
+    /** The phone reads the server itself only when its VPN is up AND its own login worked; otherwise your PC fetches. */
+    fun viaPc(c: Context) = !(FortiVpn.up && smbOk(c))
+
+    fun isLoginError(e: Throwable) = (e.message ?: "").contains("LOGON_FAILURE") || (e.message ?: "").contains("0xc000006d", true)
+    fun friendly(e: Throwable): String {
+        val m = e.message ?: "failed"
+        return when {
+            isLoginError(e) -> "🔐 The server refused the phone's login — Nova fetches server files through your PC instead"
+            m.contains("ACCESS_DENIED") -> "🔒 Your account may not open this on the server"
+            m.contains("OBJECT_NAME_NOT_FOUND") || m.contains("PATH_NOT_FOUND") -> "Not found on the server (moved or renamed?)"
+            m.contains("timed out", true) || m.contains("Timeout", true) -> "The server did not answer (VPN still connected?)"
+            else -> "⚠ $m"
+        }
+    }
     fun smbDomain(c: Context): String = sp(c).getString("smb_domain", "")!!
     fun saveLogin(c: Context, vpnUser: String, smbUser: String, domain: String) = sp(c).edit().putString("vpn_user", vpnUser).putString("smb_user", smbUser).putString("smb_domain", domain).apply()
 
@@ -138,6 +159,77 @@ object ServerAccess {
     /** What a server folder holds (names and sizes, read-only). */
     private fun listIn(ds: DiskShare, inside: String) = ds.list(inside).filter { it.fileName != "." && it.fileName != ".." && !isPrivate(it.fileName) }
 
+    // ------------------------------------------------------------------ 🔐 test the phone's own server login (at most 3 tries)
+
+    /** Tries the login forms once each (as typed · short domain · name@domain) and keeps the first that works. */
+    fun testLogin(c: Context, say: (String) -> Unit): String {
+        val d = drives(c)
+        val target = d["S:"] ?: d.values.firstOrNull() ?: throw Exception("No server drive received from your PC yet")
+        val (h, sh, _) = unc(c, target.trimEnd('\\') + "\\x") ?: throw Exception("No server drive")
+        val u = smbUser(c).substringBefore('@'); val dom = smbDomain(c).ifEmpty { smbUser(c).substringAfter('@', "") }
+        val tries = linkedSetOf(u to dom)
+        if (dom.contains('.')) tries.add(u to dom.substringBefore('.').uppercase())
+        if (dom.isNotEmpty()) tries.add("$u@${if (dom.contains('.')) dom else dom.lowercase() + ".local"}" to "")
+        val pw = secret(c, "smb").ifEmpty { secret(c, "vpn") }
+        for ((user, domain) in tries.take(3)) {
+            say("🔐 Trying ${if (domain.isNotEmpty()) "$domain\\$user" else user}…")
+            try {
+                client().use { cl -> cl.connect(h).use { con ->
+                    val ses = con.authenticate(AuthenticationContext(user, pw.toCharArray(), domain))
+                    (ses.connectShare(sh) as DiskShare).use { ds -> listIn(ds, "") }
+                } }
+                sp(c).edit().putString("smb_user", user).putString("smb_domain", domain).apply()
+                setSmbOk(c, true)
+                return "✓ The phone can open the server itself (${if (domain.isNotEmpty()) "$domain\\$user" else user})"
+            } catch (e: Exception) { if (!isLoginError(e)) throw Exception(friendly(e)) }
+        }
+        setSmbOk(c, false)
+        return "The server refuses logins from the phone (office security rule). Nothing is lost: Nova opens server files through your PC."
+    }
+
+    // ------------------------------------------------------------------ 💻 → 📱 through your PC (it is already signed in to S:, O:, N:)
+
+    /** Your PC reads the server file (or zips the folder), read-only, and sends it here encrypted (Google Drive, or in the answer when small). */
+    fun viaPcFetch(c: Context, path: String, zip: Boolean, progress: (String) -> Unit): File {
+        if (isPrivate(path)) throw Exception("🔒 private — not opened")
+        if (FortiVpn.up) { progress("📱 → 💻 giving the office VPN back to your PC…"); FortiVpn.stop(c); Thread.sleep(3000) }
+        progress("⏳ Asking your PC to read it from the server…")
+        val o = PcLink.ask(c, "serverfile", JSONObject().put("path", path).put("zip", zip)) { progress(it) }
+        val name = o.optString("name").ifEmpty { path.trimEnd('\\').substringAfterLast('\\') }.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+        val out = File(cacheDir(c), name)
+        if (o.has("data")) { out.writeBytes(PcLink.gunzip(Base64.decode(o.getString("data"), Base64.DEFAULT))); log(c, path, if (zip) "zipped via PC" else "via PC"); return out }
+        val rel = o.optString("drive"); val err = o.optString("err")
+        if (rel.isEmpty()) throw Exception("your PC did not send the file")
+        if (!GDrive.usable(c)) throw Exception("Sign in to Google Drive (My PC → ⚙) — big files come that way")
+        val t0 = System.currentTimeMillis()
+        while (System.currentTimeMillis() - t0 < 15 * 60_000L) {
+            Thread.sleep(5000)
+            val s = (System.currentTimeMillis() - t0) / 1000
+            progress("⏳ Your PC reads it and Google Drive uploads it… ${s / 60}:${"%02d".format(s % 60)}")
+            GDrive.fetchSync(c, err)?.let { throw Exception("Your PC: " + String(PcLink.openSealed(c, it))) }
+            val box = GDrive.fetchSync(c, rel) ?: continue
+            progress("📥 Downloading %.1f MB…".format(box.size / 1e6))
+            out.writeBytes(PcLink.openSealed(c, box))
+            log(c, path, if (zip) "zipped via PC" else "via PC")
+            return out
+        }
+        throw Exception("Not arrived after 15 min — is Google Drive for desktop running on the PC?")
+    }
+
+    /** What a server folder holds, counted by your PC. */
+    fun viaPcInfo(c: Context, path: String): Measure {
+        if (FortiVpn.up) { FortiVpn.stop(c); Thread.sleep(3000) }
+        val o = PcLink.ask(c, "serverfile", JSONObject().put("path", path).put("info", true))
+        return Measure(o.optInt("files"), o.optLong("bytes"))
+    }
+
+    /** A live look at a server folder through your PC. */
+    fun viaPcList(c: Context, path: String): List<Pair<String, Boolean>> {
+        if (FortiVpn.up) { FortiVpn.stop(c); Thread.sleep(3000) }
+        val a = PcLink.ask(c, "serverfile", JSONObject().put("path", path).put("list", true)).optJSONArray("items") ?: JSONArray()
+        return (0 until a.length()).map { a.getJSONObject(it).let { o -> o.optString("n") to o.optBoolean("d") } }.filterNot { isPrivate(it.first) }
+    }
+
     // ------------------------------------------------------------------ 📥 a server file onto the phone
 
     fun download(c: Context, path: String, progress: (String) -> Unit): File {
@@ -146,6 +238,7 @@ object ServerAccess {
         val out = File(cacheDir(c), inside.substringAfterLast('\\').replace(Regex("[\\\\/:*?\"<>|]"), "_"))
         var last = 0L
         share(c, h, sh) { ds -> out.outputStream().use { o -> readInto(ds, inside, o, { d, t -> if (d - last > 1_000_000) { last = d; progress("📥 %.1f of %.1f MB".format(d / 1e6, t / 1e6)) } }) } }
+        setSmbOk(c, true)
         log(c, path, "opened")
         return out
     }
@@ -208,7 +301,8 @@ object ServerAccess {
 
     // ------------------------------------------------------------------ ⬇ into the phone's Download folder
 
-    fun toDownloads(c: Context, f: File): String {
+    /** Saved into Download › Nova Enhance › Server (the phone's own Download folder). Returns (where, a link the phone's apps can open). */
+    fun toDownloads(c: Context, f: File): Pair<String, android.net.Uri?> {
         val mime = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(f.extension.lowercase()) ?: "application/octet-stream"
         if (android.os.Build.VERSION.SDK_INT >= 29) {
             val v = android.content.ContentValues().apply {
@@ -217,11 +311,22 @@ object ServerAccess {
             }
             val u = c.contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, v) ?: throw Exception("the phone refused to save the file")
             c.contentResolver.openOutputStream(u)?.use { o -> f.inputStream().use { it.copyTo(o) } } ?: throw Exception("the phone refused to save the file")
-            return "Download › Nova Enhance › Server › ${f.name}"
+            return "Download › Nova Enhance › Server › ${f.name}" to u
         }
         val dir = File(c.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS), "Nova Enhance/Server").apply { mkdirs() }
         f.copyTo(File(dir, f.name), true)
-        return "Android › data › Nova Enhance › Download › Server › ${f.name}"
+        return "Android › data › Nova Enhance › Download › Server › ${f.name}" to null
+    }
+
+    /** The copy already in Download (same server date and size) — opened again without downloading. */
+    fun downloaded(c: Context, path: String, m: Long, b: Long): android.net.Uri? {
+        val o = try { JSONObject(sp(c).getString("dl:$path", "") ?: "") } catch (_: Exception) { return null }
+        if (m > 0 && o.optLong("m") != m || b > 0 && o.optLong("b") != b) return null
+        val u = android.net.Uri.parse(o.optString("u").ifEmpty { return null })
+        return try { c.contentResolver.openFileDescriptor(u, "r")?.use { }; u } catch (_: Exception) { null }
+    }
+    fun rememberDownload(c: Context, path: String, m: Long, b: Long, u: android.net.Uri?) {
+        if (u != null) sp(c).edit().putString("dl:$path", JSONObject().put("u", u.toString()).put("m", m).put("b", b).toString()).apply()
     }
 
     // every file opened, downloaded, zipped or shared from the server is noted on the phone

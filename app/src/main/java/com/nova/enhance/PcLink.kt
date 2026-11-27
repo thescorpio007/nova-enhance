@@ -99,6 +99,9 @@ object PcLink {
         return box
     }
 
+    /** A file your PC sealed for this phone (its own key). */
+    fun openSealed(c: Context, box: ByteArray): ByteArray = open(key(c), box)
+
     fun gunzip(b: ByteArray): ByteArray = GZIPInputStream(ByteArrayInputStream(b)).use { it.readBytes() }
     fun gzip(b: ByteArray): ByteArray = ByteArrayOutputStream().also { o -> GZIPOutputStream(o).use { it.write(b) } }.toByteArray()
     // ✓ "Handled" marks made while the PC was off: kept, and sent when the PC answers again.
