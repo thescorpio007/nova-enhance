@@ -198,7 +198,7 @@ static class Lights
                 it.ToolTipText = "🟢 green = working · 🟡 yellow = something ongoing · 🔴 red = not working";
             }
             if (!First(it)) return;
-            if (it is ToolStripDropDownItem dd) { foreach (ToolStripItem s in dd.DropDownItems) Fix(s); dd.DropDownItemAdded += (_, e) => Fix(e.Item); }
+            if (it is ToolStripDropDownItem dd) { foreach (ToolStripItem s in dd.DropDownItems) Fix(s); dd.DropDown.ItemAdded += (_, e) => Fix(e.Item); }
             it.TextChanged += (_, _) => { var x = it.Text ?? ""; if (x.Length >= 2 && Of(x[..2]) is var k2 && k2 != Kind.None) { it.Image = Image(k2, 16); it.Text = x[2..].TrimStart(); } };
         }
         if (!First(m)) return;
