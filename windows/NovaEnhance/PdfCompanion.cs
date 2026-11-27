@@ -312,7 +312,7 @@ class PdfPanel : NovaForm
         {
             segs = known.Where(x => (x.Text ?? "").Trim().Length > 0).ToList();
             left = new();
-            Shown(segs, "✓ from the Nova index (read before)");
+            ShowRead(segs, "✓ from the Nova index (read before)");
             return segs;
         }
         // 2 · the pages with text in seconds; the scanned pages are read in the background, 3 at a time
@@ -334,16 +334,16 @@ class PdfPanel : NovaForm
                 {
                     if (IsDisposed || p != path) return;
                     segs = all.Where(x => (x.Text ?? "").Trim().Length > 0).ToList(); left = new();
-                    Shown(segs, "✓ every page read, scanned pages included");
+                    ShowRead(segs, "✓ every page read, scanned pages included");
                 }));
             });
             status.Text = $"✓ {q.TextPages} text page(s) ready · reading the {left.Count} scanned page(s) in the background, 3 at a time…";
         }
-        else Shown(segs, "✓");
+        else ShowRead(segs, "✓");
         return segs;
     }
 
-    void Shown(List<Seg> s, string how)
+    void ShowRead(List<Seg> s, string how)
     {
         var pages = s.Select(PageOf).Where(x => x > 0).DefaultIfEmpty(1).Max();
         page.Maximum = Math.Max(page.Maximum, pages);
