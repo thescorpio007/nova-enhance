@@ -179,7 +179,7 @@ class NovaForm : Form
         try { Icon = Th.AppIcon; } catch { }
     }
 
-    protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); Th.DarkTitle(this); Th.SetIcons(this); }
+    protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); Th.DarkTitle(this); Th.SetIcons(this); LabelClock.Attach(this); }
 
     // 🔐 Admin lock: a Nova window opens only after your PIN (Enhance and the PDF panel are allowed; small dialogs follow their window).
     public virtual bool AllowedWhileLocked => false;
@@ -463,5 +463,74 @@ static class Prompt
         f.AcceptButton = ok;
         f.Shown += (_, _) => box.Focus();
         return f.ShowDialog(owner) == DialogResult.OK ? result : null;
+    }
+}
+
+
+/// <summary>⏱ Every Nova window: a line that says Nova is working (“Reading the PDF…”, “Asking Gemini…”, “⏳ testing…”) gets a clock
+/// that counts while it works (“Reading the PDF…  ⏱ 0:12”), and the line that follows says how long it took (“✓ 37 pages read  · ⏱ 0:17”).
+/// Designed by A.HAMROUNI</summary>
+static class LabelClock
+{
+    sealed class Run { public string Base = ""; public DateTime Start; }
+
+    static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Form, Dictionary<Label, Run>> forms = new();
+    static readonly System.Text.RegularExpressions.Regex Working = new(
+        @"^(?:⏳|[^\p{L}\d]{0,4}(?:\p{L}+ing\b|OCR\b|Gemini vision|AI vision))", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    [ThreadStatic] static bool self;
+
+    static bool IsWorking(string t)
+    {
+        t = (t ?? "").TrimEnd();
+        if (t.Length == 0 || t.Length > 260 || t.StartsWith("✓") || t.StartsWith("⚠") || t.StartsWith("✗")) return false;
+        return (t.EndsWith("…") || t.EndsWith("...")) && Working.IsMatch(t) || t.StartsWith("⏳");
+    }
+
+    static string Fmt(TimeSpan t) => t.TotalMinutes >= 1 ? $"{(int)t.TotalMinutes}:{t.Seconds:00}" : $"0:{(int)t.TotalSeconds:00}";
+
+    public static void Attach(Form f)
+    {
+        if (forms.TryGetValue(f, out _)) return;
+        var runs = new Dictionary<Label, Run>();
+        forms.Add(f, runs);
+        void Hook(Control c)
+        {
+            if (c is Label l && !(c is LinkLabel)) l.TextChanged += (_, _) => Changed(l, runs);
+            c.ControlAdded += (_, e) => Hook(e.Control);
+            foreach (Control k in c.Controls) Hook(k);
+        }
+        Hook(f);
+        var timer = new System.Windows.Forms.Timer { Interval = 500 };
+        timer.Tick += (_, _) =>
+        {
+            if (runs.Count == 0) return;
+            foreach (var (l, r) in runs.ToList())
+            {
+                if (l.IsDisposed) { runs.Remove(l); continue; }
+                Set(l, r.Base + "  ⏱ " + Fmt(DateTime.Now - r.Start));
+            }
+        };
+        timer.Start();
+        f.FormClosed += (_, _) => { timer.Stop(); timer.Dispose(); };
+    }
+
+    static void Set(Label l, string t) { self = true; try { l.Text = t; } finally { self = false; } }
+
+    static void Changed(Label l, Dictionary<Label, Run> runs)
+    {
+        if (self) return;
+        var t = l.Text ?? "";
+        if (IsWorking(t))
+        {
+            if (!runs.TryGetValue(l, out var r)) runs[l] = r = new Run { Start = DateTime.Now };   // a new step of the same work keeps its clock
+            r.Base = t.TrimEnd();
+            Set(l, r.Base + "  ⏱ " + Fmt(DateTime.Now - r.Start));
+            return;
+        }
+        if (runs.Remove(l, out var done))
+        {
+            var took = DateTime.Now - done.Start;
+            if (took.TotalSeconds >= 1.5 && t.Trim().Length > 0) Set(l, t.TrimEnd() + "  · ⏱ " + Fmt(took));
+        }
     }
 }

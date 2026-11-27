@@ -1132,8 +1132,8 @@ static class Projects
                         var cand = new List<string>();
                         using (var cmd = c.CreateCommand())
                         {
-                            // Newest files first: the documents you work on now are ready soonest.
-                            cmd.CommandText = $"SELECT p.path FROM pnames p LEFT JOIN files f ON f.path=p.path LEFT JOIN pskip s ON s.path=p.path WHERE ({Under(cmd, g.Select(RootKey).ToList(), "p.path")}) AND p.ext IN ({ExtIn(cmd)}) AND p.size <= $max AND f.id IS NULL AND s.path IS NULL ORDER BY p.mtime DESC LIMIT {n * 3}";
+                            // 📋 Submittals first, then the newest files: the documents you ask about most are ready soonest.
+                            cmd.CommandText = $"SELECT p.path FROM pnames p LEFT JOIN files f ON f.path=p.path LEFT JOIN pskip s ON s.path=p.path WHERE ({Under(cmd, g.Select(RootKey).ToList(), "p.path")}) AND p.ext IN ({ExtIn(cmd)}) AND p.size <= $max AND f.id IS NULL AND s.path IS NULL ORDER BY (p.path LIKE '%submittal%') DESC, p.mtime DESC LIMIT {n * 3}";
                             cmd.Parameters.AddWithValue("$max", max);
                             using var r = cmd.ExecuteReader();
                             while (r.Read()) cand.Add(r.GetString(0));

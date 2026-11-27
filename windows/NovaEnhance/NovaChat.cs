@@ -254,6 +254,33 @@ class NovaChat
         return new JsonObject { ["on"] = Guided.On, ["menu"] = Guided.MenuFirst, ["min"] = Guided.Minutes, ["items"] = items, ["wrap"] = wrap, ["summary"] = Guided.SummaryAsk, ["lines"] = TypeBox.Lines, ["maxLines"] = TypeBox.MaxLines, ["font"] = TypeBox.FontSize };
     }
 
+    string openChatId = "";
+
+    /// <summary>📄 The other scanned pages of a PDF are read in the background (3 at a time, kept in the shared Nova index); when done,
+    /// a line in the chat says so — ↻ ask again to get the answer with every page.</summary>
+    void FinishInBackground(string f, string chatId, PdfFast.Quick qk)
+    {
+        _ = Task.Run(() =>
+        {
+            using var busy = Busy.Begin("📄 Reading the rest of " + Path.GetFileName(f));
+            var t0 = DateTime.Now;
+            try { Projects.Read(f, CancellationToken.None); }
+            catch (Exception e) { Log.Warn("Nova Chat", "background PDF read: " + e.Message); return; }
+            var chat = Load(chatId);
+            if (chat == null) return;
+            var msgs = chat["messages"] as JsonArray ?? new JsonArray();
+            msgs.Add(new JsonObject
+            {
+                ["role"] = "assistant", ["label"] = "📄 background reading",
+                ["text"] = $"✓ Nova has now read all {qk.Pages} pages of {Path.GetFileName(f)} ({qk.Scanned} scanned) in {(DateTime.Now - t0).TotalSeconds:0} s. ↻ Ask again (or press ↻ on the answer) to get the answer checked against every page."
+            });
+            chat["messages"] = msgs;
+            Save(chat);
+            if (openChatId == chatId) Post(new JsonObject { ["t"] = "answer", ["chat"] = chat.DeepClone() });
+            Post(new JsonObject { ["t"] = "chats", ["chats"] = List() });
+        });
+    }
+
     async Task Send(JsonObject m, CancellationToken stop = default)
     {
         var text = m["text"]?.ToString()?.Trim() ?? "";
@@ -282,6 +309,31 @@ class NovaChat
             history.Append(old["role"]?.ToString() == "user" ? "User: " : "Nova: ").AppendLine(t.Length > 1500 ? t[..1500] + "…" : t);
         }
         if (!again) msgs.Add(new JsonObject { ["role"] = "user", ["text"] = text, ["ctxLabel"] = CtxLabel(ctx) });
+        openChatId = chat["id"]?.ToString() ?? "";
+        // 👁 “vision 12 14”: the AI looks at those pages of the attached PDF (you asked for it — it uses your AI quota)
+        var vis = System.Text.RegularExpressions.Regex.Match(text, @"^\s*vision\s+([\d ,]+)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        var visPdf = (ctx["files"] as JsonArray ?? new JsonArray()).Select(x => x?.ToString() ?? "").FirstOrDefault(x => x.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) && File.Exists(x));
+        if (vis.Success && visPdf != null)
+        {
+            var prevQ = msgs.OfType<JsonObject>().Where(x => x["role"]?.ToString() == "user").Select(x => x["text"]?.ToString() ?? "").Reverse().Skip(1).FirstOrDefault(x => !x.TrimStart().StartsWith("vision", StringComparison.OrdinalIgnoreCase)) ?? "";
+            var sb = new StringBuilder();
+            foreach (var pg in vis.Groups[1].Value.Split(new[] { ' ', ',' }, StringSplitOptions.RemoveEmptyEntries).Select(x => int.TryParse(x, out var n) ? n : 0).Where(n => n > 0).Distinct().Take(4))
+            {
+                Post(new JsonObject { ["t"] = "progress", ["text"] = $"👁 {prov.Label} looks at page {pg}…", ["step"] = true });
+                try
+                {
+                    var (data, mime) = await Task.Run(() => Ocr.Picture(visPdf, pg));
+                    var seen = await Ai.Vision(data, mime, stop, $"Page {pg} of {Path.GetFileName(visPdf)}. " + (prevQ.Length > 0 ? "Answer from this page: " + prevQ + " — " : "") + "quote exact values, models, finishes and references; say plainly if the page does not show it.");
+                    sb.Append($"**Page {pg}** — ").AppendLine(seen.Trim()).AppendLine();
+                }
+                catch (Exception ex) { sb.AppendLine($"**Page {pg}** — ⚠ {ex.Message}"); }
+            }
+            msgs.Add(new JsonObject { ["role"] = "assistant", ["text"] = sb.ToString().Trim(), ["label"] = $"👁 {prov.Label} vision · {Path.GetFileName(visPdf)}", ["question"] = text });
+            Save(chat);
+            Post(new JsonObject { ["t"] = "answer", ["chat"] = chat.DeepClone() });
+            Post(new JsonObject { ["t"] = "chats", ["chats"] = List() });
+            return;
+        }
 
         using var doing = Log.Doing("Nova Chat · " + (text.Length > 60 ? text[..60] : text));
         using var busyJob = Busy.Begin("💬 Nova Chat · " + (text.Length > 50 ? text[..50] + "…" : text));
@@ -309,7 +361,21 @@ class NovaChat
                 continue;
             }
             List<Seg> segs = null;
-            try { segs = (await Task.Run(() => Projects.Read(f, CancellationToken.None))).Segs; } catch { segs = null; }   // one store: read once, known by all Nova
+            if (fx == ".pdf" && FolderIndex.Known(f) == null)
+            {
+                // ⚡ Not read before: the text pages now (seconds) + the scanned pages that matter first, 3 at a time; the rest in the background.
+                try
+                {
+                    var qk = await Task.Run(() => PdfFast.Read(f, terms, 12, s => Post(new JsonObject { ["t"] = "progress", ["text"] = s })));
+                    segs = qk.Segs;
+                    Post(new JsonObject { ["t"] = "progress", ["text"] = "📄 " + Path.GetFileName(f) + " · " + qk.How, ["step"] = true });
+                    if (qk.Left.Count > 0) { notes.Add($"{Path.GetFileName(f)}: answered from {qk.Pages - qk.Left.Count} of {qk.Pages} pages — the other {qk.Left.Count} scanned pages are being read now; ↻ ask again in a moment for every page"); FinishInBackground(f, chat["id"]?.ToString() ?? "", qk); }
+                    else _ = Task.Run(() => { try { Projects.Read(f, CancellationToken.None); } catch { } });   // kept in the shared index
+                }
+                catch (Exception ex) { Log.Warn("Nova Chat", "fast PDF read: " + ex.Message); segs = null; }
+            }
+            if (segs == null)
+                try { segs = (await Task.Run(() => Projects.Read(f, CancellationToken.None))).Segs; } catch { segs = null; }   // one store: read once, known by all Nova
             segs = (segs ?? new()).Where(s => (s.Text ?? "").Trim().Length > 0).ToList();
             if (segs.Sum(x => x.Text.Length) < 30 && (FileTalk.IsPicture(f) || f.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)))
             {
@@ -319,7 +385,10 @@ class NovaChat
             }
             if (segs.Count == 0) { notes.Add("no readable text in " + Path.GetFileName(f)); continue; }
             var total = segs.Sum(s => s.Text.Length);
-            var pick = total <= 14000 ? segs : segs.OrderByDescending(s => terms.Count(w => s.Text.Contains(w, StringComparison.OrdinalIgnoreCase))).Take(8).OrderBy(s => segs.IndexOf(s)).ToList();
+            // 🔎 the best parts for your words AND their related words (sliding → track, rail, roller…), not only exact words
+            var pick = total <= 14000 ? segs : PdfFast.Pick(segs, terms, 10);
+            var unclear = pick.Where(s => s.Unclear && s.OcrPage > 0).Select(s => s.OcrPage).Distinct().Take(4).ToList();
+            if (unclear.Count > 0) notes.Add($"page(s) {string.Join(", ", unclear)} of {Path.GetFileName(f)} are unclear scans — type “vision {string.Join(" ", unclear)}” to let the AI look at them (uses your AI quota)");
             foreach (var s in pick)
             {
                 var where = s.Loc.Length > 0 ? s.Loc : "";

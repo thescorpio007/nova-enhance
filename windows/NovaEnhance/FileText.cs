@@ -124,6 +124,7 @@ static class FileText
 
     // ------------------------------------------------------------------ helpers
 
+    public static string CleanText(string s) => Clean(s);
     static string Clean(string s) => Regex.Replace(s ?? "", @"[ \t ]+", " ").Trim();
 
     /// <summary>Joins small pieces into segments of about MaxSegChars, keeping the location of the first piece.</summary>
@@ -431,8 +432,15 @@ static class FileText
         if (FileKinds.On("E") && (!FileKinds.On("D") || noText.Count > 0))
         {
             var todo = FileKinds.On("D") ? noText : null;
-            foreach (var (pg, text) in Ocr.Pdf(path, todo, 300))
-                res.Add(new Seg($"page {pg} (OCR)", Clean(text), $"page:{pg}") { OcrPage = pg, Unclear = Ocr.IsUnclear(text) });
+            if (todo != null && todo.Count > 2)
+            {
+                // ⚡ 3 scanned pages at a time (each in its own OCR helper), pages already read for a question are not read again
+                res.AddRange(PdfFast.OcrPages(path, todo.Take(300).ToList()));
+                res = res.OrderBy(PdfFast.PageOf).ToList();
+            }
+            else
+                foreach (var (pg, text) in Ocr.Pdf(path, todo, 300))
+                    res.Add(new Seg($"page {pg} (OCR)", Clean(text), $"page:{pg}") { OcrPage = pg, Unclear = Ocr.IsUnclear(text) });
         }
         return res;
     }

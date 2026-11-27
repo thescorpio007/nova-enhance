@@ -131,7 +131,7 @@ static class Ocr
     }
 
     /// <summary>Runs the OCR in a helper process: if Windows OCR crashes, only the helper dies and the file is skipped from then on.</summary>
-    static List<(int, string)> Isolated(string kind, string path, List<int> only, int maxPages)
+    static List<(int, string)> Isolated(string kind, string path, List<int> only, int maxPages, Action<int> onPage = null)
     {
         var res = new List<(int, string)>();
         if (IsBad(path)) return res;
@@ -149,7 +149,16 @@ static class Ocr
             var started = DateTime.Now; var last = DateTime.Now; long lastLen = -1;
             while (!p.WaitForExit(1000))
             {
-                try { var fi = new FileInfo(beat); if (fi.Exists && fi.LastWriteTime.Ticks != lastLen) { lastLen = fi.LastWriteTime.Ticks; last = DateTime.Now; } } catch { }
+                try
+                {
+                    var fi = new FileInfo(beat);
+                    if (fi.Exists && fi.LastWriteTime.Ticks != lastLen)
+                    {
+                        lastLen = fi.LastWriteTime.Ticks; last = DateTime.Now;
+                        if (onPage != null && int.TryParse(File.ReadAllText(beat).Trim(), out var pg) && pg > 0) onPage(pg);   // 📄 which page the helper is on
+                    }
+                }
+                catch { }
                 var idle = (DateTime.Now - last).TotalSeconds;
                 if (idle > (Patient(path) ? 600 : 40) || (DateTime.Now - started).TotalMinutes > (Patient(path) ? 60 : 10))
                 {
@@ -189,7 +198,7 @@ static class Ocr
 
     public static string Image(string path) => InHelper ? ImageHere(path) : Isolated("image", path, null, 0).FirstOrDefault().Item2 ?? "";
 
-    public static List<(int, string)> Pdf(string path, List<int> only, int maxPages) => InHelper ? PdfHere(path, only, maxPages) : Isolated("pdf", path, only, maxPages);
+    public static List<(int, string)> Pdf(string path, List<int> only, int maxPages, Action<int> onPage = null) => InHelper ? PdfHere(path, only, maxPages) : Isolated("pdf", path, only, maxPages, onPage);
 
     static string ImageHere(string path)
     {
@@ -225,9 +234,10 @@ static class Ocr
                 if (p < 1 || p > doc.PageCount) continue;
                 using var page = doc.GetPage((uint)(p - 1));
                 double pw = page.Size.Width, ph = page.Size.Height;        // in 1/96 inch
-                double scale = 300.0 / 96.0;                                 // ~300 dpi
-                if (pw * ph * scale * scale > 140_000_000) scale = Math.Sqrt(140_000_000 / (pw * ph));
                 bool big = Math.Max(pw, ph) > 1300;                          // A3 and larger: drawings
+                // ⚡ ordinary pages (A4 catalogues, letters) at ~200 dpi: one picture per page instead of 4 — drawings keep ~300 dpi
+                double scale = (big ? 300.0 : 200.0) / 96.0;
+                if (pw * ph * scale * scale > 140_000_000) scale = Math.Sqrt(140_000_000 / (pw * ph));
                 var lines = new List<string>(); var seen = new HashSet<string>();
                 double tileDip = Tile / scale, step = (Tile - Overlap) / scale;
                 int tiles = 0;

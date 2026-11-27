@@ -298,19 +298,56 @@ class PdfPanel : NovaForm
         _ = Text_();
     }
 
+    // ⚡ scanned pages still being read in the background (the question reads the ones that matter first)
+    List<int> left = new();
+    Task fullRead;
+
     async Task<List<Seg>> Text_()
     {
         if (segs != null) return segs;
-        status.Text = "Reading the PDF…";
         var p = path;
-        List<Seg> got = null;
-        await RunSta(() => got = FileText.Extract(p));
+        // 1 · read before by any Nova feature: instant (the shared Nova index)
+        var known = FolderIndex.Known(p);
+        if (known != null)
+        {
+            segs = known.Where(x => (x.Text ?? "").Trim().Length > 0).ToList();
+            left = new();
+            Shown(segs, "✓ from the Nova index (read before)");
+            return segs;
+        }
+        // 2 · the pages with text in seconds; the scanned pages are read in the background, 3 at a time
+        status.Text = "Reading the PDF…";
+        PdfFast.Quick q = null;
+        await RunSta(() => q = PdfFast.Read(p, Array.Empty<string>(), 0, s => BeginInvoke(new Action(() => { if (!IsDisposed && p == path) status.Text = s + "…"; }))));
         if (p != path) return null;
-        segs = (got ?? new()).Where(x => (x.Text ?? "").Trim().Length > 0).ToList();
-        var pages = segs.Select(PageOf).Where(x => x > 0).DefaultIfEmpty(1).Max();
-        page.Maximum = Math.Max(1, pages);
-        status.Text = segs.Count == 0 ? "⚠ No readable text — try 🔤 OCR this PDF" : $"✓ {pages} page{(pages == 1 ? "" : "s")} read · {segs.Sum(x => x.Text.Length):N0} characters";
+        segs = q.Segs.Where(x => (x.Text ?? "").Trim().Length > 0).ToList();
+        left = q.Left;
+        page.Maximum = Math.Max(1, q.Pages);
+        if (left.Count > 0)
+        {
+            fullRead = Task.Run(() =>
+            {
+                List<Seg> all = null;
+                try { all = Projects.Read(p, CancellationToken.None).Segs; } catch (Exception e) { Log.Warn("PDF", "background read: " + e.Message); }
+                if (all == null) return;
+                BeginInvoke(new Action(() =>
+                {
+                    if (IsDisposed || p != path) return;
+                    segs = all.Where(x => (x.Text ?? "").Trim().Length > 0).ToList(); left = new();
+                    Shown(segs, "✓ every page read, scanned pages included");
+                }));
+            });
+            status.Text = $"✓ {q.TextPages} text page(s) ready · reading the {left.Count} scanned page(s) in the background, 3 at a time…";
+        }
+        else Shown(segs, "✓");
         return segs;
+    }
+
+    void Shown(List<Seg> s, string how)
+    {
+        var pages = s.Select(PageOf).Where(x => x > 0).DefaultIfEmpty(1).Max();
+        page.Maximum = Math.Max(page.Maximum, pages);
+        status.Text = s.Count == 0 ? "⚠ No readable text — try 🔤 OCR this PDF" : $"{how} · {pages} page{(pages == 1 ? "" : "s")} · {s.Sum(x => x.Text.Length):N0} characters";
     }
 
     static Task RunSta(Action a)
@@ -377,8 +414,20 @@ class PdfPanel : NovaForm
             lastQuestion = q;
             status.Text = $"Asking {prov.Label}…";
             var terms = FolderAsk.LocalTerms(q);
-            var pick = all.Sum(x => x.Text.Length) <= 40000 ? all
-                : all.OrderByDescending(x => terms.Count(w => x.Text.Contains(w, StringComparison.OrdinalIgnoreCase))).Take(25).ToList();
+            if (left.Count > 0)
+            {
+                // ⚡ scanned pages not read yet: the ones that matter for THIS question first (bookmarks, contents, section pages), 3 at a time
+                var p0 = path; List<Seg> more = null;
+                status.Text = "Reading the scanned pages that matter for your question…";
+                await RunSta(() => more = PdfFast.Read(p0, terms, 12, s => BeginInvoke(new Action(() => { if (!IsDisposed) status.Text = s + "…"; }))).Segs);
+                if (p0 != path) return;
+                var hadPages = all.Select(PageOf).ToHashSet();
+                all = all.Concat(more.Where(x => !hadPages.Contains(PageOf(x)))).OrderBy(PageOf).ToList();
+                segs = all;
+                status.Text = $"Asking {prov.Label}…";
+            }
+            // 🔎 your words and their related words (sliding → track, rail, roller, pocket…)
+            var pick = all.Sum(x => x.Text.Length) <= 40000 ? all : PdfFast.Pick(all, terms, 25);
             var sys = "You answer questions about ONE construction document (specification, drawing, report, letter). Use ONLY the page texts given; each starts with its page as [p.N]. " +
                       "After each fact put its page in square brackets, e.g. [p.3]. Quote exact values (dimensions, materials, ratings, references, revisions). " +
                       (detailed ? "Give a complete, structured answer. " : "Answer in 2 to 6 short lines, the direct answer first. ") +

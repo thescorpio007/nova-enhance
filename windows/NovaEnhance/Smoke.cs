@@ -404,6 +404,9 @@ static class Smoke
             var pt = SubmittalForm.ParseWith(new SubmittalLog.Options(), new[] { "CW", "AR" }, "show me all outstanding WIR for CW this month", new(), new());
             Ok((!Tracker.Builtin || pt.O.Types.SequenceEqual(new[] { "WIR" })) && pt.O.Discipline == "CW" && pt.O.Status == "Open" && pt.O.From.Day == 1 && pt.O.Words.Count == 0,
                $"submittal log: “outstanding WIR for CW this month” → WIR · CW · Open + Overdue · this month ({SubmittalForm.Describe(pt.O)})");
+            var al = Alike.Expand(new[] { "sliding", "door", "hardware" });
+            Ok(al.Any(x => x.W == "track") && al.Any(x => x.W == "ironmongery") && Alike.Score("Pocket door track and roller set", al) > Alike.Score("Swing door hinge", al),
+               "PDF search: related words (sliding → track, roller · hardware → ironmongery) rank the right page first");
             Ok(Studio.Mode is "C" or "A" or "B" && Studio.Budget > 0, "Nova Studio: a mode and a budget");
             var fb = JsonNode.Parse("{\"sections\":[{\"name\":\"P\",\"rules\":[{\"id\":\"PR-S1\"},{\"id\":\"PR-S1\"},{\"id\":\"PR-S1-b\"}]}]}")!.AsObject();
             Ok(Brain.FixIds(fb) == 1 && Brain.Rules(fb).Select(x => x.Rule["id"]!.ToString()).Distinct().Count() == 3, "brain: two rules never share an id (repaired)");
