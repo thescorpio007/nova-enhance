@@ -7,7 +7,24 @@ partial class SettingsForm : NovaForm
     /// <summary>🧪 Activity history and 🔌 Test connector are advanced tools: shown only when switched on (About → Advanced tools).</summary>
     static readonly string[] AdvancedSections = { "🧪 Activity history", "🔌 Test connector" };
     static string[] Sections = Visible();
-    static string[] Visible() => AllSections.Where(s => Store.Bool("win_advanced", false) || !AdvancedSections.Contains(s)).ToArray();
+    /// <summary>🔢 The menu: 8 numbered groups (a “§n” row is the group's header), each page with its feature number. The page keys stay
+    /// the same as before, so every “open Settings at …” link in Nova keeps working.</summary>
+    static string[] Visible()
+    {
+        var adv = Store.Bool("win_advanced", false);
+        var rows = new List<string>();
+        foreach (var g in Features.Groups.Where(g => g.Num != "0"))
+        {
+            rows.Add("§" + g.Num);
+            foreach (var f in Features.All.Where(f => f.Num.StartsWith(g.Num + ".") && f.Page.Length > 0 && (adv || !f.Advanced)))
+                if (!rows.Contains(f.Page)) rows.Add(f.Page);
+        }
+        return rows.ToArray();
+    }
+
+    static string RowText(string key) =>
+        key.StartsWith("§") ? Features.Groups.First(g => g.Num == key[1..]).Num + "  " + Features.Groups.First(g => g.Num == key[1..]).Name
+        : Features.ByPage(key) is { } f ? f.Num + "   " + f.Name : key;
     readonly ListBox nav;
     readonly Panel host;
     Stack page;
@@ -16,7 +33,7 @@ partial class SettingsForm : NovaForm
 
     public SettingsForm()
     {
-        Text = "Nova Enhance · Settings";
+        Text = "8 ⚙ Settings";
         Width = 960; Height = 760;
         MinimumSize = new Size(760, 520);
         nav = new ListBox
@@ -31,19 +48,41 @@ partial class SettingsForm : NovaForm
             var sel = (e.State & DrawItemState.Selected) != 0;
             using var bg = new SolidBrush(sel ? Th.Card2 : nav.BackColor);
             e.Graphics.FillRectangle(bg, e.Bounds);
-            var subPage = (e.Index > 0 && Array.IndexOf(Sections, "Email & AI") is var ea && e.Index > ea && e.Index <= ea + 4) || Sections[e.Index] is "⚙ AI for each feature" or "📶 Indexing progress" or "📜 Contract area" or "🗄 Nova index";
-            var ind = subPage ? 34 : 16;
-            TextRenderer.DrawText(e.Graphics, Sections[e.Index], Th.F(subPage ? 9.8f : 10.5f, sel), new Rectangle(e.Bounds.X + ind, e.Bounds.Y, e.Bounds.Width - ind, e.Bounds.Height),
-                sel ? Color.White : Color.FromArgb(0xC9, 0xCE, 0xD8), TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix);
+            var head = Sections[e.Index].StartsWith("§");
+            var ind = head ? 12 : 26;
+            TextRenderer.DrawText(e.Graphics, RowText(Sections[e.Index]), Th.F(head ? 10.5f : 9.8f, sel || head), new Rectangle(e.Bounds.X + ind, e.Bounds.Y, e.Bounds.Width - ind, e.Bounds.Height),
+                head ? Th.AccentText : sel ? Color.White : Color.FromArgb(0xC9, 0xCE, 0xD8), TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
         };
-        nav.SelectedIndexChanged += (_, _) => Draw(Sections[Math.Max(0, nav.SelectedIndex)]);
+        nav.SelectedIndexChanged += (_, _) =>
+        {
+            var i = Math.Max(0, nav.SelectedIndex);
+            if (Sections[i].StartsWith("§")) { if (i + 1 < Sections.Length) nav.SelectedIndex = i + 1; return; }   // a group header: its first page
+            Draw(Sections[i]);
+        };
+        // 🔎 Search settings: a number (4.3) or a word (vpn, budget, backup) → the page
+        var sbox = Th.Box(false); if (sbox is SpellBox ssb) ssb.Off = true;
+        sbox.Dock = DockStyle.Top; sbox.Font = Th.F(10); sbox.PlaceholderText = "🔎 4.3 · vpn · budget · backup…";
+        var shits = new ListBox { Dock = DockStyle.Top, Height = 0, BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.None, Font = Th.F(9.5f), Visible = false };
+        List<Features.F> found = new();
+        sbox.TextChanged += (_, _) =>
+        {
+            found = sbox.Text.Trim().Length == 0 ? new() : Features.Find(sbox.Text).Where(f => f.Page.Length > 0).Take(8).ToList();
+            shits.Items.Clear(); foreach (var f in found) shits.Items.Add(f.Num + "  " + f.Name);
+            shits.Visible = found.Count > 0; shits.Height = found.Count * 22 + 4;
+        };
+        void Pick(int i) { if (i >= 0 && i < found.Count) { Go(found[i].Page); sbox.Text = ""; } }
+        sbox.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; Pick(0); } };
+        shits.Click += (_, _) => Pick(shits.SelectedIndex);
+        var navCol = new Panel { Dock = DockStyle.Left, Width = nav.Width, BackColor = nav.BackColor, Padding = new Padding(6, 8, 6, 0) };
+        nav.Dock = DockStyle.Fill;
+        navCol.Controls.Add(nav); navCol.Controls.Add(shits); navCol.Controls.Add(sbox);
         host = new Panel { Dock = DockStyle.Fill, BackColor = Th.Bg };
         Controls.Add(host);
         // ⇔ Drag the line between the menu and the page.
         var navSplit = new Splitter { Dock = DockStyle.Left, Width = 5, BackColor = Color.FromArgb(0x23, 0x2A, 0x3A), MinSize = 160, MinExtra = 400, Cursor = Cursors.VSplit };
-        navSplit.SplitterMoved += (_, _) => Store.SetInt("win_set_nav_w", nav.Width);
+        navSplit.SplitterMoved += (_, _) => Store.SetInt("win_set_nav_w", navCol.Width);
         Controls.Add(navSplit);
-        Controls.Add(nav);
+        Controls.Add(navCol);
         live = new System.Windows.Forms.Timer { Interval = 2000 };
         live.Tick += (_, _) =>
         {
@@ -61,6 +100,7 @@ partial class SettingsForm : NovaForm
 
     public void Go(string section)
     {
+        if (section != null && Features.Joined.TryGetValue(section, out var joined)) section = joined;   // pages joined into another one
         var i = Array.IndexOf(Sections, section);
         if (i >= 0) nav.SelectedIndex = i;
         else if (AdvancedSections.Contains(section)) Draw(section);
@@ -72,7 +112,7 @@ partial class SettingsForm : NovaForm
         page?.Dispose();
         page = new Stack { Padding = new Padding(24, 14, 24, 12) };
         host.Controls.Add(page);
-        page.Add(Th.L(section, 15, Th.Text, true));
+        page.Add(Th.L(RowText(section), 15, Th.Text, true));
         liveIndex = null; liveUpdate = null; syncNote = null;
         Store.Set("win_set_drawing", section);
         UiWatch.Step("Settings · " + section);
@@ -91,8 +131,12 @@ partial class SettingsForm : NovaForm
                 case "📂 Folders in the index": FoldersPage(); break;
                 case "📁 Email projects": EmailProjectsSection(); break;
                 case "Folder search": FolderSearch(); break;
-                case "📁 Projects": ProjectsPage(); break;
-                case "📶 Indexing progress": IndexingPage(); break;
+                case "📁 Projects": ProjectsPage(); SourcesPage(); FolderSearch(); break;   // 4.1 Projects & sources (three pages joined)
+                case "💻 Local data": LocalDataPage(); break;
+                case "🖧 Network server": NetworkPage(); break;
+                case "📋 Submittal log": SubmittalSettingsPage(); break;
+                case "📄 Nova for this PDF": PdfSettingsPage(); break;
+                case "📶 Indexing progress": IndexingPage(); IndexPage(); break;   // 2.4 Progress & Nova index (joined)
                 case "📜 Contract area": ContractPage(); break;
                 case "🗄 Nova index": IndexPage(); break;
                 case "🛠 Nova Studio": StudioPage(); break;
@@ -2473,6 +2517,10 @@ partial class SettingsForm : NovaForm
         Note($"Version {Program.Shown}", Th.Text);
         Note("Enhance text anywhere (Ctrl+Shift+E), 🔍 Search for email (Ctrl+Shift+F), 💬 Talk about this email (Ctrl+Alt+Q), morning brief and follow-ups. Works with the Nova Enhance phone app.");
         Note("All your files: " + Paths.Root, Th.Text);
+        // 📋 The feature map: every number, its feature, where its settings are (the same numbers in the tray menu, window titles and the error log)
+        page.Add(Th.Section("📋 Feature map"));
+        var fm = new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Text = Features.Map().Replace("\n", "\r\n"), Height = 360, BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.None, Font = new Font("Consolas", 9.5f), Tag = "s" };
+        page.Add(fm, true);
         page.Add(Th.Check("🧪 Advanced tools — show 🧪 Activity history and 🔌 Test connector in this list", Store.Bool("win_advanced", false), v =>
         {
             Store.SetBool("win_advanced", v);

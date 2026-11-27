@@ -398,6 +398,12 @@ static class Projects
     {
         var stamp = DateTime.Now.Ticks;
         var rk = RootKey(root);
+        // 🖧 A server folder listed completely before: only folders whose date changed are read again (a folder's date changes when a
+        // file is added, removed or renamed in it) — the others keep their names. Much faster over the VPN.
+        var doneKey = "win_listed_" + Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes(root.ToLowerInvariant())))[..12];
+        var since = ReadAll.IsNetwork(root) && long.TryParse(Store.Str(doneKey, ""), out var dk) ? new DateTime(dk).AddMinutes(-15) : DateTime.MinValue;
+        var skipDirs = new List<string>();
+        var prio = PriorityOf(root);
         st.Expected = Math.Max(st.Expected, st.Files); st.Started = DateTime.Now;
         st.Phase = "listing"; st.Files = 0;
         using var c = Db();
@@ -407,7 +413,7 @@ static class Projects
         int files = 0;
         void Flush()
         {
-            if (rows.Count == 0) return;
+            if (rows.Count == 0 && skipDirs.Count == 0) return;
             using var tx = FolderIndex.BeginWait(c, ct);
             using var cmd = c.CreateCommand();
             cmd.Transaction = tx;
@@ -416,6 +422,17 @@ static class Projects
             var pe = cmd.Parameters.Add("$e", SqliteType.Text); var ps = cmd.Parameters.Add("$s", SqliteType.Integer); var pm = cmd.Parameters.Add("$m", SqliteType.Integer);
             cmd.Parameters.AddWithValue("$r", rk); cmd.Parameters.AddWithValue("$t", stamp);
             foreach (var r in rows) { pp.Value = r.Path; pn.Value = r.Name; pe.Value = r.Ext; ps.Value = r.Size; pm.Value = r.Mtime; cmd.ExecuteNonQuery(); }
+            if (skipDirs.Count > 0)
+            {
+                // unchanged folders: their files (direct children only) stay, marked as seen
+                using var up = c.CreateCommand();
+                up.Transaction = tx;
+                up.CommandText = "UPDATE pnames SET seen=$t WHERE root=$r AND path>$a AND path<$b AND instr(substr(path,$n),'\\')=0";
+                up.Parameters.AddWithValue("$t", stamp); up.Parameters.AddWithValue("$r", rk);
+                var pa = up.Parameters.Add("$a", SqliteType.Text); var pb = up.Parameters.Add("$b", SqliteType.Text); var pnn = up.Parameters.Add("$n", SqliteType.Integer);
+                foreach (var d in skipDirs) { var dd = d.TrimEnd('\\'); pa.Value = dd + "\\"; pb.Value = dd + "]"; pnn.Value = dd.Length + 2; up.ExecuteNonQuery(); }
+                skipDirs.Clear();
+            }
             tx.Commit();
             rows.Clear();
             st.Files = files;
@@ -428,17 +445,25 @@ static class Projects
             ct.ThrowIfCancellationRequested();
             var dir = stack.Pop();
             IEnumerable<FileSystemInfo> items;
-            try { items = new DirectoryInfo(dir).EnumerateFileSystemInfos().ToList(); } catch { continue; }
+            var unchanged = false;
+            if (since != DateTime.MinValue && !dir.Equals(root, StringComparison.OrdinalIgnoreCase))
+                try { unchanged = new DirectoryInfo(dir).LastWriteTime < since; } catch { }
+            try { items = unchanged ? new DirectoryInfo(dir).EnumerateDirectories().ToList() : new DirectoryInfo(dir).EnumerateFileSystemInfos().ToList(); } catch { continue; }
+            if (unchanged) skipDirs.Add(dir);
+            // 📋 most important first: submittals, then contract documents, then drawings (and folders you tagged in Projects & sources)
+            var subs = items.OfType<DirectoryInfo>().Where(d => !Private.IsMatch(d.Name) && (d.Attributes & FileAttributes.ReparsePoint) == 0)
+                .OrderBy(d => prio(d.FullName)).ToList();
+            foreach (var d in subs) stack.Push(d.FullName);   // pushed lowest first → the most important is listed first
             foreach (var i in items)
             {
-                if (i is DirectoryInfo d) { if (!Private.IsMatch(d.Name) && (d.Attributes & FileAttributes.ReparsePoint) == 0) stack.Push(d.FullName); continue; }
+                if (i is DirectoryInfo) continue;
                 if (i is not FileInfo f || Skip(f.FullName)) continue;
                 long size = 0, mt = 0;
                 try { size = f.Length; mt = f.LastWriteTime.Ticks; } catch { }
                 rows.Add((f.FullName, f.Name, f.Extension.ToLowerInvariant(), size, mt));
                 files++;
             }
-            if (rows.Count >= 3000 || (rows.Count > 0 && DateTime.Now - flushed > TimeSpan.FromSeconds(20))) { Flush(); flushed = DateTime.Now; }
+            if (rows.Count >= 3000 || skipDirs.Count >= 500 || ((rows.Count > 0 || skipDirs.Count > 0) && DateTime.Now - flushed > TimeSpan.FromSeconds(20))) { Flush(); flushed = DateTime.Now; }
         }
         Flush();
         using (var dtx = FolderIndex.BeginWait(c, ct))
@@ -450,7 +475,35 @@ static class Projects
             del.ExecuteNonQuery();
             dtx.Commit();
         }
-        st.Files = files; st.Expected = files; st.Read = CountRead(root); st.Last = DateTime.Now; st.Phase = "listed";
+        st.Files = files + (since != DateTime.MinValue ? 0 : 0); st.Expected = files; st.Read = CountRead(root); st.Last = DateTime.Now; st.Phase = "listed";
+        if (ReadAll.IsNetwork(root)) Store.Set(doneKey, stamp.ToString());
+        if (since != DateTime.MinValue) try { st.Files = st.Expected = Count(root); } catch { }
+    }
+
+    /// <summary>📋 How important a sub-folder is to list first: folders you tagged in 4.1 Projects &amp; sources (Submittals, Contract,
+    /// Drawings), else by name. Higher = sooner.</summary>
+    static Func<string, int> PriorityOf(string root)
+    {
+        var tagged = All().SelectMany(p => p.Sources).Where(s => s.Path.Length > 0 && s.Path.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+            .Select(s => (Path: s.Path.TrimEnd('\\'), s.Kind)).ToList();
+        static int ByKind(string k) => k switch { "Submittals" => 3, "Contract" => 2, "Specifications" => 2, "Drawings" => 1, _ => 0 };
+        return path =>
+        {
+            foreach (var t in tagged) if (path.StartsWith(t.Path, StringComparison.OrdinalIgnoreCase) || t.Path.StartsWith(path + "\\", StringComparison.OrdinalIgnoreCase)) { var k = ByKind(t.Kind); if (k > 0) return k; }
+            var n = System.IO.Path.GetFileName(path);
+            return Regex.IsMatch(n, @"submittal|\bmar\b|\bmir\b|\bwir\b|\bsdw?\b|\brfi\b", RegexOptions.IgnoreCase) ? 3
+                 : Regex.IsMatch(n, @"contract|tender|\bboq\b|specification", RegexOptions.IgnoreCase) ? 2
+                 : Regex.IsMatch(n, @"drawing|\bifc\b|\bdwg|shop", RegexOptions.IgnoreCase) ? 1 : 0;
+        };
+    }
+
+    static int Count(string root)
+    {
+        using var c = Db();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM pnames WHERE root=$r";
+        cmd.Parameters.AddWithValue("$r", RootKey(root));
+        return Convert.ToInt32(cmd.ExecuteScalar());
     }
 
     static void Upsert(string root, string path)
@@ -770,6 +823,7 @@ static class Projects
     public static class Indexer
     {
         static Thread thread;
+        static Task netLane;
         static readonly AutoResetEvent wake = new(false);
         static readonly ConcurrentQueue<(string Root, string Path)> changes = new();
         static readonly ConcurrentDictionary<string, bool> relist = new(StringComparer.OrdinalIgnoreCase);
@@ -843,13 +897,30 @@ static class Projects
                     // Single files added, changed, renamed or deleted: updated in a second.
                     var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                     while (changes.TryDequeue(out var ch)) if (seen.Add(ch.Path)) Upsert(ch.Root, ch.Path);
-                    foreach (var f in folders)
+                    // 💻 local folders first, in this loop (minutes) · 🖧 server folders in their own lane, one at a time — a slow server
+                    // listing over the VPN never keeps the local projects waiting
+                    foreach (var f in folders.OrderBy(x => ReadAll.IsNetwork(x) ? 1 : 0))
                     {
                         var st = Status.GetOrAdd(f, x => new State { Folder = x });
-                        var due = st.Last == DateTime.MinValue || DateTime.Now - st.Last > TimeSpan.FromHours(20) || relist.TryRemove(f, out _);
+                        if (st.Phase == "listing") continue;
+                        var net = ReadAll.IsNetwork(f);
+                        var due = st.Last == DateTime.MinValue || DateTime.Now - st.Last > TimeSpan.FromHours(net ? 1 : 20) || relist.TryRemove(f, out _);
                         if (!due) continue;
+                        if (net)
+                        {
+                            if (netLane != null && !netLane.IsCompleted) continue;
+                            var nf = f;
+                            netLane = Task.Run(() =>
+                            {
+                                if (!Directory.Exists(nf)) { st.Phase = "⚠ not reachable"; st.Last = DateTime.Now.AddMinutes(-50); return; }
+                                using var ncts = new CancellationTokenSource(TimeSpan.FromHours(24));
+                                try { ListFolder(nf, st, ncts.Token); }
+                                catch (Exception e) { st.Phase = "⚠ " + e.Message; st.Last = DateTime.Now.AddMinutes(-50); Log.Warn("projects", "list " + nf + ": " + e.Message); }
+                            });
+                            continue;
+                        }
                         if (!Directory.Exists(f)) { st.Phase = "⚠ not reachable"; continue; }
-                        using var cts = new CancellationTokenSource(ReadAll.IsNetwork(f) ? TimeSpan.FromHours(6) : TimeSpan.FromMinutes(30));
+                        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(30));
                         try { ListFolder(f, st, cts.Token); }
                         catch (Exception e) { st.Phase = "⚠ " + e.Message; Log.Warn("projects", "list " + f + ": " + e.Message); }
                     }

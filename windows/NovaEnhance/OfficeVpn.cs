@@ -660,7 +660,7 @@ static class OfficeVpn
         L(Now is State.Up ? true : Now is State.Off ? null : false, "Now: " + Line + (Way.Length > 0 ? " · last way: " + Way : "") + (tries > 0 ? $" · tries {tries}" : ""));
         try
         {
-            foreach (var e in Log.ReadAll().Where(x => x.Area == "office vpn").Take(6)) sb.Append("   log ").Append(Log.Format(e).Split('\n')[0]).Append('\n');
+            foreach (var e in Log.ReadAll().Where(x => x.Area == "office vpn" || x.Area == "2.3 office vpn").Take(6)) sb.Append("   log ").Append(Log.Format(e).Split('\n')[0]).Append('\n');
         }
         catch { }
         return sb.ToString();

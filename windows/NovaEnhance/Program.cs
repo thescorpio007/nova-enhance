@@ -252,23 +252,21 @@ class NovaContext : ApplicationContext
         };
         busyTip.Start();
         var m = new ContextMenuStrip { Font = Th.F(10) };
-        m.Items.Add("✦  Enhance selected text      Ctrl+Shift+E", null, (_, _) => Screens.Enhance());
-        m.Items.Add("💬  Nova Chat & AI Hub        Ctrl+Shift+A", null, (_, _) => Screens.Hub(null));
-        m.Items.Add("📌  My Work", null, (_, _) => Screens.Work(null));
-        m.Items.Add("🎯  Guided search…", null, (_, _) => Screens.Guided());
-        m.Items.Add("📂  Find a project file…", null, (_, _) => Screens.FindFile(null));
-        m.Items.Add("📄  Nova for this PDF                Ctrl+Shift+D", null, (_, _) => PdfCompanion.Open());
+        m.Items.Add("5.1  ✦  Enhance selected text      Ctrl+Shift+E", null, (_, _) => Screens.Enhance());
+        m.Items.Add("1.0  💬  Nova Chat & AI Hub        Ctrl+Shift+A", null, (_, _) => Screens.Hub(null));
+        m.Items.Add("0.1  📌  My Work", null, (_, _) => Screens.Work(null));
+        m.Items.Add("4.3  🎯  Find a file…", null, (_, _) => Screens.Guided());
+        m.Items.Add("4.5  📄  Nova for this PDF                Ctrl+Shift+D", null, (_, _) => PdfCompanion.Open());
         m.Items.Add(new ToolStripSeparator());
-        m.Items.Add("📁  Search inside a folder…", null, (_, _) => Screens.FolderSearch(null));
-        m.Items.Add("🔍  Search for email                Ctrl+Shift+F", null, (_, _) => Screens.Ask());
-        m.Items.Add($"💬  Talk about this email          Ctrl+Alt+{Store.Str("win_hk_mailask", "Q")}", null, (_, _) => Screens.MailAsk(null));
+        m.Items.Add("4.6  📁  Search inside a folder…", null, (_, _) => Screens.FolderSearch(null));
+        m.Items.Add("3.6  🔍  Search for email                Ctrl+Shift+F", null, (_, _) => Screens.Ask());
+        m.Items.Add($"3.7  💬  Talk about this email          Ctrl+Alt+{Store.Str("win_hk_mailask", "Q")}", null, (_, _) => Screens.MailAsk(null));
         m.Items.Add(new ToolStripSeparator());
-        m.Items.Add("☀  Morning brief", null, (_, _) => Screens.Brief());
-        m.Items.Add("🕘  Chat history", null, (_, _) => Screens.ChatHistory());
-        m.Items.Add("🔎  Search history (every search, 60 days)", null, (_, _) => Screens.SearchHistory());
-        m.Items.Add("📋  Submittal log (WIR · MIR · MAR · PQS · RFI · SDS)", null, (_, _) => Screens.Submittal());
+        m.Items.Add("3.8  ☀  Morning brief", null, (_, _) => Screens.Brief());
+        m.Items.Add("0.2  🕘  History…                          Ctrl+Shift+H", null, (_, _) => Screens.History(false));
+        m.Items.Add("4.4  📋  Submittal log (WIR · MIR · MAR · PQS · RFI · SDS)", null, (_, _) => Screens.Submittal());
         m.Items.Add(new ToolStripSeparator());
-        m.Items.Add("⚙  Settings", null, (_, _) => Screens.Settings());
+        m.Items.Add("8     ⚙  Settings", null, (_, _) => Screens.Settings());
         m.Items.Add("📁  Open the Nova Enhance folder", null, (_, _) => Shell.Open(Paths.Root));
         m.Items.Add("⬆  Check for updates", null, (_, _) => Screens.Settings("Updates"));
         m.Items.Add(new ToolStripSeparator());
@@ -295,6 +293,7 @@ class NovaContext : ApplicationContext
         hot.Register(2, Keys.F, Screens.Ask, "Ctrl+Shift+F");
         hot.Register(3, Keys.A, Screens.HubSelection, "Ctrl+Shift+A");
         hot.Register(4, Keys.D, () => PdfCompanion.Open(), "Ctrl+Shift+D");
+        hot.Register(6, Keys.H, () => Screens.History(false), "Ctrl+Shift+H");
         // ✦ Ask Nova about the email open or selected in Outlook — any Outlook window, no ribbon needed (Ctrl+Alt+Q by default).
         var mk = Store.Str("win_hk_mailask", "Q");
         if (Enum.TryParse<Keys>(mk, out var mkey)) hot.Register(5, mkey, () => Screens.MailAsk(null), "Ctrl+Alt+" + mk, 0x1 | 0x2);
@@ -562,16 +561,19 @@ static class Screens
         catch (Exception e) { Log.Error("Projects", e); }
     }
 
-    public static void SearchHistory()
+    public static void SearchHistory() => History(true);
+
+    static HistoryHub hub2;
+    /// <summary>0.2 🕘 History: 💬 Chats | 🔎 Searches in one window.</summary>
+    public static void History(bool searches)
     {
-        if (Program.OffUi(SearchHistory)) return;
+        if (Program.OffUi(() => History(searches))) return;
         try
         {
-            if (hist == null || hist.IsDisposed) hist = new HistoryForm();
-            Show(hist);
-            hist.Reload();
+            if (hub2 == null || hub2.IsDisposed) hub2 = new HistoryHub(searches); else hub2.Show(searches);
+            Show(hub2);
         }
-        catch (Exception e) { Log.Error("Search history", e); }
+        catch (Exception e) { Log.Error("History", e); }
     }
 
     public static void HubContinueDeep(string text, string id)
@@ -770,8 +772,15 @@ static class Screens
     public static void FindFile(string q)
     {
         if (Program.OffUi(() => FindFile(q))) return;
-        // 🎯 With guided mode on, "Find a project file" (with nothing to find yet) starts the guided search.
-        if (q == null && NovaEnhance.Guided.On && NovaEnhance.Guided.SearchFirst) { Guided(); return; }
+        // 🎯 One “Find a file”: with nothing to find yet, the ⚡ quick find + guided steps window.
+        if (string.IsNullOrEmpty(q)) { Guided(); return; }
+        FindFileList(q);
+    }
+
+    /// <summary>▦ The full file list (columns, filters, group by, drawing register, attach all) — from ⚡ Quick find, Nova Chat, the phone…</summary>
+    public static void FindFileList(string q)
+    {
+        if (Program.OffUi(() => FindFileList(q))) return;
         Guard.Screen("find");
         if (finder == null || finder.IsDisposed) finder = new FileFinderForm();
         Show(finder);
@@ -792,13 +801,7 @@ static class Screens
     }
 
     /// <summary>🕘 Chat history: every conversation, newest first, with search.</summary>
-    public static void ChatHistory()
-    {
-        if (Program.OffUi(ChatHistory)) return;
-        if (history == null || history.IsDisposed) history = new ChatHistoryForm();
-        else history.Reload();
-        Show(history);
-    }
+    public static void ChatHistory() => History(false);
 
     public static void AskFor(string q)
     {

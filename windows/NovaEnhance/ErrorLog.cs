@@ -62,6 +62,7 @@ static class Log
 
     static void Add(LogEntry e)
     {
+        try { e.Area = Features.Tag(e.Area); } catch { }   // 🔢 “4.5 PDF”: the feature number in front
         try
         {
             var key = e.Level + "|" + e.Area + "|" + (e.Message.Length > 160 ? e.Message[..160] : e.Message);

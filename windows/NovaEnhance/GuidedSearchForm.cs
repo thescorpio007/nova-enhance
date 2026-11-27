@@ -80,6 +80,13 @@ class GuidedSearchForm : NovaForm
     readonly Button stopBtn;
     // 🔎 the hint (“what are you looking for?”): every choice is searched at once while you choose
     readonly TextBox hint;
+    // ⚡ Quick find (4.3 🎯 Find a file): a number or words → file names at once, the same index as the file finder, no AI
+    readonly TextBox qBox;
+    readonly Label qInfo;
+    readonly ListView qList;
+    readonly Panel quick;
+    int qRun;
+    readonly System.Windows.Forms.Timer qTimer = new() { Interval = 450 };
     readonly Label hintInfo;
     readonly CheckBox novaOnly;
     readonly Panel resPanel;
@@ -94,12 +101,66 @@ class GuidedSearchForm : NovaForm
     /// <summary>⏱ Nova is working: the time counts in the line under the steps, and ■ Stop shows.</summary>
     void Working(bool on) { if (!stopBtn.IsDisposed) stopBtn.Visible = on; }
 
+    void QuickShow(bool on)
+    {
+        qInfo.Visible = on; qList.Visible = on;
+        quick.Height = on ? Math.Clamp(ClientSize.Height * 2 / 5, 220, 420) : 46;
+    }
+
+    async void QuickFind()
+    {
+        var q = qBox.Text.Trim();
+        var my = ++qRun;
+        if (q.Length < 2) { QuickShow(false); return; }
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        qInfo.Text = "⚡ Finding…"; qInfo.Visible = true;
+        List<Projects.FileRow> found;
+        try
+        {
+            var folders = Projects.All().SelectMany(p => p.Folders).Concat(Projects.General).ToList();
+            found = await Task.Run(() => Projects.FindFiles(q, folders, true, false, 3000, false));
+        }
+        catch (Exception e) { qInfo.Text = "⚠ " + e.Message; return; }
+        if (my != qRun || IsDisposed) return;
+        // 🖧 the server (official · MZA DC) first; a local copy of the same file is “same as the server ✓” or “⚠ older than the server”
+        bool Net(string p) => Projects.ReadAll.IsNetwork(p);
+        var serverCopy = found.Where(x => Net(x.Path)).GroupBy(x => Path.GetFileName(x.Path), StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.Max(x => x.Modified), StringComparer.OrdinalIgnoreCase);
+        var list = found.OrderBy(x => x.Status == "superseded" ? 1 : 0).ThenBy(x => Net(x.Path) ? 0 : 1).ThenByDescending(x => x.Modified).Take(400).ToList();
+        qList.BeginUpdate(); qList.Items.Clear();
+        foreach (var f in list)
+        {
+            var latest = f.Status != "superseded";
+            var net = Net(f.Path);
+            var src = net ? "🖧 Server · official" : "💻 Local copy";
+            Color? srcColor = null;
+            if (!net && serverCopy.TryGetValue(Path.GetFileName(f.Path), out var sm))
+            {
+                if (f.Modified < sm.AddMinutes(-2)) { src += " · ⚠ older"; srcColor = Th.Warn; }
+                else src += " · same ✓";
+            }
+            var dir = Path.GetDirectoryName(f.Path) ?? "";
+            var it = new ListViewItem(new[] { src, Path.GetFileName(f.Path), (f.Rev.Length > 0 ? f.Rev + " · " : "") + (latest ? "✓ latest" : "superseded"), dir.Length > 64 ? "…" + dir[^62..] : dir, f.Modified == default ? "" : f.Modified.ToString("dd MMM yyyy") })
+            { Tag = f.Path, ForeColor = latest ? Th.Text : Th.Muted, ToolTipText = f.Path, UseItemStyleForSubItems = false };
+            it.SubItems[0].ForeColor = srcColor ?? (net ? Color.FromArgb(0x9F, 0xD0, 0xFF) : Th.Muted);
+            if (latest && f.Rev.Length > 0) it.SubItems[2].ForeColor = Th.Good;
+            qList.Items.Add(it);
+        }
+        qList.EndUpdate();
+        var rec = SubmittalRecord.From(q, found.Select(x => (x.Path, x.Modified)));
+        qInfo.Text = found.Count == 0
+            ? $"⚡ No file name has “{q}” · try fewer words, or the guided steps below (Nova also reads inside files there)"
+            : (rec.Length > 0 ? rec + "   ·   " : "") + $"⚡ {found.Count:N0} file(s) · {clock.Elapsed.TotalSeconds:0.0} s · server first · double-click = open · right-click = every option · ▦ Full list";
+        QuickShow(true);
+    }
+
+    public void Quick(string q) { qBox.Text = q ?? ""; qBox.Focus(); qBox.SelectionStart = qBox.Text.Length; if (qBox.Text.Trim().Length >= 2) QuickFind(); }
+
     public GuidedSearchForm()
     {
-        Text = "🎯 Nova · Guided search";
+        Text = "4.3 🎯 Find a file";
         Width = Math.Max(820, Store.Int("win_guided_w", 980)); Height = Math.Max(560, Store.Int("win_guided_h", 760)); MinimumSize = new Size(640, 460);
         var top = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(14, 10, 14, 4), BackColor = Th.Bg, WrapContents = true };
-        top.Controls.Add(Th.L("🎯 Guided search", 13, Th.Text, true));
+        top.Controls.Add(Th.L("🎯 Find a file", 13, Th.Text, true));
         backBtn = Th.B("← Back", Back);
         top.Controls.Add(backBtn);
         top.Controls.Add(Th.B("⟲ Start again", () => Go(0)));
@@ -107,7 +168,7 @@ class GuidedSearchForm : NovaForm
         timerBtn.Visible = true;
         top.Controls.Add(timerBtn);
         top.Controls.Add(Th.B("💬 Free chat", () => Screens.Hub("")));
-        top.Controls.Add(Th.B("📂 Classic finder", () => Screens.FindFile("")));
+        top.Controls.Add(Th.B("▦ Full list", () => Screens.FindFileList(qBox.Text.Trim())));
         top.Controls.Add(Th.B("📐 Learn", () => Screens.FilingLearn(project?.Code)));
         top.Controls.Add(Th.B("⚙", () => Screens.Settings("🎯 Guided mode")));
         stopBtn = Th.B("■ Stop", () => { cts?.Cancel(); readCts?.Cancel(); Working(false); note.Text = "■ Stopped — pick again, or ← Back."; });
@@ -163,8 +224,38 @@ class GuidedSearchForm : NovaForm
         findGrip.SplitterMoved += (_, _) => { dragged = findBar.Height; Store.SetInt("win_guided_inh", dragged); };
         findGrip.DoubleClick += (_, _) => { dragged = 0; Store.SetInt("win_guided_inh", 0); FitFind(); };
 
+        // ⚡ Quick find on top: type a number or words → files at once; empty = the guided steps below
+        quick = new Panel { Dock = DockStyle.Top, Height = 46, BackColor = Color.FromArgb(0x14, 0x17, 0x22), Padding = new Padding(14, 6, 14, 4) };
+        var qRow = new Panel { Dock = DockStyle.Top, Height = 34 };
+        qBox = Th.Box(false); if (qBox is SpellBox qsb) qsb.Off = true;
+        qBox.Dock = DockStyle.Fill; qBox.Font = Th.F(11.5f);
+        qBox.PlaceholderText = "⚡ Quick find — a number or words (e.g. SLV-ZUC-AR-MAR-00124 · fire door) · Enter · leave empty for the guided steps below";
+        var qBtns = new FlowLayoutPanel { Dock = DockStyle.Right, AutoSize = true, WrapContents = false, BackColor = Color.Transparent };
+        qBtns.Controls.Add(Th.B("⚡ Find", QuickFind, true));
+        qBtns.Controls.Add(Th.B("▦ Full list", () => Screens.FindFileList(qBox.Text.Trim())));
+        qBtns.Controls.Add(Th.B("✕", () => { qBox.Text = ""; QuickShow(false); }));
+        qRow.Controls.Add(qBox); qRow.Controls.Add(qBtns);
+        qInfo = new Label { Dock = DockStyle.Top, Height = 22, Font = Th.F(9), ForeColor = Th.Muted, AutoEllipsis = true, UseMnemonic = false, Visible = false };
+        qList = new ListView { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, BackColor = Th.Card, ForeColor = Th.Text, BorderStyle = BorderStyle.None, Font = Th.F(9.5f), HeaderStyle = ColumnHeaderStyle.Nonclickable, Visible = false };
+        qList.Columns.Add("Source", 150); qList.Columns.Add("File", 360); qList.Columns.Add("Revision", 160); qList.Columns.Add("Folder", 330); qList.Columns.Add("Date", 100);
+        qList.DoubleClick += (_, _) => { if (qList.SelectedItems.Count > 0 && qList.SelectedItems[0].Tag is string qp) FileMenu.OpenInNova(qp); };
+        qList.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter && qList.SelectedItems.Count > 0 && qList.SelectedItems[0].Tag is string qp) { e.SuppressKeyPress = true; FileMenu.OpenInNova(qp); } };
+        FileMenu.Attach(qList, pt =>
+        {
+            ListViewItem it = pt is Point sp ? qList.GetItemAt(qList.PointToClient(sp).X, qList.PointToClient(sp).Y) : qList.SelectedItems.Count > 0 ? qList.SelectedItems[0] : null;
+            return it?.Tag as string;
+        });
+        quick.Controls.Add(qList); quick.Controls.Add(qInfo); quick.Controls.Add(qRow);
+        qBox.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; qTimer.Stop(); if (qList.Visible && qList.Items.Count > 0 && e.Control && qList.Items[0].Tag is string fp) FileMenu.OpenInNova(fp); else QuickFind(); }
+            else if (e.KeyCode == Keys.Down && qList.Visible && qList.Items.Count > 0) { e.SuppressKeyPress = true; qList.Focus(); qList.Items[0].Selected = true; }
+        };
+        qBox.TextChanged += (_, _) => { qTimer.Stop(); if (qBox.Text.Trim().Length == 0) QuickShow(false); else if (qBox.Text.Trim().Length >= 3) qTimer.Start(); };
+        qTimer.Tick += (_, _) => { qTimer.Stop(); QuickFind(); };
+
         body = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(14, 6, 14, 14), BackColor = Th.Bg };
-        Controls.Add(body); Controls.Add(resPanel); Controls.Add(findGrip); Controls.Add(findBar); Controls.Add(crumbs); Controls.Add(top);
+        Controls.Add(body); Controls.Add(resPanel); Controls.Add(findGrip); Controls.Add(findBar); Controls.Add(crumbs); Controls.Add(quick); Controls.Add(top);
         Resize += (_, _) => resPanel.Width = Math.Max(320, ClientSize.Width * 2 / 5);
         dragged = Store.Int("win_guided_inh", 0);
         findBar.Resize += (_, _) => FitFind();

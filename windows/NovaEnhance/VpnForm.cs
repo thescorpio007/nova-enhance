@@ -270,7 +270,7 @@ class VpnForm : NovaForm
     {
         string text = tab switch
         {
-            "hist" => string.Join(Environment.NewLine, Log.ReadAll().Where(e => e.Area == "office vpn").Take(200).Select(e => Log.Format(e).Split('\n')[0])),
+            "hist" => string.Join(Environment.NewLine, Log.ReadAll().Where(e => e.Area == "office vpn" || e.Area == "2.3 office vpn").Take(200).Select(e => Log.Format(e).Split('\n')[0])),
             "eng" => Engine(),
             "test" => testText.Length > 0 ? testText : "🧪 Testing… (up to 30 s)",
             _ => Tail(),

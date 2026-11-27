@@ -410,6 +410,11 @@ static class Smoke
             var rd = PdfPanel.Readable("**GL-01** set\n| Set | Item | Reference |\n|:---|:---|:---|\n| GL-01 | Narrow lock | IN.20.400.30 |\n🎓 EXPERT ADVICE");
             Ok(!rd.Contains("**") && !rd.Contains(":---") && rd.Contains("• GL-01 · Narrow lock · IN.20.400.30") && !rd.Contains("🎓"), "PDF window: answers shown clean (no ** marks, tables one line per row)");
             Ok(Brain.Defaults().ToJsonString().Contains("RD-01") && Brain.Defaults().ToJsonString().Contains("log.open_words"), "🧠 Brain: the reading-documents rules and the log words are built-in rules");
+            Ok(Features.Find("4.3").Any(f => f.Name.Contains("Find a file")) && Features.Find("vpn").Any(f => f.Num == "2.3") && Features.All.Select(f => f.Num).Distinct().Count() == Features.All.Length,
+               "🔢 feature numbers: unique, found by number or word");
+            Ok(Features.Tag("pdf") == "4.5 pdf" && Features.Tag("4.5 pdf") == "4.5 pdf", "🔢 the error log carries the feature number");
+            var sr = SubmittalRecord.From("SLV-ZUC-AR-MAR-00181", new[] { (@"S:\x\SLV-ZUC-AR-MAR-00181 - Glass\SLV-ZUC-AR-MAR-00181_Rev00.pdf", new DateTime(2026, 11, 9)), (@"S:\x\SLV-ZUC-AR-MAR-00181 - Glass\Response\SLV-ZUC-AR-MAR-00181_Rev00 - Code2.pdf", new DateTime(2026, 11, 25)) });
+            Ok(sr.Contains("Code 2") && sr.Contains("09 Nov") && sr.Contains("25 Nov"), "📋 a submittal record from its server folder: received, response, Code");
             Ok(Studio.Mode is "C" or "A" or "B" && Studio.Budget > 0, "Nova Studio: a mode and a budget");
             var fb = JsonNode.Parse("{\"sections\":[{\"name\":\"P\",\"rules\":[{\"id\":\"PR-S1\"},{\"id\":\"PR-S1\"},{\"id\":\"PR-S1-b\"}]}]}")!.AsObject();
             Ok(Brain.FixIds(fb) == 1 && Brain.Rules(fb).Select(x => x.Rule["id"]!.ToString()).Distinct().Count() == 3, "brain: two rules never share an id (repaired)");
