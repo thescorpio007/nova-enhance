@@ -119,9 +119,13 @@ static class Thinking
     static readonly Color Amber = Color.FromArgb(0xFF, 0xD2, 0x7A);
     static readonly System.Text.RegularExpressions.Regex Mine = new(@"^⏱ \d+:\d\d  (.*?)(?: · (?:⏳|⚠)[^\n]*?(?:not stuck|still working))?(.*)$", System.Text.RegularExpressions.RegexOptions.Singleline);
 
+    /// <summary>Lines that already have this clock (the ⏱ line clock of every window leaves them alone).</summary>
+    internal static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Label, object> Watched = new();
+
     public static void Watch(Label l)
     {
         if (l == null) return;
+        Watched.AddOrUpdate(l, new object());
         string baseText = l.Text; bool self = false;
         Color baseColor = l.ForeColor;
         DateTime started = DateTime.Now, changed = DateTime.Now;

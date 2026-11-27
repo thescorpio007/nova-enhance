@@ -189,7 +189,10 @@ class PdfPanel : NovaForm
     readonly Label title, where, status;
     readonly TextBox ask, find;
     readonly NumericUpDown page;
-    readonly LinkLabel answer;
+    readonly FlowLayoutPanel convo;
+    sealed class Turn { public string Q = "", A = "", When = ""; public LinkLabel Ans; public FlowLayoutPanel Box, Row; public Label QL; }
+    readonly List<Turn> turns = new();
+    Turn pending;
     readonly TextBox pInstr;
     Conversation pdfConv;
     readonly FlowLayoutPanel hits;
@@ -242,38 +245,17 @@ class PdfPanel : NovaForm
         r2.Controls.Add(page);
         r2.Controls.Add(Th.L("→ " + Store.TrLang, 9.5f, Th.Muted));
 
-        answer = s.Add(new LinkLabel
+        // 💬 Questions & answers, one after the other, in their own scrolling area (kept per PDF)
+        var ch = s.Add(Th.Row(false));
+        ch.Controls.Add(Th.L("💬 Questions & answers", 10, Th.Muted, true));
+        ch.Controls.Add(Th.B("✕ Clear", ClearConvo));
+        convo = s.Add(new FlowLayoutPanel
         {
-            AutoSize = true, Font = Th.F(10), ForeColor = Th.Text, LinkColor = Th.AccentText, ActiveLinkColor = Th.Accent, BackColor = Th.Card,
-            Padding = new Padding(8), Margin = new Padding(0, 8, 0, 4), Visible = false, UseMnemonic = false, Tag = "w"
-        });
-        answer.LinkClicked += (_, e) => { if (e.Link?.LinkData is int p) GoTo(p); };
-        var r3 = s.Add(Th.Row());
-        r3.Controls.Add(Th.B("⧉ Copy", () => { if (lastAnswer.Length > 0) Clipboard.SetText(lastAnswer); }));
-        r3.Controls.Add(Th.B("📊 Table → Excel", () =>
-        {
-            try { var x = FileTalk.ExportXlsx(lastAnswer, Path.GetFileNameWithoutExtension(path)); Shell.Open(x); status.Text = "📊 Saved: " + x; }
-            catch (Exception ex) { status.Text = "⚠ " + ex.Message; }
-        }));
-        r3.Controls.Add(Th.B("More detail", () => { if (lastQuestion.Length > 0) Ask(lastQuestion, true); else Summary(); }));
-        r3.Controls.Add(Lk(Th.B("👍", () =>
-        {
-            if (lastAnswer.Length == 0 || lastQuestion.Length == 0) { status.Text = "Ask a question first"; return; }
-            Memory.Good(lastQuestion, lastAnswer, path, new[] { path }, new[] { lastAnswer }, "pdf");
-            status.Text = "👍 🧠 Nova remembers this answer for similar questions on this PDF";
-        })));
-        r3.Controls.Add(Lk(Th.B("👎", () =>
-        {
-            if (lastQuestion.Length == 0) return;
-            Memory.Bad(lastQuestion, path, null, "pdf");
-            status.Text = "👎 Noted — Nova forgets that answer. Try More detail, or 📁 Search the project folder for the right file.";
-        })));
-        r3.Controls.Add(Lk(Th.B("📌 Save as task", () =>
-        {
-            if (lastAnswer.Length == 0) { status.Text = "Ask or summarise first, then save it as a task."; return; }
-            var link = new WorkItem { Kind = "file", Path = path, Subject = Path.GetFileName(path) };
-            Screens.Saved(Work.FromText((lastQuestion.Length > 0 ? lastQuestion : "Check") + " · " + Path.GetFileNameWithoutExtension(path), lastQuestion, lastAnswer, "pdf", new[] { link }));
-        })));
+            FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, BackColor = Color.FromArgb(0x12, 0x15, 0x1E),
+            Padding = new Padding(8), Margin = new Padding(0, 2, 0, 8), Height = 380, Tag = "s"
+        }, true);
+        convo.Resize += (_, _) => FitTurns();
+        Resize += (_, _) => { var h = Math.Clamp((int)(ClientSize.Height * 0.55), 260, 1400); if (convo.Height != h) { convo.Height = h; s.FitAll(); } };
 
         s.Add(Th.Section("Search in this PDF"));
         find = s.Add(Th.Box(false), true);
@@ -286,8 +268,10 @@ class PdfPanel : NovaForm
 
     public void OpenFile(string file, IntPtr viewer)
     {
-        if (!file.Equals(path, StringComparison.OrdinalIgnoreCase)) { segs = null; answer.Visible = false; hits.Controls.Clear(); lastAnswer = lastQuestion = ""; }
+        bool other = !file.Equals(path, StringComparison.OrdinalIgnoreCase);
+        if (other) { segs = null; hits.Controls.Clear(); lastAnswer = lastQuestion = ""; }
         path = file;
+        if (other) LoadConvo();
         title.Text = "📄 " + Path.GetFileName(file);
         where.Text = Path.GetDirectoryName(file) + "   (click to show the file)";
         status.Text = "Ready — ask, summarise, search or OCR this PDF.";
@@ -371,16 +355,136 @@ class PdfPanel : NovaForm
     void GoTo(int p) => Opener.Open(new FileHit { Path = path }, new PieceHit { Loc = "page " + p, Goto = "page:" + p, Text = "", Matches = new() }, "");
 
     /// <summary>Shows an answer; [p.3] / [p.3, 5] become links that open the PDF at that page.</summary>
-    void ShowAnswer(string text)
+    /// <summary>The answer under its question: the open question when there is one, else a new pair (Summary, Translate…).</summary>
+    void ShowAnswer(string text, string q = null, bool keep = false)
     {
         lastAnswer = text;          // the AI's own text (Table → Excel and Copy keep its table)
-        text = Readable(text);      // on screen: no ** marks, tables as one clear line per row, no empty emoji boxes
-        answer.Links.Clear();
-        answer.Text = text;
+        if (q != null && pending != null) { if (pending.A.Length == 0) Fill(pending, "■ Stopped"); pending = null; }   // Summary / Translate: their own pair
+        var t = q != null ? AddTurn(q) : pending ?? AddTurn(lastQuestion.Length > 0 ? lastQuestion : "✦");
+        Fill(t, text);
+        if (!keep) { pending = null; SaveConvo(); }
+    }
+
+    Turn AddTurn(string q, string when = null)
+    {
+        var t = new Turn { Q = q, When = when ?? DateTime.Now.ToString("dd MMM HH:mm") };
+        t.Box = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, BackColor = Color.Transparent, Margin = new Padding(0, 0, 0, 14) };
+        t.QL = new Label { AutoSize = true, Text = $"🧑 {t.When}\n{q}", BackColor = Color.FromArgb(0x3B, 0x35, 0x70), ForeColor = Color.White, Padding = new Padding(10, 6, 10, 6), Font = Th.F(10), UseMnemonic = false, Margin = new Padding(36, 0, 0, 4) };
+        t.Ans = new LinkLabel
+        {
+            AutoSize = true, Font = Th.F(10), ForeColor = Th.Text, LinkColor = Th.AccentText, ActiveLinkColor = Th.Accent, BackColor = Color.FromArgb(0x1B, 0x20, 0x30),
+            Padding = new Padding(10, 8, 10, 8), UseMnemonic = false, Text = "⏳ Nova is reading the PDF…", Margin = new Padding(0, 0, 36, 4)
+        };
+        t.Ans.LinkClicked += (_, e) => { if (e.Link?.LinkData is int p) GoTo(p); };
+        t.Row = Th.Row();
+        t.Row.Controls.Add(Th.B("⧉ Copy", () => { if (t.A.Length > 0) Clipboard.SetText(t.A); }));
+        t.Row.Controls.Add(Th.B("📊 Table → Excel", () =>
+        {
+            try { var x = FileTalk.ExportXlsx(t.A, Path.GetFileNameWithoutExtension(path)); Shell.Open(x); status.Text = "📊 Saved: " + x; }
+            catch (Exception ex) { status.Text = "⚠ " + ex.Message; }
+        }));
+        t.Row.Controls.Add(Th.B("More detail", () => { if (t.Q.Length > 1 && !t.Q.StartsWith("✦") && !t.Q.StartsWith("🌐")) Ask(t.Q, true); else Summary(); }));
+        t.Row.Controls.Add(Lk(Th.B("👍", () =>
+        {
+            if (t.A.Length == 0) return;
+            Memory.Good(t.Q, t.A, path, new[] { path }, new[] { t.A }, "pdf");
+            status.Text = "👍 🧠 Nova remembers this answer for similar questions on this PDF";
+        })));
+        t.Row.Controls.Add(Lk(Th.B("👎", () =>
+        {
+            Memory.Bad(t.Q, path, null, "pdf");
+            status.Text = "👎 Noted — Nova forgets that answer. Try More detail, or 📁 Search the project folder for the right file.";
+        })));
+        t.Row.Controls.Add(Lk(Th.B("📌 Save as task", () =>
+        {
+            if (t.A.Length == 0) return;
+            var link = new WorkItem { Kind = "file", Path = path, Subject = Path.GetFileName(path) };
+            Screens.Saved(Work.FromText(t.Q + " · " + Path.GetFileNameWithoutExtension(path), t.Q, t.A, "pdf", new[] { link }));
+        })));
+        foreach (Control c in t.Row.Controls) if (linked.Contains(c)) c.Visible = !AdminLock.Locked;
+        t.Box.Controls.Add(t.QL); t.Box.Controls.Add(t.Ans); t.Box.Controls.Add(t.Row);
+        convo.Controls.Add(t.Box);
+        turns.Add(t);
+        FitTurns();
+        convo.ScrollControlIntoView(t.Box);
+        return t;
+    }
+
+    void Fill(Turn t, string a)
+    {
+        t.A = a ?? "";
+        var text = Readable(t.A);
+        t.Ans.Links.Clear();
+        t.Ans.Text = text;
         foreach (Match m in Regex.Matches(text, @"\[(?:p\.?|page\s*)\s*(\d+)(?:\s*[,–-]\s*(?:p\.?\s*)?\d+)*\]", RegexOptions.IgnoreCase))
-            answer.Links.Add(m.Index, m.Length, int.Parse(m.Groups[1].Value));
-        answer.Visible = true;
-        s.FitAll();
+            t.Ans.Links.Add(m.Index, m.Length, int.Parse(m.Groups[1].Value));
+        FitTurns();
+        convo.ScrollControlIntoView(t.Box);
+    }
+
+    void FitTurns()
+    {
+        var w = Math.Max(200, convo.ClientSize.Width - convo.Padding.Horizontal - SystemInformation.VerticalScrollBarWidth - 4);
+        convo.SuspendLayout();
+        foreach (var t in turns)
+        {
+            t.QL.MaximumSize = new Size(w - 36, 0);
+            t.Ans.MaximumSize = new Size(w - 36, 0);
+            t.Row.MaximumSize = new Size(w, 0);
+        }
+        convo.ResumeLayout();
+    }
+
+    // 💾 kept per PDF on this PC (not while Nova is locked)
+    string ConvoFile()
+    {
+        var h = Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(Encoding.UTF8.GetBytes(path.ToLowerInvariant())))[..16];
+        return Path.Combine(Paths.Cache, "pdfconv", h + ".json");
+    }
+
+    void SaveConvo()
+    {
+        if (AdminLock.Locked || path.Length == 0) return;
+        try
+        {
+            var arr = new System.Text.Json.Nodes.JsonArray(turns.Where(t => t.A.Length > 0).TakeLast(40)
+                .Select(t => (System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject { ["q"] = t.Q, ["a"] = t.A, ["when"] = t.When }).ToArray());
+            var f = ConvoFile(); Directory.CreateDirectory(Path.GetDirectoryName(f)!);
+            File.WriteAllText(f, arr.ToJsonString());
+        }
+        catch (Exception e) { Log.Write("pdf conversation: " + e.Message); }
+    }
+
+    void LoadConvo()
+    {
+        convo.Controls.Clear(); turns.Clear(); pending = null;
+        if (AdminLock.Locked) return;
+        try
+        {
+            var f = ConvoFile();
+            if (!File.Exists(f)) return;
+            foreach (var x in (System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(f)) as System.Text.Json.Nodes.JsonArray ?? new()).OfType<System.Text.Json.Nodes.JsonObject>())
+                Fill(AddTurn(x["q"]?.ToString() ?? "", x["when"]?.ToString()), x["a"]?.ToString() ?? "");
+            if (turns.Count > 0) { lastQuestion = turns[^1].Q; lastAnswer = turns[^1].A; }
+        }
+        catch (Exception e) { Log.Write("pdf conversation: " + e.Message); }
+    }
+
+    void ClearConvo()
+    {
+        convo.Controls.Clear(); turns.Clear(); pending = null; lastAnswer = lastQuestion = "";
+        try { File.Delete(ConvoFile()); } catch { }
+        pdfConv = null;
+    }
+
+    /// <summary>The last questions and answers on this PDF, for a follow-up (“and for GL-02?”).</summary>
+    string Earlier()
+    {
+        var done = turns.Where(t => t != pending && t.A.Length > 0 && !t.A.StartsWith("⚠")).TakeLast(3).ToList();
+        if (done.Count == 0) return "";
+        var sb = new StringBuilder("Earlier in this conversation about this document:\n");
+        foreach (var t in done) sb.Append("Q: ").Append(t.Q).Append("\nA: ").Append(t.A.Length > 1200 ? t.A[..1200] + "…" : t.A).Append("\n");
+        return sb.Append('\n').ToString();
     }
 
     /// <summary>The answer made readable in this window: **bold** marks removed, a table shown as its column names then one line per
@@ -432,16 +536,22 @@ class PdfPanel : NovaForm
         if (q.Length == 0) { ask.Focus(); return; }
         if (files.Count > 0) detailed = true;
         cts?.Cancel(); var my = cts = new CancellationTokenSource();
+        var earlier = Earlier();
+        var prevQ = turns.LastOrDefault(t => t.A.Length > 0)?.Q ?? "";
+        if (pending != null && pending.A.Length == 0) Fill(pending, "■ Replaced by your next question");
+        pending = AddTurn(q + (detailed ? "  (more detail)" : ""));
+        ask.Text = "";
         var (card, changed) = detailed || AdminLock.InSandbox ? ((KnowCard)null, (List<string>)null) : Memory.Find(q, path, "pdf");
-        if (card != null) ShowAnswer($"🧠 Nova remembers (you liked this on {card.Saved:dd MMM yyyy}):\n{card.A}" + (changed.Count > 0 ? "\n⚠ Changed since: " + string.Join(", ", changed) : "") + "\n↻ Checking again…");
+        if (card != null) ShowAnswer($"🧠 Nova remembers (you liked this on {card.Saved:dd MMM yyyy}):\n{card.A}" + (changed.Count > 0 ? "\n⚠ Changed since: " + string.Join(", ", changed) : "") + "\n↻ Checking again…", keep: true);
         try
         {
             var all = await Text_();
-            if (all == null || all.Count == 0) { status.Text = "⚠ No readable text in this PDF — press 🔤 OCR this PDF first"; return; }
+            if (all == null || all.Count == 0) { status.Text = "⚠ No readable text in this PDF — press 🔤 OCR this PDF first"; ShowAnswer("⚠ No readable text in this PDF — press 🔤 OCR this PDF first"); return; }
             var prov = Ai.Current() ?? throw new AiException("Add an AI key in Settings → AI & API keys");
             lastQuestion = q;
             status.Text = $"Asking {prov.Label}…";
-            var terms = FolderAsk.LocalTerms(q);
+            // a short follow-up (“and for GL-02?”) also uses the words of the question before it
+            var terms = FolderAsk.LocalTerms(q.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length < 7 && prevQ.Length > 0 ? q + " " + prevQ : q);
             if (left.Count > 0)
             {
                 // ⚡ scanned pages not read yet: the ones that matter for THIS question first (bookmarks, contents, section pages), 3 at a time
@@ -469,7 +579,7 @@ class PdfPanel : NovaForm
             }
             if (files.Count > 0) sys += " The main document's pages are cited [p.N]; the user also attached other files, cited [F1], [F2]… (the main document is the first column when comparing)." + FileTalk.Rules;
             using var _aiFor16 = Ai.For("pdf", Ai.Picked(prov, "pdf"));   // ⚙ AI for each feature
-            var a = await Ai.Chat(sys, $"Document: {Path.GetFileName(path)}\n\n{Extracts(pick, 60000)}\n" + (attached.Length > 0 ? "ATTACHED FILES:\n" + attached + "\n" : "") + $"Question: {q}" + (pInstr.Text.Trim().Length > 0 ? "\nInstructions from the user (follow them for content, format, length and language): " + pInstr.Text.Trim() : ""), !detailed, false, prov, my.Token);
+            var a = await Ai.Chat(sys, $"Document: {Path.GetFileName(path)}\n\n{Extracts(pick, 60000)}\n" + earlier + (attached.Length > 0 ? "ATTACHED FILES:\n" + attached + "\n" : "") + $"Question: {q}" + (pInstr.Text.Trim().Length > 0 ? "\nInstructions from the user (follow them for content, format, length and language): " + pInstr.Text.Trim() : ""), !detailed, false, prov, my.Token);
             if (my.IsCancellationRequested) return;
             if (!AdminLock.InSandbox)   // 🔐 locked: nothing goes to your history or chats
             {
@@ -480,7 +590,7 @@ class PdfPanel : NovaForm
             ShowAnswer(a);
             status.Text = $"✓ Answer from this PDF · {prov.Label} — click a [p.N] to open that page" + Newer();
         }
-        catch (Exception e) { if (!my.IsCancellationRequested) status.Text = "⚠ " + e.Message; }
+        catch (Exception e) { if (!my.IsCancellationRequested) { status.Text = "⚠ " + e.Message; ShowAnswer("⚠ " + e.Message); } }
     }
 
     /// <summary>"⚠ a newer revision is in the folder: …" when the folder index knows one.</summary>
@@ -517,7 +627,7 @@ class PdfPanel : NovaForm
             var a = await Ai.Chat(sys, $"Document: {Path.GetFileName(path)}\n\n{Extracts(all, 60000)}", false, false, prov, my.Token);
             if (my.IsCancellationRequested) return;
             if (!AdminLock.InSandbox) History.Add("ask", prov.Id, Store.Model(prov.Id), "pdf-check", Path.GetFileName(path), a);
-            ShowAnswer(a);
+            ShowAnswer(a, "✦ Summary / check drawing");
             status.Text = $"✓ Summary and check · {prov.Label}" + Newer();
         }
         catch (Exception e) { if (!my.IsCancellationRequested) status.Text = "⚠ " + e.Message; }
@@ -538,7 +648,7 @@ class PdfPanel : NovaForm
             using var _aiFor14 = Ai.For("pdf");   // ⚙ AI for each feature
             var r = await Ai.Enhance(prov, "translate", text, CancellationToken.None);
             lastQuestion = "";
-            ShowAnswer($"[p.{p}] → {Store.TrLang}\n\n" + r);
+            ShowAnswer($"[p.{p}] → {Store.TrLang}\n\n" + r, $"🌐 Translate page {p} → {Store.TrLang}");
             status.Text = $"✓ Page {p} translated";
         }
         catch (Exception e) { status.Text = "⚠ " + e.Message; }

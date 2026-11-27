@@ -518,7 +518,7 @@ static class LabelClock
 
     static void Changed(Label l, Dictionary<Label, Run> runs)
     {
-        if (self) return;
+        if (self || Thinking.Watched.TryGetValue(l, out _)) return;   // that line has its own ⏱ already
         var t = l.Text ?? "";
         if (IsWorking(t))
         {
