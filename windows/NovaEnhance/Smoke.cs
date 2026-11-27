@@ -407,6 +407,9 @@ static class Smoke
             var al = Alike.Expand(new[] { "sliding", "door", "hardware" });
             Ok(al.Any(x => x.W == "track") && al.Any(x => x.W == "ironmongery") && Alike.Score("Pocket door track and roller set", al) > Alike.Score("Swing door hinge", al),
                "PDF search: related words (sliding → track, roller · hardware → ironmongery) rank the right page first");
+            var rd = PdfPanel.Readable("**GL-01** set\n| Set | Item | Reference |\n|:---|:---|:---|\n| GL-01 | Narrow lock | IN.20.400.30 |\n🎓 EXPERT ADVICE");
+            Ok(!rd.Contains("**") && !rd.Contains(":---") && rd.Contains("• GL-01 · Narrow lock · IN.20.400.30") && !rd.Contains("🎓"), "PDF window: answers shown clean (no ** marks, tables one line per row)");
+            Ok(Brain.Defaults().ToJsonString().Contains("RD-01") && Brain.Defaults().ToJsonString().Contains("log.open_words"), "🧠 Brain: the reading-documents rules and the log words are built-in rules");
             Ok(Studio.Mode is "C" or "A" or "B" && Studio.Budget > 0, "Nova Studio: a mode and a budget");
             var fb = JsonNode.Parse("{\"sections\":[{\"name\":\"P\",\"rules\":[{\"id\":\"PR-S1\"},{\"id\":\"PR-S1\"},{\"id\":\"PR-S1-b\"}]}]}")!.AsObject();
             Ok(Brain.FixIds(fb) == 1 && Brain.Rules(fb).Select(x => x.Rule["id"]!.ToString()).Distinct().Count() == 3, "brain: two rules never share an id (repaired)");

@@ -361,6 +361,7 @@ class NovaChat
                 continue;
             }
             List<Seg> segs = null;
+            if (fx == ".pdf" && FileText.OldPdfText(FolderIndex.Known(f))) FolderIndex.ForgetFile(f);   // kept before tables were read row by row: read again once
             if (fx == ".pdf" && FolderIndex.Known(f) == null)
             {
                 // ⚡ Not read before: the text pages now (seconds) + the scanned pages that matter first, 3 at a time; the rest in the background.

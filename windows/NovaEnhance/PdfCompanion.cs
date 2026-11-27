@@ -308,6 +308,7 @@ class PdfPanel : NovaForm
         var p = path;
         // 1 · read before by any Nova feature: instant (the shared Nova index)
         var known = FolderIndex.Known(p);
+        if (FileText.OldPdfText(known)) { FolderIndex.ForgetFile(p); known = null; }   // kept before tables were read row by row: read again once
         if (known != null)
         {
             segs = known.Where(x => (x.Text ?? "").Trim().Length > 0).ToList();
@@ -372,13 +373,40 @@ class PdfPanel : NovaForm
     /// <summary>Shows an answer; [p.3] / [p.3, 5] become links that open the PDF at that page.</summary>
     void ShowAnswer(string text)
     {
-        lastAnswer = text;
+        lastAnswer = text;          // the AI's own text (Table → Excel and Copy keep its table)
+        text = Readable(text);      // on screen: no ** marks, tables as one clear line per row, no empty emoji boxes
         answer.Links.Clear();
         answer.Text = text;
         foreach (Match m in Regex.Matches(text, @"\[(?:p\.?|page\s*)\s*(\d+)(?:\s*[,–-]\s*(?:p\.?\s*)?\d+)*\]", RegexOptions.IgnoreCase))
             answer.Links.Add(m.Index, m.Length, int.Parse(m.Groups[1].Value));
         answer.Visible = true;
         s.FitAll();
+    }
+
+    /// <summary>The answer made readable in this window: **bold** marks removed, a table shown as its column names then one line per
+    /// row (“• GL-01 · Narrow lock · IN.20.400.30 · JNF”), emoji this window cannot draw replaced by a plain mark.</summary>
+    internal static string Readable(string md)
+    {
+        var sb = new StringBuilder();
+        foreach (var raw in (md ?? "").Replace("\r", "").Split('\n'))
+        {
+            var l = raw.TrimEnd();
+            var t = l.Trim();
+            if (t.StartsWith("|") && t.EndsWith("|") && t.Length > 1)
+            {
+                var cells = t.Trim('|').Split('|').Select(c => c.Trim()).ToList();
+                if (cells.All(c => Regex.IsMatch(c, @"^:?-{2,}:?$"))) continue;          // the |---|---| line
+                bool header = sb.Length == 0 || !sb.ToString().TrimEnd().Split('\n').Last().StartsWith("•") && !sb.ToString().TrimEnd().Split('\n').Last().StartsWith("▦");
+                sb.Append(header ? "▦ " : "• ").AppendLine(string.Join(header ? "  ·  " : " · ", cells.Where(c => c.Length > 0)));
+                continue;
+            }
+            l = Regex.Replace(l, @"^#{1,6}\s*", "");
+            l = Regex.Replace(l, @"^\s*[\*\-]\s+", "• ");
+            sb.AppendLine(l);
+        }
+        var s = sb.ToString().Replace("**", "").Replace("__", "");
+        s = Regex.Replace(s, @"\p{Cs}{2}|\p{So}\uFE0F?", m => m.Value is "⚠" or "✓" or "✗" or "★" or "▦" or "◆" ? m.Value : "◆");
+        return Regex.Replace(s, @"\n{3,}", "\n\n").Trim();
     }
 
     static string Extracts(List<Seg> list, int max)
@@ -559,6 +587,14 @@ class PdfPanel : NovaForm
         q = (q ?? "").Trim();
         hits.Controls.Clear();
         if (q.Length == 0) return;
+        // ❓ a question typed in Search (it finds exact words only): asked with ✦ Ask instead
+        if (q.EndsWith("?") || Regex.IsMatch(q, @"^(what|which|who|where|when|why|how|did|does|do|is|are|was|were|can|could|give|list|show|find me|tell)\b", RegexOptions.IgnoreCase) && q.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length >= 4)
+        {
+            ask.Text = q;
+            status.Text = "↪ That is a question — Search finds exact words, so it was sent to ✦ Ask";
+            Ask(q, false);
+            return;
+        }
         var all = await Text_();
         int n = 0;
         foreach (var x in all ?? new())

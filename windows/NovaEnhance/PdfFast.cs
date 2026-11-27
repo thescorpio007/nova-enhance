@@ -52,10 +52,10 @@ static class PdfFast
             for (int i = 1; i <= info.Pages && i <= 3000; i++)
             {
                 string t;
-                try { t = string.Join(" ", doc.GetPage(i).GetWords().Select(w => w.Text)); } catch { t = ""; }
+                try { t = FileText.PageText(doc.GetPage(i)); } catch { t = ""; }
                 if (i % 10 == 0) say?.Invoke($"📄 page {i} of {info.Pages} · text pages");
                 if (t.Trim().Length < 20) info.Scanned.Add(i);
-                else info.Text.Add(new Seg($"page {i}", FileText.CleanText(t), $"page:{i}"));
+                else info.Text.Add(new Seg($"page {i}", t, $"page:{i}"));
             }
         }
         info.Marks = info.Marks.OrderBy(m => m.Page).ToList();
@@ -152,42 +152,42 @@ static class PdfFast
 /// plus your own in the 🧠 Brain: [search.alike = sliding: slide track rail roller, hardware: ironmongery fittings]. Designed by A.HAMROUNI</summary>
 static class Alike
 {
-    static readonly string[] Groups =
-    {
-        "sliding slide slides slider track tracks rail rails roller rollers pocket telescopic glide gliding",
-        "door doors leaf leaves doorset doorsets",
-        "hardware ironmongery fittings fixtures accessories handle handles lever lock locks lockset hinge hinges closer closers pull pulls stopper stoppers latch cylinder escutcheon bolt",
-        "window windows glazing glass glazed pane",
-        "fire fire-rated fr rated rating resistance",
-        "waterproofing waterproof membrane bitumen",
-        "tile tiles tiling porcelain ceramic",
-        "paint painting coating coatings primer stucco",
-        "ceiling ceilings gypsum board",
-        "wardrobe wardrobes closet joinery",
-        "kitchen kitchens cabinet cabinets worktop",
-        "sanitary wc basin mixer tap shower bath",
-        "aluminium aluminum profile profiles mullion transom",
-        "stone marble granite limestone",
-        "approval approved code status comment comments",
-        "warranty guarantee",
-        "finish finishes colour color ral"
-    };
+    /// <summary>The built-in groups, as the 🧠 Brain rule RD-04 holds them (“word: related words”, groups separated by commas).</summary>
+    public const string DefaultGroups =
+        "sliding: slide slides slider track rail roller rollers pocket telescopic glide, " +
+        "door: doors leaf leaves doorset doorsets, " +
+        "hardware: ironmongery fittings fixtures accessories handle handles lever lock locks lockset hinge hinges closer closers pull stopper latch cylinder escutcheon bolt pivot spring, " +
+        "window: windows glazing glass glazed pane, " +
+        "fire: fire-rated fr rated rating resistance, " +
+        "waterproofing: waterproof membrane bitumen, " +
+        "tile: tiles tiling porcelain ceramic, " +
+        "paint: painting coating coatings primer stucco, " +
+        "ceiling: ceilings gypsum board, " +
+        "wardrobe: wardrobes closet joinery, " +
+        "kitchen: kitchens cabinet cabinets worktop, " +
+        "sanitary: wc basin mixer tap shower bath, " +
+        "aluminium: aluminum profile profiles mullion transom, " +
+        "stone: marble granite limestone, " +
+        "approval: approved code status comment comments, " +
+        "warranty: guarantee, " +
+        "finish: finishes colour color ral";
 
     public static List<(string W, double Weight)> Expand(IEnumerable<string> terms)
     {
         var res = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
         var list = (terms ?? Enumerable.Empty<string>()).Select(t => t.Trim().ToLowerInvariant()).Where(t => t.Length > 1).Distinct().ToList();
         foreach (var t in list) res[t] = 2;
-        var groups = Groups.Select(g => g.Split(' ', StringSplitOptions.RemoveEmptyEntries)).ToList();
-        try
+        // 🧠 the groups of the Brain rule RD-04 (yours when you edited it), the built-in ones when the Brain is locked
+        List<string> lines;
+        try { lines = Brain.Unlocked ? Brain.ListOf("search.alike", DefaultGroups) : null; } catch { lines = null; }
+        lines ??= DefaultGroups.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim()).ToList();
+        var groups = new List<string[]>();
+        foreach (var line in lines)
         {
-            foreach (var line in Brain.ListOf("search.alike", ""))
-            {
-                var i = line.IndexOf(':');
-                if (i > 0) groups.Add(new[] { line[..i].Trim() }.Concat(line[(i + 1)..].Split(new[] { ' ', '/', ';' }, StringSplitOptions.RemoveEmptyEntries)).ToArray());
-            }
+            var i = line.IndexOf(':');
+            var words = (i > 0 ? line[..i] + " " + line[(i + 1)..] : line).Split(new[] { ' ', '/' }, StringSplitOptions.RemoveEmptyEntries);
+            if (words.Length > 0) groups.Add(words);
         }
-        catch { }
         foreach (var t in list)
             foreach (var g in groups.Where(g => g.Any(w => w.Equals(t, StringComparison.OrdinalIgnoreCase) || t.Length > 4 && w.StartsWith(t[..^1], StringComparison.OrdinalIgnoreCase))))
                 foreach (var w in g) if (!res.ContainsKey(w)) res[w] = 1;

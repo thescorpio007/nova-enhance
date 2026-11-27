@@ -125,6 +125,43 @@ static class FileText
     // ------------------------------------------------------------------ helpers
 
     public static string CleanText(string s) => Clean(s);
+
+    /// <summary>A PDF page as lines, left to right, with “ | ” between cells that are far apart — so a schedule keeps each row
+    /// together (“2 | Narrow Lock | Mortise sash lock… | IN.20.400.30 | PVD TITANIUM BLACK | JNF - PORTUGAL | 1 | Each”).</summary>
+    public static string PageText(UglyToad.PdfPig.Content.Page page)
+    {
+        var words = page.GetWords().Where(w => !string.IsNullOrWhiteSpace(w.Text)).ToList();
+        if (words.Count == 0) return "";
+        var lines = new List<List<UglyToad.PdfPig.Content.Word>>();
+        foreach (var w in words.OrderByDescending(w => Math.Round(w.BoundingBox.Bottom, 1)).ThenBy(w => w.BoundingBox.Left))
+        {
+            var h = Math.Max(2, w.BoundingBox.Height);
+            var line = lines.Count > 0 && Math.Abs(lines[^1][0].BoundingBox.Bottom - w.BoundingBox.Bottom) < h * 0.55 ? lines[^1] : null;
+            if (line == null) lines.Add(line = new());
+            line.Add(w);
+        }
+        var sb = new StringBuilder();
+        foreach (var l in lines)
+        {
+            UglyToad.PdfPig.Content.Word prev = null;
+            foreach (var w in l.OrderBy(w => w.BoundingBox.Left))
+            {
+                if (prev != null)
+                {
+                    var charW = prev.BoundingBox.Width / Math.Max(1, prev.Text.Length);
+                    sb.Append(w.BoundingBox.Left - prev.BoundingBox.Right > Math.Max(3 * charW, 8) ? " | " : " ");
+                }
+                sb.Append(w.Text);
+                prev = w;
+            }
+            sb.Append('\n');
+        }
+        return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>True when a PDF was kept in the Nova index before pages were read row by row (it is read again once).</summary>
+    public static bool OldPdfText(List<Seg> segs) =>
+        segs != null && segs.Any(s => !(s.Loc ?? "").Contains("OCR") && (s.Text ?? "").Length > 300) && !segs.Any(s => !(s.Loc ?? "").Contains("OCR") && (s.Text ?? "").Contains('\n'));
     static string Clean(string s) => Regex.Replace(s ?? "", @"[ \t ]+", " ").Trim();
 
     /// <summary>Joins small pieces into segments of about MaxSegChars, keeping the location of the first piece.</summary>
@@ -423,7 +460,7 @@ static class FileText
             for (int i = 1; i <= pages && i <= 3000; i++)
             {
                 string t;
-                try { t = string.Join(" ", doc.GetPage(i).GetWords().Select(w => w.Text)); } catch { t = ""; }
+                try { t = PageText(doc.GetPage(i)); } catch { t = ""; }
                 if (i % 25 == 0) PageProgress?.Invoke(i, pages);
                 if (t.Trim().Length < 20) noText.Add(i);
                 else res.Add(new Seg($"page {i}", Clean(t), $"page:{i}"));

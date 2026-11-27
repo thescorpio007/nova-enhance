@@ -585,6 +585,7 @@ static class Brain
                     R("SL-15", "Meetings", "MOM = minutes of meetings, kick-off meetings and any meeting record (“MOM-00077-DRAFT”, “Progress Meeting No. 115 held on …”, “Kick-Off Meeting”, “Draft MoM”): Open while only the DRAFT exists, Closed when the final minutes are issued. Each series is a register: a missing meeting or EI number is listed in Check."),
                     R("SL-16", "Daily reports", "DSR (contractor daily reports) are listed as “Received”: nothing to close."),
                     R("SL-17", "Project codes", "A project code read wrong from a subject (“FSLV”, “LV”) is corrected to the known project (SLV, RS5…)."),
+                    R("SL-19", "Status words", "In the 📋 Submittal log search box these words set the Status: [log.open_words = outstanding, open, pending, not answered, not replied, unanswered, awaiting, waiting, not closed, still open] = Open + Overdue · [log.overdue_words = overdue, late, delayed, past due] · [log.closed_words = closed, answered, replied, approved, done]."),
                     R("SL-18", "Overdue · other types", "Overdue after [overdue.MSS = 14] MSS, [overdue.SSM = 14] SSM, [overdue.TSR = 14] TSR, [overdue.RPT = 14] RPT, [overdue.HSE = 14] HSE, [overdue.CAL = 14] CAL, [overdue.RTS = 7] RTS, [overdue.HOV = 14] HOV, [overdue.PLN = 14] PLN, [overdue.LTR = 14] LTR, [overdue.PAY = 14] PAY, [overdue.VO = 14] VO, [overdue.AUTH = 14] AUTH, [overdue.SOR = 7] SOR, [overdue.NCR = 14] NCR, [overdue.EI = 7] EI, [overdue.MOM = 7] MOM days.")),
                 // 🧭 How Nova reads what you type in the search box (used on the PC and the phone, never sent to the AI).
                 S("intent", "🧭", "What I mean", "IN", new[] { "local" },
@@ -611,6 +612,12 @@ static class Brain
                 S("privacy", "🔒", "Privacy", "PV", new[] { "local" },
                     R("PV-01", "Private words", "Files, folders and emails matching the 🔒 private words (Settings → 📁 Projects) are never read, never sent to the AI or to Google."),
                     R("PV-02", "Consent", "Pictures and recordings leave the PC only after you agree.")),
+                // 📄 How Nova reads and answers from documents (PDF window, Nova Chat files, folder questions) — edit or switch off any of them.
+                S("documents", "📄", "Reading documents", "RD", new[] { "files" },
+                    R("RD-01", "Every item, with its reference", "When I ask for references, codes, models, types or names in a document, list EVERY item found — one row each with its reference / code, maker, finish and quantity when given (a table) — never only the set or group name."),
+                    R("RD-02", "Schedules row by row", "Schedules and tables (hardware, doors, finishes, BOQ) come row by row with cells separated by “ | ”: keep each row's values together and give the door / item codes each set applies to (e.g. GD-02, GD-03, GD-06)."),
+                    R("RD-03", "Title against content", "If a submittal's title or cover does not match what its pages show (e.g. “Ironmongery for Wooden Doors” while the schedule lists glass doors), say so on a line starting with ⚠."),
+                    R("RD-04", "Related words", "Searching inside documents also finds related words: [search.alike = " + Alike.DefaultGroups + "]")),
                 S("lessons", "🧪", "Lessons learned", "LL", new[] { "all" },
                     R("LL-01", "Pictures in emails", "When replacing text in an email that has pictures or tables, change only the paragraphs that hold words; if that is not possible, change nothing and offer Copy."))
             )
