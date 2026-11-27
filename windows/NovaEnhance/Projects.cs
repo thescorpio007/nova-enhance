@@ -398,7 +398,7 @@ static class Projects
     {
         var stamp = DateTime.Now.Ticks;
         var rk = RootKey(root);
-        // 🖧 A server folder listed completely before: only folders whose date changed are read again (a folder's date changes when a
+        // 🏢 A server folder listed completely before: only folders whose date changed are read again (a folder's date changes when a
         // file is added, removed or renamed in it) — the others keep their names. Much faster over the VPN.
         var doneKey = "win_listed_" + Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes(root.ToLowerInvariant())))[..12];
         var since = ReadAll.IsNetwork(root) && long.TryParse(Store.Str(doneKey, ""), out var dk) ? new DateTime(dk).AddMinutes(-15) : DateTime.MinValue;
@@ -770,18 +770,51 @@ static class Projects
         path = FileCheck.Resolve(path, out var why) ?? throw new FileNotFoundException(why);
         // One store for all Nova: read once by any feature = known by all.
         var known = FolderIndex.Known(path);
-        if (known != null) return (known, true);
+        if (known != null)
+        {
+            // ⚡ read quickly in the background (text layer + first scanned pages): you asked about it — the whole file is read now, in the background
+            if (FolderIndex.IsQuick(path)) ReadAll.FullLater(path);
+            return (known, true);
+        }
+        return (ReadNow(path, ct, false), false);
+    }
+
+    /// <summary>
+    /// Reads the file now and keeps it in the shared index. quick = ⚡ the background's first pass: a PDF's text layer + its first
+    /// 3 scanned pages (seconds instead of minutes); the whole file is read later when you open it or ask about it.
+    /// </summary>
+    internal static List<Seg> ReadNow(string path, CancellationToken ct, bool quick)
+    {
         List<Seg> got = null; Exception err = null;
+        var note = "read on demand";
         var readPath = LongPath.Usable(path);   // a folder name Windows can't open: read through a copy
-        var t = new Thread(() => { try { got = FileText.Extract(readPath); } catch (Exception e) { err = e; } }) { IsBackground = true, Name = "Nova read" };
+        var t = new Thread(() =>
+        {
+            try
+            {
+                if (quick && readPath.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
+                    try
+                    {
+                        var info = PdfFast.Scan(readPath);
+                        var first = info.Scanned.Take(3).ToList();
+                        var segs = info.Text.ToList();
+                        if (first.Count > 0) segs.AddRange(PdfFast.OcrPages(readPath, first));
+                        if (info.Scanned.Count > first.Count) note = $"{FolderIndex.QuickNote} · {info.Scanned.Count - first.Count} scanned page(s) left";
+                        got = segs.OrderBy(PdfFast.PageOf).ToList();
+                    }
+                    finally { PdfFast.Forget(readPath); }
+                else got = FileText.Extract(readPath);
+            }
+            catch (Exception e) { err = e; }
+        }) { IsBackground = true, Name = "Nova read" };
         t.SetApartmentState(ApartmentState.STA);
         t.Start();
         while (!t.Join(200)) ct.ThrowIfCancellationRequested();
         if (err != null) throw err;
         got = (got ?? new()).Where(s => (s.Text ?? "").Trim().Length > 0).Take(800).ToList();
-        FolderIndex.Remember(path, got);
+        FolderIndex.Remember(path, got, note);
         foreach (var st in Status.Values.Where(s => path.StartsWith(s.Folder.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase))) st.Read++;
-        return (got, false);
+        return got;
     }
 
     public class Passage { public string Path = "", Loc = "", Goto = "", Text = "", Status = ""; public double Score; }
@@ -897,7 +930,7 @@ static class Projects
                     // Single files added, changed, renamed or deleted: updated in a second.
                     var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                     while (changes.TryDequeue(out var ch)) if (seen.Add(ch.Path)) Upsert(ch.Root, ch.Path);
-                    // 💻 local folders first, in this loop (minutes) · 🖧 server folders in their own lane, one at a time — a slow server
+                    // 💻 local folders first, in this loop (minutes) · 🏢 server folders in their own lane, one at a time — a slow server
                     // listing over the VPN never keeps the local projects waiting
                     foreach (var f in folders.OrderBy(x => ReadAll.IsNetwork(x) ? 1 : 0))
                     {
@@ -1014,11 +1047,172 @@ static class Projects
 
         static readonly ConcurrentDictionary<string, bool> netCache = new(StringComparer.OrdinalIgnoreCase);
         /// <summary>🌐 A folder on the network (\\server\… or a mapped network drive like S:).</summary>
-        public static bool IsNetwork(string folder) => netCache.GetOrAdd(folder ?? "", f =>
+        public static bool IsNetwork(string folder)
         {
+            var f = folder ?? "";
             if (f.StartsWith(@"\\")) return true;
-            try { var r = Path.GetPathRoot(f); return r != null && new DriveInfo(r).DriveType == DriveType.Network; } catch { return false; }
-        });
+            string r; try { r = Path.GetPathRoot(f) ?? ""; } catch { return false; }
+            return r.Length > 0 && netCache.GetOrAdd(r, x => { try { return new DriveInfo(x).DriveType == DriveType.Network; } catch { return false; } });
+        }
+
+        static readonly ConcurrentDictionary<string, (bool Up, DateTime At)> online = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>🏢 The server drive of this path answers (checked at most once a minute; local drives always do).</summary>
+        public static bool RootOnline(string path)
+        {
+            if (!IsNetwork(path)) return true;
+            string r;
+            try { r = path.StartsWith(@"\\") ? string.Join("\\", path.TrimStart('\\').Split('\\').Take(2)).Insert(0, @"\\") : Path.GetPathRoot(path) ?? ""; } catch { return false; }
+            if (online.TryGetValue(r, out var o) && DateTime.Now - o.At < TimeSpan.FromSeconds(o.Up ? 60 : 30)) return o.Up;
+            bool up;
+            try { var t = Task.Run(() => Directory.Exists(r)); up = t.Wait(4000) && t.Result; } catch { up = false; }
+            online[r] = (up, DateTime.Now);
+            return up;
+        }
+
+        /// <summary>Folders named Old · Superseded · Archive · Backup · Obsolete: their files keep their names only (not read inside).</summary>
+        static readonly Regex OldFolder = new(@"\\[_\-\s\d.]*(old|superseded|archived?|archives|backups?|back up|obsolete)[_\-\s\d.()]*\\", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        public static bool InOldFolder(string path) => OldFolder.IsMatch(path ?? "");
+
+        static List<string> contractCache = new(); static DateTime contractAt = DateTime.MinValue;
+        static List<string> Contract()
+        {
+            if (DateTime.Now - contractAt > TimeSpan.FromMinutes(5)) { try { contractCache = ContractArea.ReadFirst() ?? new(); } catch { contractCache = new(); } contractAt = DateTime.Now; }
+            return contractCache;
+        }
+        static bool InContract(string path) => Contract().Any(f => path.StartsWith(f.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>The same file (name + size) is on this PC (not the server): the server copy needs no reading of its own.</summary>
+        static bool SameOnPc(SqliteConnection c, string path)
+        {
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "SELECT path FROM pnames WHERE name=$n AND size=(SELECT size FROM pnames WHERE path=$p) AND path<>$p LIMIT 20";
+            cmd.Parameters.AddWithValue("$n", Path.GetFileName(path));
+            cmd.Parameters.AddWithValue("$p", path);
+            using var r = cmd.ExecuteReader();
+            while (r.Read()) if (!IsNetwork(r.GetString(0))) return true;
+            return false;
+        }
+
+        /// <summary>Why a file needs no reading of its own (null = it does).</summary>
+        static string Rule(SqliteConnection c, string path, Dictionary<string, List<(string, Revisions.Doc)>> sib)
+        {
+            if (InOldFolder(path)) return "names only (old / archive folder)";
+            if (LatestOnly && Superseded(c, path, sib)) return "older revision";
+            if (NetSkipCopies && IsNetwork(path) && (CopyRead(c, path) || SameOnPc(c, path))) return "same file on this PC (read there)";
+            return null;
+        }
+
+        // ------------------------------------------------------------------ 🧹 honest count: the rules are applied to every file first
+
+        static DateTime swept = DateTime.MinValue; static long sweptNames = -1;
+        public static int LeftOutNow;
+
+        /// <summary>
+        /// Goes once through every file still to read and leaves out, at once, the older revisions, the server copies of files on this PC
+        /// and the old/archive folders — so the count and the time left are the real ones (repeated when the names change, at most hourly).
+        /// </summary>
+        static void Sweep()
+        {
+            long names;
+            try { using var c0 = Db(); using var k = c0.CreateCommand(); k.CommandText = "SELECT COUNT(*) FROM pnames"; names = Convert.ToInt64(k.ExecuteScalar()); } catch { return; }
+            if (names == sweptNames && DateTime.Now - swept < TimeSpan.FromHours(6)) return;
+            if (sweptNames >= 0 && DateTime.Now - swept < TimeSpan.FromHours(1)) return;
+            var folders = (On ? Chosen().SelectMany(p => p.Folders) : Enumerable.Empty<string>()).Concat(ProjectSources.TextFolders()).Distinct(StringComparer.OrdinalIgnoreCase).Select(RootKey).ToList();
+            if (folders.Count == 0) return;
+            long max = (long)FolderIndex.MaxMb * 1024 * 1024;
+            string last = ""; int checkedN = 0, left = 0;
+            try
+            {
+                using var c = Db();
+                while (true)
+                {
+                    if (!On && ProjectSources.TextFolders().Count == 0) return;
+                    var page = new List<string>();
+                    using (var cmd = c.CreateCommand())
+                    {
+                        cmd.CommandText = $"SELECT p.path FROM pnames p LEFT JOIN files f ON f.path=p.path LEFT JOIN pskip s ON s.path=p.path WHERE ({In(cmd, folders, "p")}) AND p.ext IN ({ExtIn(cmd)}) AND p.size <= $max AND f.id IS NULL AND s.path IS NULL AND p.path > $last ORDER BY p.path LIMIT 4000";
+                        cmd.Parameters.AddWithValue("$max", max); cmd.Parameters.AddWithValue("$last", last);
+                        using var r = cmd.ExecuteReader();
+                        while (r.Read()) page.Add(r.GetString(0));
+                    }
+                    if (page.Count == 0) break;
+                    last = page[^1];
+                    var sib = new Dictionary<string, List<(string, Revisions.Doc)>>(StringComparer.OrdinalIgnoreCase);
+                    var outs = new List<(string, string)>();
+                    foreach (var path in page) { var why = Rule(c, path, sib); if (why != null) outs.Add((path, why)); }
+                    if (outs.Count > 0)
+                    {
+                        using var tx = FolderIndex.BeginWait(c, CancellationToken.None);
+                        using var ins = c.CreateCommand();
+                        ins.Transaction = tx;
+                        ins.CommandText = "INSERT OR REPLACE INTO pskip(path,why,at) VALUES($p,$w,$t)";
+                        var pp = ins.Parameters.Add("$p", SqliteType.Text); var pw = ins.Parameters.Add("$w", SqliteType.Text);
+                        ins.Parameters.AddWithValue("$t", DateTimeOffset.Now.ToUnixTimeMilliseconds());
+                        foreach (var (pa, w) in outs) { pp.Value = pa; pw.Value = w; ins.ExecuteNonQuery(); }
+                        tx.Commit();
+                    }
+                    checkedN += page.Count; left += outs.Count; LeftOutNow = left;
+                    Phase = $"🧹 sorting the files to read · {checkedN:N0} checked · {left:N0} need no reading of their own (older revisions, copies, old folders)";
+                }
+                swept = DateTime.Now; sweptNames = names;
+            }
+            catch (Exception e) { Log.Warn("read all", "sorting: " + e.Message); swept = DateTime.Now; sweptNames = names; }
+            counted = DateTime.MinValue;
+        }
+
+        // ------------------------------------------------------------------ the folders of a query: by the stored folder column (fast), else by path
+
+        static HashSet<string> rootsCache = new(StringComparer.OrdinalIgnoreCase); static DateTime rootsAt = DateTime.MinValue;
+        static string In(SqliteCommand cmd, List<string> keys, string a, string tag = "rk")
+        {
+            if (DateTime.Now - rootsAt > TimeSpan.FromMinutes(2))
+                try
+                {
+                    using var c = Db(); using var q = c.CreateCommand(); q.CommandText = "SELECT DISTINCT root FROM pnames";
+                    var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    using var r = q.ExecuteReader(); while (r.Read()) if (!r.IsDBNull(0)) set.Add(r.GetString(0));
+                    rootsCache = set; rootsAt = DateTime.Now;
+                }
+                catch { }
+            var asRoot = keys.Where(rootsCache.Contains).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var rest = keys.Where(k => !rootsCache.Contains(k)).ToList();
+            var parts = new List<string>();
+            if (asRoot.Count > 0)
+            {
+                for (int i = 0; i < asRoot.Count; i++) cmd.Parameters.AddWithValue($"${tag}{i}", asRoot[i]);
+                parts.Add($"{a}.root IN ({string.Join(",", asRoot.Select((_, i) => $"${tag}{i}"))})");
+            }
+            for (int i = 0; i < rest.Count; i++)
+            {
+                var pre = rest[i].TrimEnd('\\') + "\\";
+                parts.Add($"substr(lower({a}.path),1,${tag}n{i})=${tag}p{i}");
+                cmd.Parameters.AddWithValue($"${tag}n{i}", pre.Length); cmd.Parameters.AddWithValue($"${tag}p{i}", pre.ToLowerInvariant());
+            }
+            return parts.Count == 0 ? "0" : string.Join(" OR ", parts);
+        }
+
+        // ------------------------------------------------------------------ 📖 the whole file, later: you opened it or asked about it
+
+        static readonly ConcurrentQueue<string> fullQ = new();
+        static readonly ConcurrentDictionary<string, bool> fullSet = new(StringComparer.OrdinalIgnoreCase);
+        static Thread fullThread;
+        public static void FullLater(string path)
+        {
+            if (!fullSet.TryAdd(path, true)) return;
+            fullQ.Enqueue(path);
+            if (fullThread != null) return;
+            fullThread = new Thread(() =>
+            {
+                while (true)
+                {
+                    if (!fullQ.TryDequeue(out var p)) { Thread.Sleep(3000); continue; }
+                    try { if (FolderIndex.IsQuick(p) && RootOnline(p)) ReadNow(p, CancellationToken.None, false); }
+                    catch (Exception e) { Log.Warn("read all", "whole file " + Path.GetFileName(p) + ": " + e.Message); }
+                    finally { fullSet.TryRemove(p, out _); }
+                }
+            }) { IsBackground = true, Name = "Nova read whole file", Priority = ThreadPriority.BelowNormal };
+            fullThread.Start();
+        }
 
         static bool NetworkMayRun() => Rush || NetRead == "always" || (NetRead == "afterhours" && (!Gentle.WorkingNow || Gentle.Idle > TimeSpan.FromMinutes(3)));
 
@@ -1108,12 +1302,15 @@ static class Projects
         }
         public static List<Prog> Counts = new();
         public static TimeSpan? Left;
+        /// <summary>"about 6.5 h of reading left" (reading time — it runs when the PC is idle or after working hours).</summary>
+        public static string LeftText => Left is { } l && l > TimeSpan.Zero ? (l.TotalMinutes < 90 ? $"about {Math.Max(1, (int)Math.Ceiling(l.TotalMinutes))} min left" : l.TotalHours < 48 ? $"about {l.TotalHours:0.#} h of reading left" : $"about {l.TotalDays:0.#} days of reading left") : "";
         public static volatile string Error = "";
 
         static readonly string[] Readable = { ".pdf", ".doc", ".docx", ".docm", ".rtf", ".odt", ".xls", ".xlsx", ".xlsm", ".xlsb", ".csv", ".ppt", ".pptx", ".pptm", ".txt", ".msg", ".eml" };
         static readonly AutoResetEvent wake = new(false);
         static Thread thread;
-        static double secsPerFile = 20;   // learnt as it reads
+        static double secsPerFile = 8;   // learnt as it reads (⚡ quick pass: seconds per file)
+        static readonly object lk = new();
         static DateTime counted = DateTime.MinValue;
 
         public static void Start()
@@ -1147,7 +1344,7 @@ static class Projects
                     using var c = Db();
                     using var cmd = c.CreateCommand();
                     cmd.CommandText = $"SELECT COUNT(*), SUM(CASE WHEN f.id IS NULL THEN 0 ELSE 1 END) FROM pnames p LEFT JOIN files f ON f.path=p.path LEFT JOIN pskip s ON s.path=p.path " +
-                                      $"WHERE ({Under(cmd, p.Folders.Select(RootKey).ToList(), "p.path")}) AND p.ext IN ({ExtIn(cmd)}) AND p.size <= $max AND s.path IS NULL";
+                                      $"WHERE ({In(cmd, p.Folders.Select(RootKey).ToList(), "p")}) AND p.ext IN ({ExtIn(cmd)}) AND p.size <= $max AND s.path IS NULL";
                     cmd.Parameters.AddWithValue("$max", max);
                     using var r = cmd.ExecuteReader();
                     if (r.Read()) list.Add(new Prog { Code = p.Code, Total = r.GetInt32(0), Done = r.IsDBNull(1) ? 0 : r.GetInt32(1) });
@@ -1159,7 +1356,7 @@ static class Projects
                 {
                     using var c = Db();
                     using var cmd = c.CreateCommand();
-                    cmd.CommandText = $"SELECT COUNT(*), SUM(CASE WHEN f.id IS NULL THEN 0 ELSE 1 END) FROM pnames p LEFT JOIN files f ON f.path=p.path WHERE ({Under(cmd, tf, "p.path")}) AND p.ext IN ({ExtIn(cmd)}) AND p.size <= $max";
+                    cmd.CommandText = $"SELECT COUNT(*), SUM(CASE WHEN f.id IS NULL THEN 0 ELSE 1 END) FROM pnames p LEFT JOIN files f ON f.path=p.path WHERE ({In(cmd, tf, "p")}) AND p.ext IN ({ExtIn(cmd)}) AND p.size <= $max";
                     cmd.Parameters.AddWithValue("$max", max);
                     using var r = cmd.ExecuteReader();
                     if (r.Read()) list.Add(new Prog { Code = "🗂 sources", Total = r.GetInt32(0), Done = r.IsDBNull(1) ? 0 : r.GetInt32(1) });
@@ -1179,18 +1376,14 @@ static class Projects
             long max = (long)FolderIndex.MaxMb * 1024 * 1024;
             // 📖 the chosen projects (when “Read everything” is on) and every 🗂 source set to “names + text”
             var folders = (On ? Chosen().SelectMany(p => p.Folders) : Enumerable.Empty<string>()).Concat(ProjectSources.TextFolders()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-            // 📶 paused folders are left; 🌐 network folders follow their rule; ⚡ First, then 📜 the contract area, then the rest
+            // 📶 paused folders are left; 🌐 network folders follow their rule and wait while the server is not connected
             var paused = PausedFolders;
-            folders = folders.Where(f => !paused.Contains(f, StringComparer.OrdinalIgnoreCase)).Where(f => !IsNetwork(f) || (NetRead != "never" && NetworkMayRun())).ToList();
+            folders = folders.Where(f => !paused.Contains(f, StringComparer.OrdinalIgnoreCase)).Where(f => !IsNetwork(f) || (NetRead != "never" && NetworkMayRun() && RootOnline(f))).ToList();
             if (folders.Count == 0) return res;
             var first = FirstFolder;
-            var contract = ContractArea.ReadFirst();
-            var groups = new List<List<string>>
-            {
-                folders.Where(f => f.Equals(first, StringComparison.OrdinalIgnoreCase)).ToList(),
-                contract.Where(cf => folders.Any(f => cf.StartsWith(f.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase) || cf.Equals(f, StringComparison.OrdinalIgnoreCase))).ToList(),
-                folders,
-            };
+            var groups = new List<List<string>> { folders.Where(f => f.Equals(first, StringComparison.OrdinalIgnoreCase)).ToList(), folders };
+            var contract = Contract().Select(RootKey).ToList();
+            var yearStart = new DateTime(DateTime.Now.Year, 1, 1).Ticks;
             var sibCache = new Dictionary<string, List<(string, Revisions.Doc)>>(StringComparer.OrdinalIgnoreCase);
             try
             {
@@ -1203,9 +1396,11 @@ static class Projects
                         var cand = new List<string>();
                         using (var cmd = c.CreateCommand())
                         {
-                            // 📋 Submittals first, then the newest files: the documents you ask about most are ready soonest.
-                            cmd.CommandText = $"SELECT p.path FROM pnames p LEFT JOIN files f ON f.path=p.path LEFT JOIN pskip s ON s.path=p.path WHERE ({Under(cmd, g.Select(RootKey).ToList(), "p.path")}) AND p.ext IN ({ExtIn(cmd)}) AND p.size <= $max AND f.id IS NULL AND s.path IS NULL ORDER BY (p.path LIKE '%submittal%') DESC, p.mtime DESC LIMIT {n * 3}";
-                            cmd.Parameters.AddWithValue("$max", max);
+                            // 📋 order: latest submittal revisions → files changed this year → the contract area → the rest (newest first in each)
+                            var ca = contract.Count == 0 ? "0" : string.Join(" OR ", contract.Select((f, i) => { cmd.Parameters.AddWithValue("$can" + i, f.Length + 1); cmd.Parameters.AddWithValue("$cap" + i, f + "\\"); return $"substr(lower(p.path),1,$can{i})=$cap{i}"; }));
+                            cmd.CommandText = $"SELECT p.path FROM pnames p LEFT JOIN files f ON f.path=p.path LEFT JOIN pskip s ON s.path=p.path WHERE ({In(cmd, g.Select(RootKey).ToList(), "p")}) AND p.ext IN ({ExtIn(cmd)}) AND p.size <= $max AND f.id IS NULL AND s.path IS NULL " +
+                                              $"ORDER BY CASE WHEN p.path LIKE '%submittal%' THEN 0 WHEN p.mtime >= $year THEN 1 WHEN ({ca}) THEN 2 ELSE 3 END, p.mtime DESC LIMIT {n * 3}";
+                            cmd.Parameters.AddWithValue("$max", max); cmd.Parameters.AddWithValue("$year", yearStart);
                             using var r = cmd.ExecuteReader();
                             while (r.Read()) cand.Add(r.GetString(0));
                         }
@@ -1215,8 +1410,8 @@ static class Projects
                         {
                             if (res.Count >= n) break;
                             if (res.Contains(path)) continue;
-                            if (LatestOnly && Superseded(c, path, sibCache)) { LeaveOut(c, path, "older revision"); skipped++; continue; }
-                            if (NetSkipCopies && IsNetwork(path) && CopyRead(c, path)) { LeaveOut(c, path, "copy already read on this PC"); skipped++; continue; }
+                            var why = Rule(c, path, sibCache);
+                            if (why != null) { LeaveOut(c, path, why); skipped++; continue; }
                             res.Add(path);
                         }
                         if (skipped == 0) break;   // nothing left out: the next round would give the same files
@@ -1233,37 +1428,69 @@ static class Projects
         static void Loop()
         {
             Thread.Sleep(TimeSpan.FromSeconds(75));
+            // 🛠 once: server files saved as "read, no text" while the server drive was not connected are read again
+            if (!Store.Bool("win_read_repair_net1", false))
+            {
+                var n = FolderIndex.ForgetEmptyNetwork(IsNetwork);
+                Store.SetBool("win_read_repair_net1", true);
+                if (n > 0) Log.Warn("read all", $"ℹ repair: {n:N0} server file(s) saved with no text are read again");
+            }
             while (true)
             {
                 try
                 {
                     if (!On && ProjectSources.TextFolders().Count == 0) { Phase = "off"; Current = ""; wake.WaitOne(TimeSpan.FromMinutes(5)); continue; }
-                    if (DateTime.Now - counted > TimeSpan.FromSeconds(30)) Recount();
                     if (Paused) { Phase = "⏸ paused"; Current = ""; wake.WaitOne(TimeSpan.FromSeconds(30)); continue; }
+                    Sweep();
+                    if (DateTime.Now - counted > TimeSpan.FromSeconds(30)) Recount();
                     if (!MayRun()) { Phase = $"⏸ paused — you are working (resumes after {Gentle.EndHour}:00 or when the PC is idle)"; Current = ""; wake.WaitOne(TimeSpan.FromSeconds(60)); continue; }
-                    var batch = Pending(40);
+                    var batch = Pending(60);
                     if (batch == null) { Phase = "⚠ could not find the files to read — see Settings → Error log (" + Error + ")"; wake.WaitOne(TimeSpan.FromMinutes(2)); continue; }
                     if (batch.Count == 0 && (Error.Length > 0 || Counts.Count == 0)) { Phase = "⚠ could not count the files — see Settings → Error log" + (Error.Length > 0 ? " (" + Error + ")" : ""); wake.WaitOne(TimeSpan.FromMinutes(2)); counted = DateTime.MinValue; continue; }
-                    if (batch.Count == 0) { Phase = "✓ complete"; Current = ""; Rush = false; Recount(); wake.WaitOne(TimeSpan.FromMinutes(10)); continue; }
-                    Phase = Rush ? "⚡ reading at full speed" : "reading";
-                    foreach (var path in batch)
+                    if (batch.Count == 0)
                     {
-                        if (!On || Paused || !MayRun()) break;
-                        Current = Path.GetFileName(path); CurrentPath = path;
-                        using var cts = new CancellationTokenSource();
-                        using var watch = new System.Threading.Timer(_ => { if (!On || Paused || !MayRun()) try { cts.Cancel(); } catch { } }, null, 2000, 2000);
-                        var sw = System.Diagnostics.Stopwatch.StartNew();
-                        try { Read(path, cts.Token); }
-                        catch (OperationCanceledException) { break; }
-                        catch (Exception e)
-                        {
-                            // Unreadable (password, damaged…): remembered as read with no text, so it isn't tried forever.
-                            FolderIndex.Remember(path, new List<Seg>());
-                            Log.Warn("read all", Path.GetFileName(path) + ": " + e.Message);
-                        }
-                        secsPerFile = secsPerFile * 0.9 + Math.Min(600, sw.Elapsed.TotalSeconds) * 0.1;
-                        if (DateTime.Now - counted > TimeSpan.FromSeconds(30)) Recount();
+                        var waitingNet = Counts.Sum(x => x.Total - x.Done) > 0;
+                        Phase = waitingNet ? "⏸ the server files wait — the server is not connected (or the network rule says later)" : "✓ complete";
+                        Current = ""; Rush = false; Recount(); wake.WaitOne(TimeSpan.FromMinutes(waitingNet ? 2 : 10)); continue;
                     }
+                    // ⚡ two files at a time when the PC is idle after working hours (or full speed); one while you work
+                    bool two = Rush || (!Gentle.WorkingNow && Gentle.Idle > TimeSpan.FromMinutes(3));
+                    Phase = (Rush ? "⚡ reading at full speed" : "reading") + " · ⚡ quick pass" + (two ? " · 2 at a time" : "");
+                    using var cts = new CancellationTokenSource();
+                    using var watch = new System.Threading.Timer(_ => { if (!On || Paused || !MayRun()) try { cts.Cancel(); } catch { } }, null, 2000, 2000);
+                    var now = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    bool netGone = false;
+                    try
+                    {
+                        Parallel.ForEach(batch, new ParallelOptions { MaxDegreeOfParallelism = two ? 2 : 1 }, (path, state) =>
+                        {
+                            if (cts.IsCancellationRequested || !On || Paused) { state.Stop(); return; }
+                            if (!RootOnline(path)) { netGone = true; return; }   // the server went away: its files wait, this PC's go on
+                            now[path] = Path.GetFileName(path);
+                            Current = string.Join("  ·  ", now.Values); CurrentPath = path;
+                            var sw = System.Diagnostics.Stopwatch.StartNew();
+                            try
+                            {
+                                var real = FileCheck.Resolve(path, out var why) ?? throw new FileNotFoundException(why);
+                                if (FolderIndex.Known(real) == null) ReadNow(real, cts.Token, !InContract(real));   // 📜 the contract area: the whole file at once
+                            }
+                            catch (OperationCanceledException) { state.Stop(); return; }
+                            catch (Exception e)
+                            {
+                                // the server drive is not connected: NOT saved as "read, no text" — read when the server is back
+                                if (IsNetwork(path)) { online.TryRemove(Path.GetPathRoot(path) ?? "", out _); if (!RootOnline(path)) { netGone = true; return; } }
+                                // Unreadable (password, damaged…): remembered as read with no text, so it isn't tried forever.
+                                FolderIndex.Remember(path, new List<Seg>());
+                                Log.Warn("read all", Path.GetFileName(path) + ": " + e.Message);
+                            }
+                            finally { now.TryRemove(path, out _); }
+                            lock (lk) secsPerFile = secsPerFile * 0.9 + Math.Min(600, sw.Elapsed.TotalSeconds) / (two ? 2 : 1) * 0.1;
+                            if (DateTime.Now - counted > TimeSpan.FromSeconds(30)) lock (lk) Recount();
+                        });
+                    }
+                    catch (AggregateException ae) when (ae.InnerExceptions.All(x => x is OperationCanceledException)) { }
+                    Current = "";
+                    if (netGone) { Phase = "⏸ the server is not connected — its files wait; this PC's files go on"; wake.WaitOne(TimeSpan.FromSeconds(20)); }
                 }
                 catch (Exception e) { Log.Warn("read all", e.Message); wake.WaitOne(TimeSpan.FromMinutes(1)); }
             }

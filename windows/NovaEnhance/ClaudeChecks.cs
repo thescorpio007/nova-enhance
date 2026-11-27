@@ -91,7 +91,7 @@ static class ClaudeChecks
         }
         if (Projects.General.Count > 0) sb.Append("\nGeneral reference: " + string.Join(" · ", Projects.General.Select(P)) + "\n");
         sb.Append($"\n📖 Read inside (background): {(Projects.ReadAll.On ? "on" : "off")}{(Projects.ReadAll.Paused ? " · paused" : "")} · {Projects.ReadAll.Phase}" +
-                  (Projects.ReadAll.Current.Length > 0 ? " · now: " + P(Projects.ReadAll.Current) : "") + (Projects.ReadAll.Left is { } l ? $" · about {(int)l.TotalMinutes} min left" : "") +
+                  (Projects.ReadAll.Current.Length > 0 ? " · now: " + P(Projects.ReadAll.Current) : "") + (Projects.ReadAll.LeftText.Length > 0 ? " · " + Projects.ReadAll.LeftText : "") +
                   (Projects.ReadAll.Error.Length > 0 ? " · ⚠ " + Projects.ReadAll.Error : "") + "\n");
         foreach (var c in Projects.ReadAll.Counts) sb.Append($"   {c.Code}: {c.Done:N0} of {c.Total:N0} ({(c.Total > 0 ? 100L * c.Done / c.Total : 100)} %)\n");
         sb.Append($"⚡ Offline copies: {(ProjectSources.Offline.Line.Length > 0 ? ProjectSources.Offline.Line : "none running")}\n");

@@ -362,7 +362,7 @@ static class PhoneLink
         s.Sizes["brief"] = Write("brief.nes", o.ToJsonString());
     }
 
-    // ------------------------------------------------------------------ 🖧 every file NAME of the projects (server + local), for the phone's explorer
+    // ------------------------------------------------------------------ 🏢 every file NAME of the projects (server + local), for the phone's explorer
 
     static void Names(State s, bool full, string stamp)
     {
@@ -404,7 +404,7 @@ static class PhoneLink
     [System.Runtime.InteropServices.DllImport("mpr.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
     static extern int WNetGetConnection(string local, StringBuilder remote, ref int length);
 
-    /// <summary>🖧 For the phone's own server access: the network address behind each mapped drive (S: → \\192.168.1.12\Projects) and
+    /// <summary>🏢 For the phone's own server access: the network address behind each mapped drive (S: → \\192.168.1.12\Projects) and
     /// the VPN gateway, user and the firewall's certificate fingerprint. NEVER a password.</summary>
     static JsonObject ServerInfo()
     {
@@ -581,7 +581,7 @@ static class PhoneLink
             ["last12"] = Last12, ["files"] = files, ["counts"] = JsonNode.Parse(JsonSerializer.Serialize(s.Counts)), ["oldest"] = MailIndex.OldestText,
             ["full"] = MailFull.On ? new JsonObject { ["months"] = MailFull.Months, ["att"] = MailFull.AttMonths, ["mails"] = MailFull.Progress.Mails } : null,   // ☁ the real emails are in Drive too
             ["gd"] = PhoneDrive(),    // ☁ the phone learns how to read Google Drive by itself (no new QR needed)
-            ["server"] = ServerInfo()   // 🖧 the phone's own server access: drive → network address, VPN gateway / user / certificate pin (no password)
+            ["server"] = ServerInfo()   // 🏢 the phone's own server access: drive → network address, VPN gateway / user / certificate pin (no password)
         };
         Write("manifest.nes", o.ToJsonString());
         File.WriteAllText(Path.Combine(Dir, "README.txt"),

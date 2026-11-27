@@ -133,7 +133,7 @@ partial class SettingsForm : NovaForm
                 case "Folder search": FolderSearch(); break;
                 case "📁 Projects": ProjectsPage(); SourcesPage(); FolderSearch(); break;   // 4.1 Projects & sources (three pages joined)
                 case "💻 Local data": LocalDataPage(); break;
-                case "🖧 Network server": NetworkPage(); break;
+                case "🏢 Network server": NetworkPage(); break;
                 case "📋 Submittal log": SubmittalSettingsPage(); break;
                 case "📄 Nova for this PDF": PdfSettingsPage(); break;
                 case "📶 Indexing progress": IndexingPage(); IndexPage(); break;   // 2.4 Progress & Nova index (joined)
@@ -747,6 +747,22 @@ partial class SettingsForm : NovaForm
         }
         filling = false;
         fl.ItemChecked += (_, e) => { if (!filling && e.Item.Tag is string fid) MailIndex.SetLeftOut(fid, !e.Item.Checked); };
+        // 3.4 the table reaches the bottom of the window (and follows it when the window is resized)
+        var host = page;
+        void Fit()
+        {
+            try
+            {
+                if (fl.IsDisposed || host.IsDisposed || !fl.IsHandleCreated) return;
+                int top = host.PointToClient(fl.Parent.PointToScreen(fl.Location)).Y;
+                fl.Height = Math.Max(300, host.ClientSize.Height - top - 16);
+                fl.Width = Math.Max(700, host.ClientSize.Width - 70);
+            }
+            catch { }
+        }
+        host.Resize += (_, _) => Fit();
+        fl.HandleCreated += (_, _) => BeginInvoke(Fit);
+        BeginInvoke(Fit);
     }
 
     // Options on one page share one parent, and Windows would treat them all as ONE group (picking an email source

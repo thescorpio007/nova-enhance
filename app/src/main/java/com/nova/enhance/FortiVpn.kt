@@ -26,7 +26,7 @@ import javax.net.ssl.SSLSocketFactory
 import javax.net.ssl.X509TrustManager
 
 /**
- * 🖧 Nova's own office VPN (Fortinet SSL VPN, the same protocol as the PC's OpenConnect engine) — for Nova ONLY:
+ * 🏢 Nova's own office VPN (Fortinet SSL VPN, the same protocol as the PC's OpenConnect engine) — for Nova ONLY:
  * no other app's traffic goes to the office, and only the office network goes through it.
  *  1 · signs in over HTTPS to the firewall (its certificate must match the fingerprint your PC trusts);
  *  2 · reads the address and the office routes the firewall gives;

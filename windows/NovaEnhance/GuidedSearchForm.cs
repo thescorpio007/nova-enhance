@@ -122,7 +122,7 @@ class GuidedSearchForm : NovaForm
         }
         catch (Exception e) { qInfo.Text = "⚠ " + e.Message; return; }
         if (my != qRun || IsDisposed) return;
-        // 🖧 the server (official · MZA DC) first; a local copy of the same file is “same as the server ✓” or “⚠ older than the server”
+        // 🏢 the server (official · MZA DC) first; a local copy of the same file is “same as the server ✓” or “⚠ older than the server”
         bool Net(string p) => Projects.ReadAll.IsNetwork(p);
         var serverCopy = found.Where(x => Net(x.Path)).GroupBy(x => Path.GetFileName(x.Path), StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.Max(x => x.Modified), StringComparer.OrdinalIgnoreCase);
         var list = found.OrderBy(x => x.Status == "superseded" ? 1 : 0).ThenBy(x => Net(x.Path) ? 0 : 1).ThenByDescending(x => x.Modified).Take(400).ToList();
@@ -131,7 +131,7 @@ class GuidedSearchForm : NovaForm
         {
             var latest = f.Status != "superseded";
             var net = Net(f.Path);
-            var src = net ? "🖧 Server · official" : "💻 Local copy";
+            var src = net ? "🏢 Server · official" : "💻 Local copy";
             Color? srcColor = null;
             if (!net && serverCopy.TryGetValue(Path.GetFileName(f.Path), out var sm))
             {

@@ -19,6 +19,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: 🔒 Server access must stay read-only (the build stops if any code could write, copy to, rename or delete on the server)
+        run: |
+          files=$(grep -rl "com.hierynomus" app/src/main/java || true)
+          echo "files using the server library: $files"
+          bad=$(grep -nE "GENERIC_WRITE|GENERIC_ALL|FILE_WRITE_DATA|FILE_APPEND_DATA|AccessMask\.DELETE|MAXIMUM_ALLOWED|FILE_CREATE|FILE_OVERWRITE|FILE_SUPERSEDE|FILE_OPEN_IF|\.rm\(|\.rmdir\(|\.mkdir\(|\.rename\(|openDirectory\(|getOutputStream|outputStream\(\)\.use \{ *ds|\.setFileInformation|\.deleteOnClose|FILE_DELETE_ON_CLOSE" $files || true)
+          if [ -n "$bad" ]; then echo "::error::Server access must be read-only — found:"; echo "$bad"; exit 1; fi
+          opens=$(grep -n "openFile(" $files | grep -v "EnumSet.of(AccessMask.GENERIC_READ)" || true)
+          if [ -n "$opens" ]; then echo "::error::Every server file must be opened with GENERIC_READ only:"; echo "$opens"; exit 1; fi
+          echo "✓ read-only"
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

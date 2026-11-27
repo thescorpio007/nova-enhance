@@ -306,7 +306,7 @@ class MyPcActivity : BaseActivity() {
                     mb(size)) { runFind("", "emails") }
                 card("📁 Projects", projs?.let { a -> (0 until a.length()).joinToString(" · ") { a.getJSONObject(it).optString("code") } } ?: "") { }
                 card("📂 Project files", "%,d files · names and text inside".format(f)) { runFind("", "files") }
-                card("🖧 Server explorer", "every project file name · open server files through Nova's own VPN · works without the PC") { startActivity(Intent(this@MyPcActivity, ServerActivity::class.java)) }
+                card("🏢 Server explorer", "every project file name · open, download or share server files (read-only) through Nova's own VPN · works without the PC") { startActivity(Intent(this@MyPcActivity, ServerActivity::class.java)) }
                 card("⭐ Starred", "$stars file(s) on the phone · open offline") { show("starred") }
                 card("🧭 Ask Nova (agent)", "type freely — your PC checks the Brain, the log, emails and threads · you confirm examples here") { show("agent") }
                 card("🧠 Same brain as your PC", if (PcLink.brainNote(c).isBlank()) "not received yet" else "every rule, with 🧪 tested ✓ — tap to read") { brainView() }

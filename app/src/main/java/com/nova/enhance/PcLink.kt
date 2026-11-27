@@ -179,7 +179,7 @@ object PcLink {
                 fts(db, "files_fts", "path, t", "files")
                 names(db)
             }
-            /** 🖧 every file NAME of the projects (server + local), for the server explorer */
+            /** 🏢 every file NAME of the projects (server + local), for the server explorer */
             private fun names(db: SQLiteDatabase) {
                 db.execSQL("CREATE TABLE IF NOT EXISTS names(p TEXT PRIMARY KEY, b INTEGER, m INTEGER)")
             }

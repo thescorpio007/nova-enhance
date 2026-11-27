@@ -564,14 +564,13 @@ class Dot : Control
     }
     protected override void OnPaint(PaintEventArgs e)
     {
-        e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-        using var b = new SolidBrush(color);
-        using var ring = new Pen(Color.FromArgb(0x0E, 0x11, 0x17), 2f);
-        var r = new Rectangle(1, 1, Width - 3, Height - 3);
-        e.Graphics.FillEllipse(b, r);
-        e.Graphics.DrawEllipse(ring, r);
+        // 🟢🟡🔴 the same raised light as everywhere in Nova
+        var r = new RectangleF(0, 0, Width - 1, Height - 1);
+        if (color == Th.Bad) Lights.Draw(e.Graphics, r, Lights.Kind.Red, false);
+        else if (color == Th.Warn) Lights.Draw(e.Graphics, r, Lights.Kind.Orange, false);
+        else Lights.Draw(e.Graphics, r, color);
     }
-}
+}}
 
 /// <summary>Ctrl+Shift+F: ask about your email in your own words.</summary>
 class AskForm : NovaForm

@@ -23,9 +23,9 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /**
- * 🖧 The office server on the phone, without the PC: where it is (sent by your PC: S: → \\192.168.1.12\…, the VPN gateway,
+ * 🏢 The office server on the phone, without the PC: where it is (sent by your PC: S: → \\192.168.1.12\…, the VPN gateway,
  * user and the firewall's fingerprint — never a password), your passwords in the phone's secure hardware store (Android Keystore),
- * read-only file access over Nova's own VPN, and a 7-day cache. Designed by A.HAMROUNI
+ * read-only file access over Nova's own VPN (open · download · zip a folder · share — never write, copy to, rename or delete), and a 7-day cache. Designed by A.HAMROUNI
  */
 object ServerAccess {
     private fun sp(c: Context) = c.applicationContext.getSharedPreferences("nova_server", Context.MODE_PRIVATE)
@@ -107,52 +107,129 @@ object ServerAccess {
     private fun client() = SMBClient(SmbConfig.builder().withTimeout(25, TimeUnit.SECONDS).withSoTimeout(60, TimeUnit.SECONDS)
         .withSecurityProvider(com.hierynomus.security.bc.BCSecurityProvider()).build())
 
-    fun download(c: Context, path: String, progress: (String) -> Unit): File {
-        val (h, share, inside) = unc(c, path) ?: throw Exception("this file is not on the server (a local copy on your PC)")
-        if (Regex("wallet|password|passwd|keepass|bitwarden|\\b(bank|banking|crypto|seed|passport|salary|personal)\\b", RegexOption.IGNORE_CASE).containsMatchIn(path))
-            throw Exception("🔒 private — not opened")
+    private val PRIVATE = Regex("wallet|password|passwd|keepass|bitwarden|\\b(bank|banking|crypto|seed|passport|salary|personal)\\b", RegexOption.IGNORE_CASE)
+    fun isPrivate(path: String) = PRIVATE.containsMatchIn(path)
+
+    // ------------------------------------------------------------------ 🔒 THE ONE DOOR TO THE SERVER — READ-ONLY
+    // Every server action of Nova goes through these three functions, and they only ever ask the server to READ:
+    // open a file with GENERIC_READ + FILE_OPEN (never create / overwrite), and list a folder. Nova has no code that writes, copies to,
+    // renames, moves or deletes anything on the server — and a check before every build stops the build if such code ever appears.
+
+    /** Signs in to the share of this path (read-only use) and runs [job] with it. */
+    private fun <T> share(c: Context, host: String, shareName: String, job: (DiskShare) -> T): T {
         val pw = secret(c, "smb").ifEmpty { secret(c, "vpn") }
-        val out = File(cacheDir(c), inside.substringAfterLast('\\').replace(Regex("[\\\\/:*?\"<>|]"), "_"))
-        client().use { cl ->
-            cl.connect(h).use { con ->
-                val ses = con.authenticate(AuthenticationContext(smbUser(c), pw.toCharArray(), smbDomain(c)))
-                (ses.connectShare(share) as DiskShare).use { ds ->
-                    // read-only: only GENERIC_READ is ever asked for — Nova can't change, rename or delete anything on the server
-                    ds.openFile(inside, EnumSet.of(AccessMask.GENERIC_READ), null, SMB2ShareAccess.ALL, SMB2CreateDisposition.FILE_OPEN, null).use { f ->
-                        val size = f.fileInformation.standardInformation.endOfFile
-                        f.inputStream.use { i -> out.outputStream().use { o ->
-                            val buf = ByteArray(256 * 1024); var n: Int; var done = 0L; var last = 0L
-                            while (i.read(buf).also { n = it } > 0) { o.write(buf, 0, n); done += n; if (done - last > 1_000_000) { last = done; progress("📥 %.1f of %.1f MB".format(done / 1e6, size / 1e6)) } }
-                        } }
-                    }
-                }
+        client().use { cl -> cl.connect(host).use { con ->
+            val ses = con.authenticate(AuthenticationContext(smbUser(c), pw.toCharArray(), smbDomain(c)))
+            (ses.connectShare(shareName) as DiskShare).use { ds -> return job(ds) }
+        } }
+    }
+
+    /** Reads one server file into [out] (GENERIC_READ only). */
+    private fun readInto(ds: DiskShare, inside: String, out: java.io.OutputStream, onBytes: (Long, Long) -> Unit, stop: () -> Boolean = { false }) {
+        ds.openFile(inside, EnumSet.of(AccessMask.GENERIC_READ), null, SMB2ShareAccess.ALL, SMB2CreateDisposition.FILE_OPEN, null).use { f ->
+            val size = f.fileInformation.standardInformation.endOfFile
+            f.inputStream.use { i ->
+                val buf = ByteArray(256 * 1024); var n: Int; var done = 0L
+                while (i.read(buf).also { n = it } > 0) { if (stop()) throw InterruptedException("stopped"); out.write(buf, 0, n); done += n; onBytes(done, size) }
             }
         }
-        log(c, path)
+    }
+
+    /** What a server folder holds (names and sizes, read-only). */
+    private fun listIn(ds: DiskShare, inside: String) = ds.list(inside).filter { it.fileName != "." && it.fileName != ".." && !isPrivate(it.fileName) }
+
+    // ------------------------------------------------------------------ 📥 a server file onto the phone
+
+    fun download(c: Context, path: String, progress: (String) -> Unit): File {
+        val (h, sh, inside) = unc(c, path) ?: throw Exception("this file is not on the server (a local copy on your PC)")
+        if (isPrivate(path)) throw Exception("🔒 private — not opened")
+        val out = File(cacheDir(c), inside.substringAfterLast('\\').replace(Regex("[\\\\/:*?\"<>|]"), "_"))
+        var last = 0L
+        share(c, h, sh) { ds -> out.outputStream().use { o -> readInto(ds, inside, o, { d, t -> if (d - last > 1_000_000) { last = d; progress("📥 %.1f of %.1f MB".format(d / 1e6, t / 1e6)) } }) } }
+        log(c, path, "opened")
         return out
     }
 
     /** A live look at a server folder (what is there right now). */
     fun list(c: Context, folder: String): List<Pair<String, Boolean>> {
-        val (h, share, inside) = unc(c, folder.trimEnd('\\') + "\\x")?.let { Triple(it.first, it.second, it.third.removeSuffix("x").trimEnd('\\')) } ?: return emptyList()
-        val pw = secret(c, "smb").ifEmpty { secret(c, "vpn") }
-        client().use { cl -> cl.connect(h).use { con ->
-            val ses = con.authenticate(AuthenticationContext(smbUser(c), pw.toCharArray(), smbDomain(c)))
-            (ses.connectShare(share) as DiskShare).use { ds ->
-                return ds.list(inside).filter { it.fileName != "." && it.fileName != ".." }
-                    .map { it.fileName to ((it.fileAttributes and 0x10L) != 0L) }
-                    .filterNot { Regex("wallet|password|passwd|keepass|bitwarden|\\b(bank|banking|crypto|seed|passport|salary|personal)\\b", RegexOption.IGNORE_CASE).containsMatchIn(it.first) }
-                    .sortedWith(compareBy({ !it.second }, { it.first.lowercase() }))
-            }
-        } }
+        val (h, sh, inside) = unc(c, folder.trimEnd('\\') + "\\x")?.let { Triple(it.first, it.second, it.third.removeSuffix("x").trimEnd('\\')) } ?: return emptyList()
+        return share(c, h, sh) { ds -> listIn(ds, inside).map { it.fileName to ((it.fileAttributes and 0x10L) != 0L) }.sortedWith(compareBy({ !it.second }, { it.first.lowercase() })) }
     }
 
-    // every file opened from the server is noted on the phone
-    private fun log(c: Context, path: String) {
+    // ------------------------------------------------------------------ 🗜 a whole server folder as one zip (built on the phone)
+
+    class Measure(val files: Int, val bytes: Long)
+
+    private fun walk(ds: DiskShare, inside: String, rel: String, add: (String, String, Long) -> Unit, stop: () -> Boolean) {
+        for (e in listIn(ds, inside)) {
+            if (stop()) return
+            val child = if (inside.isEmpty()) e.fileName else "$inside\\${e.fileName}"
+            val r = if (rel.isEmpty()) e.fileName else "$rel/${e.fileName}"
+            if ((e.fileAttributes and 0x10L) != 0L) walk(ds, child, r, add, stop) else add(child, r, e.endOfFile)
+        }
+    }
+
+    /** How many files and MB a server folder holds (asked before a big zip). */
+    fun measure(c: Context, folder: String, stop: () -> Boolean = { false }): Measure {
+        val (h, sh, inside) = unc(c, folder.trimEnd('\\') + "\\x")?.let { Triple(it.first, it.second, it.third.removeSuffix("x").trimEnd('\\')) } ?: throw Exception("this folder is not on the server")
+        if (isPrivate(folder)) throw Exception("🔒 private — not opened")
+        var n = 0; var b = 0L
+        share(c, h, sh) { ds -> walk(ds, inside, "", { _, _, size -> n++; b += size }, stop) }
+        return Measure(n, b)
+    }
+
+    /** The folder's files packed into one zip on the phone (🔒 private files left out). Nothing is written on the server. */
+    fun zipFolder(c: Context, folder: String, progress: (String) -> Unit, stop: () -> Boolean): File {
+        val (h, sh, inside) = unc(c, folder.trimEnd('\\') + "\\x")?.let { Triple(it.first, it.second, it.third.removeSuffix("x").trimEnd('\\')) } ?: throw Exception("this folder is not on the server")
+        if (isPrivate(folder)) throw Exception("🔒 private — not opened")
+        val name = folder.trimEnd('\\').substringAfterLast('\\').replace(Regex("[\\\\/:*?\"<>|]"), "_").ifEmpty { "server" }
+        val out = File(File(cacheDir(c), "zip").apply { mkdirs() }, "$name.zip")
+        val part = File(out.path + ".part")
+        try {
+            share(c, h, sh) { ds ->
+                val items = mutableListOf<Triple<String, String, Long>>()
+                walk(ds, inside, "", { a, r, size -> items.add(Triple(a, r, size)) }, stop)
+                val total = items.sumOf { it.third }.coerceAtLeast(1)
+                var before = 0L; var shown = 0L
+                java.util.zip.ZipOutputStream(part.outputStream().buffered()).use { z ->
+                    items.forEachIndexed { i, (a, r, size) ->
+                        if (stop()) throw InterruptedException("stopped")
+                        z.putNextEntry(java.util.zip.ZipEntry("$name/$r"))
+                        readInto(ds, a, z, { d, _ -> val all = before + d; if (all - shown > 1_000_000) { shown = all; progress("🗜 ${i + 1} of ${items.size} file(s) · %.1f of %.1f MB".format(all / 1e6, total / 1e6)) } }, stop)
+                        z.closeEntry(); before += size
+                    }
+                }
+            }
+            out.delete(); part.renameTo(out)
+        } catch (e: Exception) { part.delete(); throw e }
+        log(c, folder, "zipped")
+        return out
+    }
+
+    // ------------------------------------------------------------------ ⬇ into the phone's Download folder
+
+    fun toDownloads(c: Context, f: File): String {
+        val mime = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(f.extension.lowercase()) ?: "application/octet-stream"
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            val v = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.Downloads.DISPLAY_NAME, f.name); put(android.provider.MediaStore.Downloads.MIME_TYPE, mime)
+                put(android.provider.MediaStore.Downloads.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS + "/Nova Enhance/Server")
+            }
+            val u = c.contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, v) ?: throw Exception("the phone refused to save the file")
+            c.contentResolver.openOutputStream(u)?.use { o -> f.inputStream().use { it.copyTo(o) } } ?: throw Exception("the phone refused to save the file")
+            return "Download › Nova Enhance › Server › ${f.name}"
+        }
+        val dir = File(c.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS), "Nova Enhance/Server").apply { mkdirs() }
+        f.copyTo(File(dir, f.name), true)
+        return "Android › data › Nova Enhance › Download › Server › ${f.name}"
+    }
+
+    // every file opened, downloaded, zipped or shared from the server is noted on the phone
+    fun log(c: Context, path: String, what: String = "opened") {
         val a = try { JSONArray(sp(c).getString("opens", "[]")) } catch (_: Exception) { JSONArray() }
-        a.put(JSONObject().put("p", path).put("at", System.currentTimeMillis()))
+        a.put(JSONObject().put("p", path).put("at", System.currentTimeMillis()).put("w", what))
         while (a.length() > 200) a.remove(0)
         sp(c).edit().putString("opens", a.toString()).apply()
     }
-    fun opens(c: Context): List<Pair<String, Long>> = try { val a = JSONArray(sp(c).getString("opens", "[]")); (0 until a.length()).map { a.getJSONObject(it).let { o -> o.optString("p") to o.optLong("at") } }.reversed() } catch (_: Exception) { emptyList() }
+    fun opens(c: Context): List<Triple<String, Long, String>> = try { val a = JSONArray(sp(c).getString("opens", "[]")); (0 until a.length()).map { a.getJSONObject(it).let { o -> Triple(o.optString("p"), o.optLong("at"), o.optString("w", "opened")) } }.reversed() } catch (_: Exception) { emptyList() }
 }

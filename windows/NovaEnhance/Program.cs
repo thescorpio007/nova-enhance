@@ -188,6 +188,7 @@ class NovaContext : ApplicationContext
         vm.Items.Add("⚙  VPN settings", null, (_, _) => Screens.Settings("🌐 Office VPN"));
         vm.Opening += (_, _) => { vStatus.Text = OfficeVpn.Line; ((ToolStripMenuItem)vm.Items[4]).Checked = OfficeVpn.Auto; };
         vpnTray.ContextMenuStrip = vm;
+        try { Lights.Menu(vm); } catch { }
         vpnTray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) { if (OfficeVpn.Now is OfficeVpn.State.Up or OfficeVpn.State.UpNoServer) vpnTray.ShowBalloonTip(4000, "Office VPN", OfficeVpn.Line, ToolTipIcon.Info); else OfficeVpn.Connect(); } };
         var vpnTick = new System.Windows.Forms.Timer { Interval = 2000 };
         vpnTick.Tick += (_, _) =>
@@ -285,6 +286,7 @@ class NovaContext : ApplicationContext
         lockItem.Click += (_, _) => { if (AdminLock.Locked && lockItem.Text.StartsWith("🔓")) AdminLock.Pass("Unlock"); };
         m.Items.Add("Exit Nova Enhance", null, (_, _) => { if (AdminLock.Pass("Exit Nova Enhance")) Quit(); });
         tray.ContextMenuStrip = m;
+        try { Lights.Menu(m); } catch { }
         tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) Screens.Ask(); };
 
         AdminLock.Start();   // 🔐 locked at start (when a PIN is set), then on idle, Windows lock and sleep

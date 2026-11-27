@@ -63,6 +63,13 @@ static class PdfFast
         return info;
     }
 
+    /// <summary>Lets go of what was kept in memory for this file (the background reading goes through thousands of files).</summary>
+    public static void Forget(string path)
+    {
+        lock (infos) infos.Remove(path);
+        lock (ocrDone) ocrDone.Remove(path);
+    }
+
     /// <summary>The scanned pages, the ones most likely to answer first.</summary>
     public static List<int> Priority(Info info, List<(string W, double Weight)> words)
     {

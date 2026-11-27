@@ -91,7 +91,7 @@ object Ui {
     }
 
     fun text(c: Context, s: String, size: Float = 15f, color: Int = TEXT, bold: Boolean = false): TextView =
-        TextView(c).apply {
+        LightText(c).apply {
             text = s; textSize = size; setTextColor(color)
             if (bold) setTypeface(typeface, Typeface.BOLD)
             setLineSpacing(0f, 1.15f)

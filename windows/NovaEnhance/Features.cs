@@ -32,7 +32,7 @@ static class Features
         new("1.5", "✦ Prompts", "✦ Prompts", "prompt|favourite question"),
         new("1.6", "👤 About me", "About me", "about me|profile|my field|role"),
         new("2.1", "💻 Local data", "💻 Local data", "local|f:\\\\|local folder|local copy"),
-        new("2.2", "🖧 Network server", "🖧 Network server", "network|server|s:\\\\|official|mza dc|listing"),
+        new("2.2", "🏢 Network server", "🏢 Network server", "network|server|s:\\\\|official|mza dc|listing"),
         new("2.3", "🌐 Office VPN", "🌐 Office VPN", "vpn|forti|openconnect|office network"),
         new("2.4", "📶 Progress & Nova index", "📶 Indexing progress", "progress|nova index|read inside|ocr|database|index"),
         new("2.5", "📦 Transfer engine", "📦 Transfer engine", "transfer|copy engine|offline copy", true),

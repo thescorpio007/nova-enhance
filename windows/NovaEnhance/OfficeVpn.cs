@@ -745,23 +745,24 @@ static class OfficeVpn
         lock (icons)
         {
             if (icons.TryGetValue(s, out var i)) return i;
-            var col = s switch { State.Up => Color.FromArgb(0x3D, 0xDC, 0x97), State.UpNoServer or State.Connecting => Color.FromArgb(0xFB, 0xBF, 0x24), State.Down => Color.FromArgb(0xFF, 0x6B, 0x6B), _ => Color.FromArgb(0x8A, 0x92, 0xA6) };
+            var k = s switch { State.Up => Lights.Kind.Green, State.UpNoServer or State.Connecting => Lights.Kind.Yellow, State.Down => Lights.Kind.Red, _ => Lights.Kind.None };
             using var bmp = new Bitmap(32, 32);
             using (var g = Graphics.FromImage(bmp))
             {
                 g.SmoothingMode = SmoothingMode.AntiAlias;
-                // a shield with a lock-dot, in the state's colour
+                // a calm shield with a lock, and the state's raised light (🟢 🟡 🔴) on its corner — the same light as everywhere in Nova
                 using var path = new GraphicsPath();
-                path.AddLines(new[] { new Point(16, 2), new Point(29, 7), new Point(28, 18), new Point(16, 30), new Point(4, 18), new Point(3, 7) });
+                path.AddLines(new[] { new Point(13, 1), new Point(25, 5), new Point(24, 15), new Point(13, 26), new Point(2, 15), new Point(1, 5) });
                 path.CloseFigure();
-                using var fill = new SolidBrush(col);
+                using var fill = new SolidBrush(Color.FromArgb(0x5B, 0x6C, 0xFF));
                 g.FillPath(fill, path);
                 using var pen = new Pen(Color.FromArgb(0x14, 0x14, 0x18), 2);
                 g.DrawPath(pen, path);
                 using var w = new SolidBrush(Color.White);
-                g.FillRectangle(w, 11, 15, 10, 8);
-                using var arc = new Pen(Color.White, 2.4f);
-                g.DrawArc(arc, 12, 9, 8, 10, 180, 180);
+                g.FillRectangle(w, 9, 12, 9, 7);
+                using var arc = new Pen(Color.White, 2.2f);
+                g.DrawArc(arc, 10, 6, 7, 9, 180, 180);
+                Lights.Draw(g, new RectangleF(15, 15, 17, 17), k, false);
             }
             i = Icon.FromHandle(bmp.GetHicon());
             icons[s] = i;

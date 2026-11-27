@@ -64,7 +64,8 @@ partial class SettingsForm
         net.SelectedIndexChanged += (_, _) => Projects.ReadAll.NetRead = nets[net.SelectedIndex].Item1;
         r1.Controls.Add(net);
         page.Add(Th.Check("📄 Read only the LATEST revision of each document (older revisions: names only — much faster)", Projects.ReadAll.LatestOnly, v => Projects.ReadAll.LatestOnly = v));
-        page.Add(Th.Check("🧬 Skip network files already read as a copy on this PC (same name and size)", Projects.ReadAll.NetSkipCopies, v => Projects.ReadAll.NetSkipCopies = v));
+        page.Add(Th.Check("🧬 Skip network files that are the same file on this PC (same name and size — read once, there)", Projects.ReadAll.NetSkipCopies, v => Projects.ReadAll.NetSkipCopies = v));
+        Note("⚡ How the background reads: first a quick pass over every file (the PDF's text + its first 3 scanned pages — seconds per file); the whole file is read when you open it or ask about it, and the 📜 contract area is always read whole. Order: latest submittal revisions → files changed this year → contract area → the rest. Folders named Old · Superseded · Archive · Backup keep their names only. Two files at a time when the PC is idle after working hours. When the server is not connected, its files wait (never saved as empty).");
         page.Add(Th.Check("📖 Read inside the files in the background", Projects.ReadAll.On, v => { Projects.ReadAll.On = v; Draw("📶 Indexing progress"); }));
         var r2 = page.Add(Th.Row(false));
         r2.Controls.Add(Th.B("⚡ Read now at full speed", () => Projects.ReadAll.Now(), true));

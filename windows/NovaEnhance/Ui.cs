@@ -179,7 +179,7 @@ class NovaForm : Form
         try { Icon = Th.AppIcon; } catch { }
     }
 
-    protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); Th.DarkTitle(this); Th.SetIcons(this); LabelClock.Attach(this); try { Text = Features.Titled(Text); } catch { } }
+    protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); Th.DarkTitle(this); Th.SetIcons(this); LabelClock.Attach(this); try { Lights.Attach(this); } catch { } try { Text = Features.Titled(Text); } catch { } }
 
     // 🔐 Admin lock: a Nova window opens only after your PIN (Enhance and the PDF panel are allowed; small dialogs follow their window).
     public virtual bool AllowedWhileLocked => false;

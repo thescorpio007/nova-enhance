@@ -319,18 +319,54 @@ static class FolderIndex
     }
 
     /// <summary>Keeps what a feature read from a file, for every other feature (and for Search inside a folder, which then skips it).</summary>
-    public static void Remember(string path, List<Seg> segs)
+    public static void Remember(string path, List<Seg> segs) => Remember(path, segs, "read on demand");
+
+    /// <summary>⚡ Quick pass: the file's text layer + its first scanned pages; the rest is read when you open it or ask about it.</summary>
+    public const string QuickNote = "quick";
+    public static bool IsQuick(string path)
+    {
+        try { using var c = Open(); return (Scalar(c, "SELECT note FROM files WHERE path=$p", ("$p", path)) as string ?? "").StartsWith(QuickNote); }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// 🛠 One-time repair: server files that were saved as "read, no text" because the server drive was not connected at that moment
+    /// are forgotten, so they are read again (only server files with no text at all).
+    /// </summary>
+    public static int ForgetEmptyNetwork(Func<string, bool> isNetwork)
+    {
+        int n = 0;
+        try
+        {
+            using var c = Open();
+            var ids = new List<(long, string)>();
+            using (var cmd = c.CreateCommand())
+            {
+                cmd.CommandText = "SELECT f.id, f.path FROM files f WHERE NOT EXISTS (SELECT 1 FROM segs s WHERE s.file_id=f.id)";
+                using var r = cmd.ExecuteReader();
+                while (r.Read()) ids.Add((r.GetInt64(0), r.GetString(1)));
+            }
+            using var tx = BeginWait(c, CancellationToken.None);
+            foreach (var (id, path) in ids)
+                if (isNetwork(path)) { DeleteFile(c, id); n++; }
+            tx.Commit();
+        }
+        catch (Exception e) { Log.Warn("Folder index", "repair empty server files: " + e.Message); }
+        return n;
+    }
+
+    public static void Remember(string path, List<Seg> segs, string note)
     {
         // 🔒 "database is locked": another reader is writing — wait a moment and try again (3 times) instead of losing the reading.
         for (int attempt = 1; ; attempt++)
         {
-            try { RememberOnce(path, segs); return; }
+            try { RememberOnce(path, segs, note); return; }
             catch (SqliteException e) when (e.SqliteErrorCode == 5 && attempt < 4) { Thread.Sleep(1500 * attempt); }
             catch (Exception e) { Log.Warn("Folder index", "remember " + Path.GetFileName(path) + ": " + e.Message); return; }
         }
     }
 
-    static void RememberOnce(string path, List<Seg> segs)
+    static void RememberOnce(string path, List<Seg> segs, string note)
     {
         {
             var fi = new FileInfo(path);
@@ -340,7 +376,7 @@ static class FolderIndex
             var existing = Scalar(c, "SELECT id FROM files WHERE path=$p", ("$p", path));
             if (existing != null) DeleteFile(c, Convert.ToInt64(existing));
             Exec(c, "INSERT INTO files(path,size,mtime,kind,note,remote) VALUES($p,$s,$m,$k,$n,NULL)",
-                ("$p", path), ("$s", fi.Length), ("$m", Ms(fi.LastWriteTime)), ("$k", FileKinds.KindOf(fi.Extension.ToLowerInvariant())), ("$n", "read on demand"));
+                ("$p", path), ("$s", fi.Length), ("$m", Ms(fi.LastWriteTime)), ("$k", FileKinds.KindOf(fi.Extension.ToLowerInvariant())), ("$n", note ?? "read on demand"));
             var fid = Convert.ToInt64(Scalar(c, "SELECT last_insert_rowid()"));
             foreach (var sg in segs ?? new())
             {
