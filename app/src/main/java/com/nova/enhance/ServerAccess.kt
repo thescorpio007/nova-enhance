@@ -44,6 +44,20 @@ object ServerAccess {
     }
     fun isServer(c: Context, path: String): Boolean = path.startsWith("\\\\") || drives(c).keys.any { path.startsWith(it, true) }
 
+    /** 📂 A project your PC shared, with its folder addresses (server + local). */
+    data class ProjFolder(val path: String, val server: Boolean, val role: String)
+    data class ProjShare(val code: String, val name: String, val folders: List<ProjFolder>)
+    fun projects(c: Context): List<ProjShare> {
+        val arr = server(c).optJSONArray("projects") ?: return emptyList()
+        return (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            val fa = o.optJSONArray("folders") ?: return@mapNotNull null
+            val folders = (0 until fa.length()).mapNotNull { j -> fa.optJSONObject(j)?.let { ProjFolder(it.optString("path"), it.optBoolean("server"), it.optString("role", "")) } }
+                .filterNot { isPrivate(it.path) }
+            if (folders.isEmpty()) null else ProjShare(o.optString("code"), o.optString("name"), folders)
+        }
+    }
+
     /** The server login: the one typed in Setup, else the VPN username (an empty box never sends an empty name). */
     var smbUser: (Context) -> String = { c -> sp(c).getString("smb_user", null)?.trim()?.ifEmpty { null } ?: vpnUser(c) }
     fun hasSecret(c: Context, name: String) = sp(c).contains("s_$name")

@@ -417,9 +417,27 @@ static class PhoneLink
                 if (WNetGetConnection(d.Name.TrimEnd('\\'), sb, ref len) == 0) drives[d.Name.TrimEnd('\\')] = sb.ToString();
             }
             catch { }
+        // 📂 every saved project's folder addresses (server + local) so the phone shows them without indexing — the user browses the server folders live
+        var projects = new JsonArray();
+        foreach (var pr in Projects.All().OrderBy(x => x.Order))
+        {
+            var folders = new JsonArray();
+            IEnumerable<(string Path, string Role)> srcs = pr.Sources.Count > 0
+                ? pr.Sources.Select(x => (x.Path, x.Kind ?? "Other"))
+                : pr.Folders.Select(f => (f, "Other"));
+            foreach (var (path, role) in srcs)
+            {
+                if (string.IsNullOrWhiteSpace(path) || Projects.Private.IsMatch(path)) continue;
+                string root; try { root = Path.GetPathRoot(path)?.TrimEnd('\') ?? ""; } catch { root = ""; }
+                bool server = path.StartsWith(@"\") || drives.ContainsKey(root);
+                folders.Add(new JsonObject { ["path"] = path, ["server"] = server, ["role"] = role });
+            }
+            if (folders.Count > 0) projects.Add(new JsonObject { ["code"] = pr.Code, ["name"] = pr.Name, ["folders"] = folders });
+        }
         return new JsonObject
         {
             ["drives"] = drives,
+            ["projects"] = projects,
             ["vpn"] = new JsonObject { ["host"] = OfficeVpn.Gateway, ["port"] = OfficeVpn.Port, ["user"] = OfficeVpn.User, ["pin"] = OfficeVpn.Pin, ["probe"] = OfficeVpn.Probe }
         };
     }

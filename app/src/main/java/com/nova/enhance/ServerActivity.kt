@@ -238,10 +238,23 @@ class ServerActivity : BaseActivity() {
         body.removeAllViews()
         val c = this
         if (f.isEmpty()) {
-            status.text = "Your project folders and the whole server — tap a server drive to browse it live"
+            status.text = "Your project folders and the whole server — tap a server address to browse it live"
             val tops = mutableMapOf<String, Int>()
             PcLink.Db.get(c).rawQuery("SELECT substr(p, 1, 3) FROM names", null).use { cu -> while (cu.moveToNext()) { val k = cu.getString(0); tops[k] = (tops[k] ?: 0) + 1 } }
-            // 🏢 every server drive your PC mapped (S:, O:, N:) is always shown, even if it was never indexed — you can navigate it live
+            // 📂 your projects — every folder address your PC shared (server opens live, local opens from the index)
+            val projs = ServerAccess.projects(c)
+            if (projs.isNotEmpty()) {
+                body.addView(Ui.text(c, "📂 YOUR PROJECTS · sent by your PC", 11f, Ui.MUTED, true).apply { setPadding(2, Ui.dp(c, 6), 0, Ui.dp(c, 6)) })
+                for (pr in projs) body.addView(Ui.card(c).apply {
+                    addView(Ui.text(c, "📁 ${pr.code}${if (pr.name.isNotBlank() && !pr.name.equals(pr.code, true)) " · ${pr.name}" else ""}", 15f, Ui.TEXT, true))
+                    for (fo in pr.folders) addView(Ui.text(c, (if (fo.server) "🏢 " else "💻 ") + fo.path + (if (fo.server) "   ⟳ live" else "") + (if (fo.role.isNotBlank() && fo.role != "Other") " · ${fo.role}" else ""), 12.5f, if (fo.server) 0xFF9FD0FF.toInt() else Ui.MUTED).apply {
+                        setPadding(0, Ui.dp(c, 6), 0, 0)
+                        setOnClickListener { if (fo.server) live(fo.path) else browse(fo.path) }
+                    })
+                }, Ui.lp(top = Ui.dp(c, 6)))
+            }
+            // 🖧 every server drive your PC mapped (S:, O:, N:) is always shown, even if it was never indexed — you can navigate it live
+            if (ServerAccess.drives(c).isNotEmpty()) body.addView(Ui.text(c, "🖧 WHOLE SERVER · browse live, nothing indexed", 11f, Ui.MUTED, true).apply { setPadding(2, Ui.dp(c, 12), 0, Ui.dp(c, 6)) })
             for ((drive, unc) in ServerAccess.drives(c)) {
                 val k = "$drive\\"
                 val n = tops[k] ?: 0
