@@ -428,8 +428,8 @@ static class PhoneLink
             foreach (var (path, role) in srcs)
             {
                 if (string.IsNullOrWhiteSpace(path) || Projects.Private.IsMatch(path)) continue;
-                string root; try { root = Path.GetPathRoot(path)?.TrimEnd('\') ?? ""; } catch { root = ""; }
-                bool server = path.StartsWith(@"\") || drives.ContainsKey(root);
+                string root; try { root = Path.GetPathRoot(path)?.TrimEnd('\\') ?? ""; } catch { root = ""; }
+                bool server = path.StartsWith(@"\\") || drives.ContainsKey(root);
                 folders.Add(new JsonObject { ["path"] = path, ["server"] = server, ["role"] = role });
             }
             if (folders.Count > 0) projects.Add(new JsonObject { ["code"] = pr.Code, ["name"] = pr.Name, ["folders"] = folders });
