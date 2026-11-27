@@ -835,6 +835,106 @@ static class MailIndex
     /// 🔍 What Outlook itself holds in each mailbox / archive (not the index): every mail folder with its item count and newest date,
     /// next to what Nova indexed. Finds an archive that is open in Outlook but empty for Nova, or not readable. Designed by A.HAMROUNI
     /// </summary>
+    /// <summary>🔎 One folder, Outlook against Nova (read only): counts, how many ids match, sample ids from both sides (the first
+    /// characters only), whether Nova's ids still open an email in Outlook (and where it is now), and how many emails match by date.</summary>
+    public static string FolderDiff(string folderName, string storeName = "")
+    {
+        var sb = new StringBuilder();
+        dynamic app = Outlook.Running();
+        if (app == null) return "⚠ Outlook is not running";
+        dynamic ns = app.GetNamespace("MAPI");
+        dynamic stores = ns.Stores;
+        dynamic found = null; string storeId = "", path = "", stName = "";
+        for (int i = 1; i <= (int)stores.Count && found == null; i++)
+        {
+            dynamic st = stores.Item(i);
+            string nm = Outlook.S(() => st.DisplayName);
+            if (storeName.Length > 0 && !nm.Contains(storeName, StringComparison.OrdinalIgnoreCase)) continue;
+            int type = -1; try { type = (int)st.ExchangeStoreType; } catch { }
+            if (storeName.Length == 0 && type != 0) continue;
+            dynamic root = null; try { root = st.GetRootFolder(); } catch { }
+            if (root == null) continue;
+            dynamic Find(dynamic f, int depth, string p)
+            {
+                if (depth > 6) return null;
+                dynamic subs = f.Folders;
+                for (int j = 1; j <= (int)subs.Count; j++)
+                {
+                    dynamic s = subs.Item(j); string n = Outlook.S(() => s.Name);
+                    if (n.Equals(folderName, StringComparison.OrdinalIgnoreCase)) { path = p + n; return s; }
+                    var r = Find(s, depth + 1, p + n + " › "); if (r != null) return r;
+                }
+                return null;
+            }
+            found = Find(root, 0, "");
+            if (found != null) { storeId = Outlook.S(() => st.StoreID); stName = nm; }
+        }
+        if (found == null) return $"⚠ No folder “{folderName}” found" + (storeName.Length > 0 ? " in " + storeName : " in your mailbox");
+        string fid = Outlook.S(() => found.EntryID);
+        sb.AppendLine($"🔎 {stName} › {path}");
+        // Outlook: the same fast table read as Sync + repair
+        var ol = new List<(string E, DateTime D)>(); int other = 0;
+        dynamic t = found.GetTable(); dynamic cols = t.Columns;
+        cols.RemoveAll(); cols.Add("EntryID"); cols.Add("MessageClass"); cols.Add("ReceivedTime");
+        while (!(bool)t.EndOfTable)
+        {
+            var arr = (object[,])t.GetArray(5000);
+            int r0 = arr.GetLowerBound(0), r1 = arr.GetUpperBound(0), k = arr.GetLowerBound(1);
+            for (int r = r0; r <= r1; r++)
+            {
+                var e = arr[r, k] as string; var cls = arr[r, k + 1] as string ?? "";
+                if (string.IsNullOrEmpty(e)) continue;
+                if (!cls.StartsWith("IPM.Note", StringComparison.OrdinalIgnoreCase)) { other++; continue; }
+                ol.Add((e, arr[r, k + 2] is DateTime d ? d : DateTime.MinValue));
+            }
+        }
+        var nova = new List<(string E, long D)>();
+        using (var c = Open())
+        using (var cmd = c.CreateCommand())
+        {
+            cmd.CommandText = "SELECT entry, date FROM mail WHERE fid=$f";
+            cmd.Parameters.AddWithValue("$f", fid);
+            using var rd = cmd.ExecuteReader();
+            while (rd.Read()) if (!rd.IsDBNull(0)) nova.Add((rd.GetString(0), rd.IsDBNull(1) ? 0 : rd.GetInt64(1)));
+        }
+        var olSet = ol.Select(x => x.E).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var match = nova.Count(x => olSet.Contains(x.E));
+        sb.AppendLine($"Outlook: {ol.Count:N0} emails (+{other:N0} other items) · Nova: {nova.Count:N0} rows for this folder · ids that match: {match:N0}");
+        static string Id(string e) => $"{(e.Length > 28 ? e[..28] : e)}… ({e.Length} characters)";
+        sb.AppendLine("Outlook's ids (fast list): " + string.Join(" | ", ol.Take(3).Select(x => Id(x.E))));
+        sb.AppendLine("Nova's ids:               " + string.Join(" | ", nova.Take(3).Select(x => Id(x.E))));
+        // the same emails with another id? match by received time (to the second)
+        var olDates = ol.Select(x => Ms(x.D) / 1000).ToHashSet();
+        var byDate = nova.Count(x => olDates.Contains(x.D / 1000));
+        sb.AppendLine($"Nova rows whose date matches an Outlook email in this folder: {byDate:N0} of {nova.Count:N0}");
+        // do Nova's ids still open an email? where is it now, and what id does Outlook give it today?
+        foreach (var (e, _) in nova.Take(3))
+        {
+            dynamic it = null;
+            try
+            {
+                it = ns.GetItemFromID(e, storeId);
+                string now = Outlook.S(() => it.EntryID), where = ""; try { where = Outlook.S(() => it.Parent.Name); } catch { }
+                sb.AppendLine($"· Nova id {Id(e)} → opens ✓ · now in “{where}” · {(now.Equals(e, StringComparison.OrdinalIgnoreCase) ? "same id" : "Outlook now calls it " + Id(now))} · in the fast list: {(olSet.Contains(now) ? "yes" : "no")}");
+            }
+            catch (Exception x) { sb.AppendLine($"· Nova id {Id(e)} → does not open ({x.Message.Split('\n')[0]})"); }
+            finally { Outlook.Release(it); }
+        }
+        // and the other way: an Outlook email of the fast list, opened, then its id
+        foreach (var (e, _) in ol.Take(2))
+        {
+            dynamic it = null;
+            try { it = ns.GetItemFromID(e, storeId); string now = Outlook.S(() => it.EntryID); sb.AppendLine($"· Outlook id {Id(e)} → item id {(now.Equals(e, StringComparison.OrdinalIgnoreCase) ? "the same" : Id(now))}"); }
+            catch (Exception x) { sb.AppendLine($"· Outlook id {Id(e)} → does not open ({x.Message.Split('\n')[0]})"); }
+            finally { Outlook.Release(it); }
+        }
+        var novaDates = nova.Select(n => n.D / 1000).ToHashSet();
+        var missing = ol.Count(x => !novaDates.Contains(Ms(x.D) / 1000));
+        sb.AppendLine($"Outlook emails with no Nova row of the same date in this folder: {missing:N0}");
+        Outlook.Release(found);
+        return sb.ToString();
+    }
+
     public static List<(string Store, string Kind, string File, int Folders, int Items, int Indexed, string Newest, string Problem, List<string> Lines)> StoreProbe(int maxFolders = 400)
     {
         var res = new List<(string, string, string, int, int, int, string, string, List<string>)>();

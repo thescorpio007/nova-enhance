@@ -26,6 +26,9 @@ static class Busy
 
     public static bool Any { get { lock (jobs) return jobs.Count > 0; } }
 
+    /// <summary>What Nova is busy with right now, in a few words (for 🩺 diagnostics).</summary>
+    public static string Now() { lock (jobs) return string.Join(" · ", jobs.Take(4).Select(j => j.What.Length > 50 ? j.What[..50] : j.What)); }
+
     static string T(TimeSpan t) => t.TotalMinutes >= 1 ? $"{(int)t.TotalMinutes}:{t.Seconds:00}" : $"{(int)t.TotalSeconds} s";
 
     /// <summary>What Nova waits for now — the newest AI call first (“Waiting for Gemini · 25 s”).</summary>

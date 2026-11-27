@@ -35,6 +35,8 @@ td.tt{max-width:430px;overflow:hidden;text-overflow:ellipsis}.mono{font-family:C
 .sg{border:1px dashed #FFD27A;color:#FFD27A;border-radius:14px;padding:2px 11px;cursor:pointer;font-size:12.5px}.sg.off{opacity:.45;text-decoration:line-through}.sg.add{border-color:#9AA3B5;color:#C9CED8}.sg small{opacity:.8}
 .chip.from{box-shadow:0 0 0 2px #FFD27A}
 #aiBox{background:#1B2030;border:1px solid #2F3750;border-radius:10px;padding:10px 14px;max-height:34vh;overflow:auto}#aiBox .ans{white-space:pre-wrap;line-height:1.5;margin:4px 0}
+.k.tick{cursor:default;min-width:150px;border-color:#4A4480}.k.tick b{font-variant-numeric:tabular-nums}.k.tick.run b{color:#B9B0FF}.k.tick.run{animation:tkp 1.6s ease-in-out infinite}.k.tick.ok b{color:#3DDC97}.k.tick.err b{color:#FF6B6B}
+@keyframes tkp{50%{border-color:#8B7DFF}}
 .chip.plus{background:#7C6CFF;border-color:#7C6CFF;color:#fff;font-weight:700;padding:3px 12px}
 </style>
 </head>
@@ -54,7 +56,7 @@ td.tt{max-width:430px;overflow:hidden;text-overflow:ellipsis}.mono{font-family:C
     <button class="sbtn" id="aiBtn" title="The log is filtered from your words, then the AI answers from exactly those rows, with your 🧠 Brain rules">✦ Ask Nova<small>AI + your 🧠 Brain rules</small></button>
     <button class="sbtn" id="clrBtn" title="Clear the text and the word search — your filter buttons stay">✕ Clear<small>keeps your filter buttons</small></button></div>
   <div id="sugg" class="sugg"></div>
-  <div class="kpi" id="kpi"></div>
+  <div style="display:flex;gap:10px;align-items:stretch;flex-wrap:wrap"><div class="kpi" id="kpi"></div><div id="tick" class="k tick" style="display:none"></div></div>
   <div id="gaps" class="small" style="color:#FFB547"></div>
   <div id="showing" style="display:none;margin:6px 0;padding:7px 12px;border-radius:6px;background:#221f3d;border:1px solid #7c5cf6;font-weight:600"></div>
   <div id="aiBox" style="display:none"></div>

@@ -114,7 +114,14 @@ static class Program
             e.SetObserved();
             // a network call stopped on purpose (closing, cancelling, the PC sleeping) is not an error
             var b = e.Exception?.GetBaseException();
-            if (b is OperationCanceledException || b is System.Net.Sockets.SocketException { ErrorCode: 995 } || b is IOException && (b.Message.Contains("aborted") || b.Message.Contains("995"))) { Log.Write("· background network call stopped: " + b.Message); return; }
+            if (b is OperationCanceledException || b is System.Net.Sockets.SocketException { ErrorCode: 995 } || b is IOException && (b.Message.Contains("aborted") || b.Message.Contains("995")))
+            {
+                // 🔎 which feature it came from (counted by source, for 🩺 nova.errors)
+                var src = NetStops.Source(e.Exception);
+                NetStops.Add(src, Busy.Now());
+                Log.Write($"· background network call stopped ({src}): " + b.Message);
+                return;
+            }
             Log.Error("task", e.Exception);
         };
 
@@ -934,5 +941,44 @@ static class Selection
         CtrlPlus(0x56);
         await Task.Delay(120);
         return true;
+    }
+}
+
+
+/// <summary>🔎 Background network calls that were stopped (cancelled, closed, the PC sleeping): counted by the Nova feature they came
+/// from, with what Nova was busy with at that moment — so a retry loop can be found. Designed by A.HAMROUNI</summary>
+static class NetStops
+{
+    static readonly Dictionary<string, (int N, DateTime First, DateTime Last, string While)> by = new();
+
+    public static string Source(Exception ex)
+    {
+        var s = ex?.ToString() ?? "";
+        // the innermost Nova frame: “at NovaEnhance.OfficeAddin.Handle(” or “at NovaEnhance.Projects.<ListFolder>d__12.MoveNext(”
+        var m = System.Text.RegularExpressions.Regex.Match(s, @"at NovaEnhance\.([\w\.]+?)\.(?:<(\w+)>[\w_]*\.MoveNext|(\w+))\(");
+        if (m.Success) return m.Groups[1].Value.Replace("NovaEnhance.", "") + "." + (m.Groups[2].Success ? m.Groups[2].Value : m.Groups[3].Value);
+        var f = System.Text.RegularExpressions.Regex.Match(s, @"at ([\w\.]+)\.(\w+)\(");
+        return f.Success ? "no Nova frame · " + f.Groups[1].Value.Split('.').Last() + "." + f.Groups[2].Value : "unknown";
+    }
+
+    public static void Add(string src, string busy)
+    {
+        lock (by)
+        {
+            var x = by.TryGetValue(src, out var v) ? v : (0, DateTime.Now, DateTime.Now, "");
+            by[src] = (x.Item1 + 1, x.Item2, DateTime.Now, busy.Length > 0 ? busy : x.Item4);
+        }
+    }
+
+    public static string Report()
+    {
+        lock (by)
+        {
+            if (by.Count == 0) return "";
+            var sb = new System.Text.StringBuilder("\nBackground network calls stopped, by source (since Nova started):\n");
+            foreach (var (k, v) in by.OrderByDescending(x => x.Value.N).Take(12))
+                sb.Append($"- {k}: ×{v.N} · {v.First:dd MMM HH:mm} → {v.Last:HH:mm}{(v.While.Length > 0 ? " · Nova was busy with: " + v.While : "")}\n");
+            return sb.ToString();
+        }
     }
 }

@@ -29,6 +29,7 @@ static class ClaudeChecks
         sb.Append($"\nBy area (last {hours} h, {list.Count} entries):\n");
         foreach (var g in list.GroupBy(x => x.Area).OrderByDescending(g => g.Count()).Take(15))
             sb.Append($"- {g.Key}: {g.Count()} · newest {g.First().Time:HH:mm} {Cut(g.First().Message, 160)}\n");
+        sb.Append(NetStops.Report());
         sb.Append("\n").Append(await TestConnector.Tool("errors", new JsonObject { ["hours"] = hours }));
         return sb.ToString();
     }

@@ -216,7 +216,7 @@
   // 🔎 Your words → the filter buttons (yellow ring = set from your text) · ✦ Ask Nova · ✕ Clear · “Did you mean” quick options
   var fromText = [], picksOff = [], picksAdd = [], parseTimer = null, lastPicks = [];
   function foldConversation() { if (window.AgentUi && AgentUi.active && AgentUi.active() && AgentUi.fold) AgentUi.fold(); }
-  function run() { fromText = []; opt.words = opt.words || []; foldConversation(); $("aiBox").style.display = "none"; drawFilters(); post({ t: "run", opt: opt }); }
+  function run() { tk.ai = false; tickStart("📋 Reading the log…"); fromText = []; opt.words = opt.words || []; foldConversation(); $("aiBox").style.display = "none"; drawFilters(); post({ t: "run", opt: opt }); }
   function markFrom() {
     var rows = { proj: "cProj", type: "cType", disc: "cDisc", status: "cStat", period: "cPer", where: "cWhere" };
     Object.keys(rows).forEach(function (k) {
@@ -244,6 +244,7 @@
   function textGo(kind) {
     var t = $("ask").value.trim(); if (!t) return;
     foldConversation();
+    tk.ai = kind === "askai"; tickStart(kind === "askai" ? "✦ Filtering, then Nova reads the rows…" : "🔎 Filtering to your text…");
     if (kind === "askai") { var b = $("aiBox"); b.style.display = "block"; b.innerHTML = ""; b.appendChild(el("div", "muted", "✦ Nova is reading the rows…")); }
     else $("aiBox").style.display = "none";
     post({ t: kind, text: t, off: picksOff, add: picksAdd });
@@ -349,7 +350,29 @@
 
   // ● ● ● “Nova is thinking” while the log is read (dots, timer, ■ Stop, what Nova waits for)
   var bth = null;
+  // ⏱ Always a running clock while Nova works (seconds counting + what it is doing), then “✓ Done in 16.9 s”
+  var tk = { t0: 0, iv: null, text: "", ai: false };
+  function fmt(s) { return s < 60 ? s.toFixed(1) + " s" : Math.floor(s / 60) + ":" + ("0" + Math.floor(s % 60)).slice(-2); }
+  function tickDraw(state, big, small) {
+    var d = $("tick"); if (!d) return;
+    d.style.display = ""; d.className = "k tick " + state; d.innerHTML = "";
+    d.appendChild(el("b", null, big)); d.appendChild(el("span", null, small));
+    d.title = small;
+  }
+  function tickStart(text) {
+    if (!tk.t0) tk.t0 = Date.now();
+    if (text) tk.text = text.replace(/[…\.]+$/, "");
+    if (!tk.iv) tk.iv = setInterval(function () { tickDraw("run", "⏱ " + fmt((Date.now() - tk.t0) / 1000), tk.text); }, 100);
+    tickDraw("run", "⏱ " + fmt((Date.now() - tk.t0) / 1000), tk.text);
+  }
+  function tickDone(text, err) {
+    if (!tk.t0) return;
+    var s = (Date.now() - tk.t0) / 1000;
+    clearInterval(tk.iv); tk.iv = null; tk.t0 = 0;
+    tickDraw(err ? "err" : "ok", (err ? "⚠ " : "✓ ") + fmt(s), text || "Done");
+  }
   function busy(t, working) {
+    if (working) tickStart(t);
     var b = $("busy");
     if (working && window.Thinking) {
       if (!bth || !bth.active()) { b.innerHTML = ""; bth = Thinking.start(b, t, { onStop: function () { post({ t: "stop" }); } }); }
@@ -382,8 +405,10 @@
     else if (m.t === "opt") { opt = m.opt; fromText = m.opt.fromText || []; drawFilters(); if (m.said) busy("🧭 " + m.said + " …", true); }
     else if (m.t === "parsed") { if (($("ask").value.trim() || "") === (m.text || "")) drawSugg(m.picks); }
     else if (m.t === "aithinking") { var ab = $("aiBox"); ab.style.display = "block"; ab.innerHTML = ""; ab.appendChild(el("div", "muted", "✦ Nova is reading the " + (items.length || 0) + " rows with your 🧠 Brain…")); }
-    else if (m.t === "aians") aiAnswer(m);
+    else if (m.t === "aians") { tk.ai = false; tickDone(/^[■⚠]/.test(m.answer || "") ? "Stopped" : "Answered by Nova", /^⚠/.test(m.answer || "")); aiAnswer(m); }
     else if (m.t === "result") {
+      if (!tk.ai) tickDone("Done · " + ((m.items || []).length).toLocaleString() + " row(s) · " + ((m.kpi && m.kpi.mails) || 0).toLocaleString() + " emails read");
+      else tickStart("✦ Nova is reading the " + (m.items || []).length + " rows…");
       var sh = $("showing");
       if (sh) {
         sh.innerHTML = "";
@@ -401,7 +426,7 @@
       if (m.said) busy(m.said);   // ⚡ found on this PC (no AI)
     }
     else if (m.t === "saved") busy("✓ Saved and opened: " + m.path);
-    else if (m.t === "error") busy("⚠ " + m.text);
+    else if (m.t === "error") { tk.ai = false; tickDone(m.text, true); busy("⚠ " + m.text); }
   });
   post({ t: "init" });
 })();
