@@ -70,8 +70,22 @@ object ServerAccess {
     /** How server files are opened: "phone" = the phone only (default, never the PC), "phonefirst" = phone, PC as backup, "pc" = always the PC. */
     fun serverMode(c: Context) = sp(c).getString("server_mode", "phone") ?: "phone"
     fun setServerMode(c: Context, v: String) = sp(c).edit().putString("server_mode", v).apply()
-    /** The phone can try its own server login now: VPN up and a password is saved. */
-    fun canDirect(c: Context) = FortiVpn.up && (hasSecret(c, "smb") || hasSecret(c, "vpn"))
+    /** 📶 On the office Wi-Fi the server is reachable directly on port 445 — no VPN needed, no clash with the PC's VPN session. */
+    private var lanCache: Pair<Boolean, Long> = false to 0L
+    fun onOfficeLan(c: Context): Boolean {
+        if (System.currentTimeMillis() - lanCache.second < 60_000) return lanCache.first
+        val hosts = drives(c).values.mapNotNull { it.removePrefix("\\\\").substringBefore('\\').ifBlank { null } }.distinct()
+        val up = hosts.any { h ->
+            try { java.net.Socket().use { it.connect(java.net.InetSocketAddress(h, 445), 1200); true } } catch (_: Exception) { false }
+        }
+        lanCache = up to System.currentTimeMillis()
+        return up
+    }
+
+    /** The phone can open the server itself now: a password is saved AND (VPN up OR on the office Wi-Fi). */
+    fun canDirect(c: Context) = (hasSecret(c, "smb") || hasSecret(c, "vpn")) && (FortiVpn.up || onOfficeLan(c))
+    /** True = the server is reachable right now without touching the VPN (we're on the office Wi-Fi). */
+    fun directNoVpn(c: Context) = !FortiVpn.up && onOfficeLan(c)
     /** True = use the PC for this action (live list / folder zip): always in "pc" mode, or in "phonefirst" when the phone can't go direct. */
     fun viaPc(c: Context) = serverMode(c) == "pc" || (serverMode(c) == "phonefirst" && !canDirect(c))
 

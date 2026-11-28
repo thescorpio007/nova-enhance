@@ -47,8 +47,23 @@ object Backup {
             is String -> pc.put(k, JSONObject().put("t", "s").put("v", v))
         }
         if (pc.length() > 0) root.put("pc", encrypt(pc.toString(), password))
+        // 🏢 Office VPN + server access — locked with the backup password. Includes the two passwords (kept otherwise only in the
+        // phone's Keystore and never backed up), so a restored phone reaches the office server again without re-typing anything.
+        val srv = JSONObject()
+        for ((k, v) in c.getSharedPreferences("nova_server", Context.MODE_PRIVATE).all.filterKeys { !it.startsWith("s_") && it != "smb_ok" }) when (v) {
+            is Boolean -> srv.put(k, JSONObject().put("t", "b").put("v", v))
+            is Int -> srv.put(k, JSONObject().put("t", "i").put("v", v))
+            is Long -> srv.put(k, JSONObject().put("t", "l").put("v", v))
+            is String -> srv.put(k, JSONObject().put("t", "s").put("v", v))
+        }
+        ServerAccess.secret(c, "vpn").let { if (it.isNotEmpty()) srv.put("_vpn_pw", it) }
+        ServerAccess.secret(c, "smb").let { if (it.isNotEmpty()) srv.put("_smb_pw", it) }
+        if (srv.length() > 0) root.put("server", encrypt(srv.toString(), password))
         return root.toString(1)
     }
+
+    /** A weak backup password leaves the office passwords poorly protected — the UI warns before saving. */
+    fun weakPassword(p: String) = p.length < 8 || !(p.any { it.isDigit() } && p.any { it.isLetter() })
 
     /** Returns a summary line. Throws with a clear message on a bad file. */
     fun restore(c: Context, text: String, password: String): String {
@@ -92,8 +107,26 @@ object Backup {
                 " · 🖥 PC pairing restored (tap ↻ Sync in My PC)"
             } catch (_: Exception) { " · PC pairing NOT restored (wrong password) — scan the QR again" }
         }
+        var srvNote = ""
+        root.optJSONObject("server")?.let { enc ->
+            srvNote = try {
+                val srv = JSONObject(decrypt(enc, password))
+                val se = c.getSharedPreferences("nova_server", Context.MODE_PRIVATE).edit()
+                for (k in srv.keys()) {
+                    if (k == "_vpn_pw") { ServerAccess.setSecret(c, "vpn", srv.getString(k)); continue }
+                    if (k == "_smb_pw") { ServerAccess.setSecret(c, "smb", srv.getString(k)); continue }
+                    val o = srv.getJSONObject(k)
+                    when (o.optString("t")) {
+                        "b" -> se.putBoolean(k, o.optBoolean("v")); "i" -> se.putInt(k, o.optInt("v"))
+                        "l" -> se.putLong(k, o.optLong("v")); "s" -> se.putString(k, o.optString("v"))
+                    }
+                }
+                se.apply()
+                " · 🏢 office VPN & server access restored"
+            } catch (_: Exception) { " · office VPN/server NOT restored (wrong password) — re-enter in Server explorer ⚙ Setup" }
+        }
         val added = Db.get(c).importJson(root.optJSONArray("history") ?: org.json.JSONArray())
-        return "Settings restored · $added conversation(s) added · $keysNote$pcNote"
+        return "Settings restored · $added conversation(s) added · $keysNote$pcNote$srvNote"
     }
 
     private fun keyFrom(password: String, salt: ByteArray): SecretKeySpec {

@@ -482,20 +482,26 @@ class SettingsActivity : BaseActivity() {
             "API keys locked with a password. Save it to Google Drive or any folder.")
         val card = Ui.card(c)
         card.addView(Ui.text(c, "Back up everything", 15f, Ui.TEXT, true))
-        card.addView(Ui.text(c, "You choose a password for the API keys. Without it, the keys can't be restored " +
-            "(everything else still can).", 13f, Ui.MUTED))
-        card.addView(Ui.text(c, "Saved into Download › Nova Enhance › Backups.", 12f, Ui.MUTED), Ui.lp(top = Ui.dp(c, 6)))
+        card.addView(Ui.text(c, "Everything is included — settings, models, history, your API keys, and your office VPN & server passwords — " +
+            "all locked with your password. Without it, those can't be restored (the rest still can).", 13f, Ui.MUTED))
+        card.addView(Ui.text(c, "⚠ The file now holds your office credentials, so choose a strong password and keep the file private. Saved into Download › Nova Enhance › Backups.", 12f, Ui.AMBER, true), Ui.lp(top = Ui.dp(c, 6)))
+        fun doBackup(pw: String) {
+            val name = "Nova-Enhance-backup-" + SimpleDateFormat("yyyy-MM-dd-HHmm", Locale.US).format(Date()) + ".json"
+            Thread {
+                val r = runCatching {
+                    val txt = Backup.build(this, pw)
+                    Downloads.saveBytes(this, name, txt.toByteArray(), "Backups").first
+                }
+                r.exceptionOrNull()?.let { ErrorLog.add(this, "Backup", message = it.toString()) }
+                runOnUiThread { AlertDialog.Builder(this).setTitle(if (r.isSuccess) "✓ Backup saved" else "Backup failed").setMessage(r.getOrNull() ?: r.exceptionOrNull()?.message).setPositiveButton("OK", null).show() }
+            }.start()
+        }
         card.addView(Ui.button(c, "💾  Create backup file", true) {
-            askPassword("Password for your API keys", "At least 6 characters. Keep it safe.", confirm = true) { pw ->
-                val name = "Nova-Enhance-backup-" + SimpleDateFormat("yyyy-MM-dd-HHmm", Locale.US).format(Date()) + ".json"
-                Thread {
-                    val r = runCatching {
-                        val txt = Backup.build(this, pw)
-                        Downloads.saveBytes(this, name, txt.toByteArray(), "Backups").first
-                    }
-                    r.exceptionOrNull()?.let { ErrorLog.add(this, "Backup", message = it.toString()) }
-                    runOnUiThread { AlertDialog.Builder(this).setTitle(if (r.isSuccess) "✓ Backup saved" else "Backup failed").setMessage(r.getOrNull() ?: r.exceptionOrNull()?.message).setPositiveButton("OK", null).show() }
-                }.start()
+            askPassword("Backup password", "Locks your API keys and office VPN/server passwords. Use a strong one (8+ with letters and numbers).", confirm = true) { pw ->
+                if (Backup.weakPassword(pw)) AlertDialog.Builder(this).setTitle("⚠ Weak password")
+                    .setMessage("This password is easy to guess, and the backup now contains your office credentials. Use it anyway?")
+                    .setPositiveButton("Use anyway") { _, _ -> doBackup(pw) }.setNegativeButton("Choose a stronger one", null).show()
+                else doBackup(pw)
             }
         }, Ui.lp(top = Ui.dp(c, 10)))
         card.addView(Ui.button(c, "Choose a different location…") {

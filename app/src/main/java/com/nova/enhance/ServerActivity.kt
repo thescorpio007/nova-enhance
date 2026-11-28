@@ -60,6 +60,11 @@ class ServerActivity : BaseActivity() {
             override fun afterTextChanged(e: android.text.Editable?) { main.removeCallbacksAndMessages("q"); main.postAtTime({ run() }, "q", android.os.SystemClock.uptimeMillis() + 450) }
         })
         root.addView(search, Ui.lp(top = Ui.dp(c, 10)))
+        // Two ways to search: 🔎 Nova = the index (instant, offline) · ✨ AI = understands the request and goes live on the server for anything not indexed
+        val sb = Ui.row(c)
+        sb.addView(Ui.smallButton(c, "🔎 Nova search") { run() }, LinearLayout.LayoutParams(0, -2, 1f))
+        sb.addView(Ui.smallButton(c, "✨ AI search (live)") { aiSearch() }, LinearLayout.LayoutParams(0, -2, 1f))
+        root.addView(sb, Ui.lp(top = Ui.dp(c, 6)))
         status = Ui.text(c, "", 12f, Ui.MUTED)
         root.addView(status, Ui.lp(top = Ui.dp(c, 4)))
         body = Ui.col(c)
@@ -176,6 +181,7 @@ class ServerActivity : BaseActivity() {
     // ------------------------------------------------------------------ 🔎 search and browse (from the index your PC sent)
 
     private fun run() {
+        aiStop = true
         val q = search.text.toString().trim()
         val c = applicationContext
         Thread {
@@ -210,6 +216,53 @@ class ServerActivity : BaseActivity() {
         if (rows.isEmpty()) body.addView(Ui.text(this, if (total == 0L) "No file names on the phone yet — on your PC: 6.1 📱 Phone link → ⟳ Update the phone now (the names come with the next update)." else "No file name has “$q”.", 13f, Ui.MUTED))
     }
 
+    // ------------------------------------------------------------------ ✨ AI search on the LIVE server (for anything not indexed)
+
+    private var aiStop = false
+    private fun aiSearch() {
+        val q = search.text.toString().trim()
+        if (q.isEmpty()) { run(); return }
+        if (ServerAccess.serverMode(this) != "pc" && !ServerAccess.canDirect(this)) {
+            Ui.toast(this, "Connect the office VPN (🔑 Connect) or be on the office Wi-Fi for a live AI search"); return
+        }
+        aiStop = false; liveAt = null
+        body.removeAllViews(); status.text = "✨ AI is reading your request…"
+        val c = applicationContext
+        Thread {
+            val plan = try { PhoneSearch.plan(c, q) } catch (_: Exception) { null }
+            val words = (Regex("[\\s]+").split(q).toList() + (plan?.words ?: arrayListOf()).map { it.trim('"') })
+                .map { it.lowercase() }.filter { it.length >= 2 && !it.matches(Regex("(the|and|for|with|from|all)")) }.distinct()
+            val hints = listOfNotNull(plan?.disc, plan?.doc).filter { it.isNotEmpty() }.map { it.lowercase() }
+            // which projects — those named in the request, else all shared projects
+            val projs = ServerAccess.projects(c); val ql = q.lowercase()
+            val picked = projs.filter { p -> p.code.lowercase().let { it.length >= 2 && ql.contains(it) } || (p.name.length >= 5 && ql.contains(p.name.lowercase().take(6))) }
+            val roots = (if (picked.isNotEmpty()) picked else projs).flatMap { it.folders.filter { f -> f.server }.map { it.path } }
+            main.post { status.text = "✨ AI search · ${plan?.disc.orEmpty().ifEmpty { "any" }} / ${plan?.doc.orEmpty().ifEmpty { "any" }} · ${if (picked.isNotEmpty()) picked.joinToString { it.code } else "all projects"} · scanning the server live…" }
+            if (roots.isEmpty()) { main.post { status.text = "No server project folders were shared by your PC yet." }; return@Thread }
+            var found = 0; var folders = 0
+            val docNo = Regex("[A-Za-z]{2,6}-?\\d{3,6}").find(q)?.value?.lowercase()
+            fun crawl(folder: String, depth: Int) {
+                if (aiStop || folders > 70 || found > 60) return
+                folders++
+                main.post { if (!aiStop) status.text = "✨ scanning live · $folders folder(s) · $found match(es) · …${folder.takeLast(40)}" }
+                val items = try { if (ServerAccess.viaPc(c)) ServerAccess.viaPcList(c, folder) else ServerAccess.list(c, folder) } catch (_: Exception) { return }
+                for ((name, isDir) in items) {
+                    if (isDir) continue
+                    val nl = name.lowercase()
+                    val hit = (docNo != null && nl.contains(docNo)) || (words.isNotEmpty() && words.all { nl.contains(it) })
+                    if (hit) { found++; val full = folder.trimEnd('\\') + "\\" + name; main.post { fileRow(full, 0, 0, "🏢 Server · official · live", true) } }
+                }
+                if (depth <= 0) return
+                val dirs = items.filter { it.second }.map { it.first }
+                // go first into folders whose name matches the discipline/type/words
+                val ranked = dirs.sortedByDescending { d -> val dl = d.lowercase(); hints.count { dl.contains(it) } * 2 + words.count { dl.contains(it) } }
+                for (d in ranked.take(if (depth >= 3) 8 else 5)) { if (aiStop || folders > 70 || found > 60) break; crawl(folder.trimEnd('\\') + "\\" + d, depth - 1) }
+            }
+            for (root in roots) { if (aiStop || folders > 70 || found > 60) break; crawl(root, 3) }
+            main.post { if (!aiStop) status.text = "✨ AI search done · $found match(es) · $folders folders scanned live" + (if (found == 0) " · try 🔎 Nova search, or add the project code (e.g. SLV)" else "") }
+        }.start()
+    }
+
     private fun SubmittalLine(q: String, rows: List<Triple<String, Long, Long>>): String? {
         val no = Regex("[A-Z]{2,6}-[A-Z]{2,6}-[A-Z]{2,4}-[A-Z]{2,4}-\\d{3,6}|(MAR|MIR|WIR|SSM|SDS|RFI|PQS|SHD)-?\\d{3,6}", RegexOption.IGNORE_CASE).find(q)?.value ?: return null
         val mine = rows.filter { it.first.contains(no, true) }
@@ -234,6 +287,7 @@ class ServerActivity : BaseActivity() {
 
     /** Browse: drives, then folders, from the names in the index (offline); “⟳ Live” asks the server what is there now. */
     private fun browse(f: String) {
+        aiStop = true
         folder = f; liveAt = null
         body.removeAllViews()
         val c = this
@@ -427,9 +481,14 @@ class ServerActivity : BaseActivity() {
     /** Opens with the phone's default app for this kind of file (Android asks once if none is set yet). */
     private fun openDefault(f: File?, u: Uri?) {
         val uri = u ?: f?.let { uriOf(it) } ?: return
+        val ext = (f?.extension ?: uri.lastPathSegment?.substringAfterLast('.') ?: "").lowercase()
+        // ✉ Outlook emails open inside Nova's own viewer (Android has no .msg viewer) — from the explorer too
+        if (ext in OutlookFiles.EXT) {
+            try { startActivity(Intent(this, MyPcActivity::class.java).setAction(Intent.ACTION_VIEW).setData(uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)); return } catch (_: Exception) { }
+        }
         val type = if (u != null) contentResolver.getType(u) ?: mime(f?.name ?: "") else mime(f!!.name)
         val view = Intent(Intent.ACTION_VIEW).setDataAndType(uri, type).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-        try { startActivity(view) } catch (_: Exception) { Ui.toast(this, "No app on this phone opens .${(f?.extension ?: "")} files — it is saved in Download › Nova Enhance › Server") }
+        try { startActivity(view) } catch (_: Exception) { Ui.toast(this, "No app on this phone opens .$ext files — it is saved in Download › Nova Enhance › Server") }
     }
 
     // ------------------------------------------------------------------ 🗜 a server folder: download or share as one zip

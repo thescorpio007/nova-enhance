@@ -97,6 +97,21 @@
                 <data android:mimeType="text/vcard" />
                 <data android:mimeType="text/x-vcard" />
             </intent-filter>
+            <!-- ✉ Catch .msg / .eml / .oft by file name too, when a file manager sends them with a generic type -->
+            <intent-filter android:label="Nova Enhance">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:host="*" />
+                <data android:pathPattern=".*\\.msg" />
+                <data android:pathPattern=".*\\.eml" />
+                <data android:pathPattern=".*\\.oft" />
+                <data android:pathPattern=".*\\..*\\.msg" />
+                <data android:pathPattern=".*\\..*\\.eml" />
+            </intent-filter>
             <intent-filter android:label="Open in Nova Enhance">
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
